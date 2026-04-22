@@ -1,0 +1,2 @@
+# ompytr
+Python slgorithmic trader
