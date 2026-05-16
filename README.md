@@ -1,2 +1,2 @@
 # ompytr
-Python slgorithmic trader
+Simple Python algorithmic trader that can run on your local machine
