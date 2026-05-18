@@ -29,7 +29,7 @@ def test_get_candles_history_uses_tf_minutes_map(mock_client):
     stock = BinanceStock("key", "secret")
     stock.get_candles_history(count=10, symbol="LINKUSDT", time_point=0, tf_minutes=60)
     call_kwargs = mock_client.get_klines.call_args[1]
-    assert "1h" in call_kwargs["interval"] or call_kwargs["interval"].endswith("h")
+    assert call_kwargs["interval"] == "1h"
 
 
 def test_trade_calls_create_order(mock_client):
@@ -48,3 +48,18 @@ def test_get_order_status_calls_get_order(mock_client):
     result = stock.get_order_status("LINKUSDT", "42")
     assert result["status"] == "FILLED"
     mock_client.get_order.assert_called_once_with(symbol="LINKUSDT", orderId="42")
+
+
+def test_trade_market_order_no_time_in_force(mock_client):
+    mock_client.create_order.return_value = {"orderId": "55"}
+    stock = BinanceStock("key", "secret")
+    stock.trade("LINKUSDT", "BUY", "MARKET", 5.0)
+    call_kwargs = mock_client.create_order.call_args[1]
+    assert "timeInForce" not in call_kwargs
+    assert "price" not in call_kwargs
+
+
+def test_get_candles_history_raises_for_unknown_tf_minutes(mock_client):
+    stock = BinanceStock("key", "secret")
+    with pytest.raises(ValueError, match="Unsupported tf_minutes"):
+        stock.get_candles_history(count=10, symbol="LINKUSDT", time_point=0, tf_minutes=30)

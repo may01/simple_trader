@@ -31,7 +31,9 @@ class BinanceStock(BaseStock):
         time_point: int,
         tf_minutes: int = 1,
     ) -> List[Any]:
-        interval = _INTERVAL_MAP.get(tf_minutes, Client.KLINE_INTERVAL_1MINUTE)
+        interval = _INTERVAL_MAP.get(tf_minutes)
+        if interval is None:
+            raise ValueError(f"Unsupported tf_minutes: {tf_minutes}. Valid values: {sorted(_INTERVAL_MAP)}")
         return self._client.get_klines(
             symbol=symbol.upper(),
             interval=interval,
@@ -42,10 +44,12 @@ class BinanceStock(BaseStock):
         self,
         symbol: str,
         side: str,
-        order_type: str = "LIMIT",
-        quantity: float = 0.0,
+        order_type: str,
+        quantity: float,
         price: Optional[float] = None,
     ) -> Dict[str, Any]:
+        if quantity <= 0:
+            raise ValueError(f"quantity must be positive, got {quantity}")
         kwargs: Dict[str, Any] = {
             "symbol": symbol.upper(),
             "side": side.upper(),
