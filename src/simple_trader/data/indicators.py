@@ -63,7 +63,7 @@ class Indicators:
         low: np.ndarray,
     ) -> None:
         """Pandas fallback for environments without TA-Lib (e.g. CI tests)."""
-        s = pd.Series(close)
+        s = pd.Series(close, index=df.index)
         delta = s.diff()
         gain = delta.clip(lower=0)
         loss = -delta.clip(upper=0)
@@ -82,12 +82,12 @@ class Indicators:
         df[f"{tf}_macd"]        = macd_line
         df[f"{tf}_macd_signal"] = signal_line
         df[f"{tf}_macd_hist"]   = macd_line - signal_line
-        tp = (pd.Series(high) + pd.Series(low) + s) / 3
+        tp = (pd.Series(high, index=df.index) + pd.Series(low, index=df.index) + s) / 3
         df[f"{tf}_cci_20"]  = (tp - tp.rolling(20).mean()) / (0.015 * tp.rolling(20).std())
         tr = pd.concat([
-            pd.Series(high) - pd.Series(low),
-            (pd.Series(high) - s.shift()).abs(),
-            (pd.Series(low) - s.shift()).abs(),
+            pd.Series(high, index=df.index) - pd.Series(low, index=df.index),
+            (pd.Series(high, index=df.index) - s.shift()).abs(),
+            (pd.Series(low, index=df.index) - s.shift()).abs(),
         ], axis=1).max(axis=1)
         df[f"{tf}_atr_14"]   = tr.ewm(com=13, adjust=False).mean()
         sma20 = s.rolling(20).mean()
@@ -95,7 +95,7 @@ class Indicators:
         df[f"{tf}_bb_upper"] = sma20 + 2 * std20
         df[f"{tf}_bb_mid"]   = sma20
         df[f"{tf}_bb_lower"] = sma20 - 2 * std20
-        df[f"{tf}_adx_14"]   = pd.Series(np.full(len(close), 25.0))
+        df[f"{tf}_adx_14"]   = pd.Series(np.full(len(close), 25.0), index=df.index)
         df[f"{tf}_sar"]      = s.shift(1)
 
     def drop_na(self, df: pd.DataFrame, tf: int) -> None:
