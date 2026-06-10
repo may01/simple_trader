@@ -32,9 +32,12 @@ def make_data_point(timestamp=1000.0):
 
 
 def make_live_data(data_point=None):
-    """Return a MagicMock LiveData object with a data_point property."""
-    ld = MagicMock()
-    ld.data_point = data_point if data_point is not None else make_data_point()
+    """Return a MagicMock LiveData per the real contract (phase-03 task-05):
+    build_candles() refreshes, get_data_point() returns the LiveDataPoint."""
+    ld = MagicMock(spec=["build_candles", "get_data_point"])
+    ld.get_data_point.return_value = (
+        data_point if data_point is not None else make_data_point()
+    )
     return ld
 
 
@@ -416,3 +419,24 @@ class TestStubMethods:
     def test_stop_loss_cancel_actions_exists_and_is_passthrough(self):
         robot = make_robot()
         robot._stop_loss_cancel_actions(MagicMock())
+
+
+class TestDoLiveDataContract:
+    """do() must refresh via build_candles() then read get_data_point() —
+    the LiveData contract (phase-03 task-05). Robot previously read a
+    nonexistent .data_point attribute and never refreshed candles."""
+
+    def test_do_refreshes_candles_each_tick(self):
+        dp = make_data_point(timestamp=5000.0)
+        ld = make_live_data(data_point=dp)
+        sm = make_strategy_manager(action=STRATEGY_ACTION_NOTHING)
+        robot = make_robot(strategy_manager=sm, live_data=ld)
+        robot.position = MagicMock()
+        robot.position.get_state.return_value = POSITION_STATE_WAIT
+
+        robot.do()
+        robot.do()
+
+        assert ld.build_candles.call_count == 2
+        assert ld.get_data_point.call_count == 2
+        assert sm.check.call_args.args[0] is dp

@@ -110,11 +110,13 @@ class Robot:
     # ------------------------------------------------------------------
 
     def do(self) -> None:
-        """Execute one tick: fetch data, query strategy, dispatch action.
+        """Execute one tick: refresh candles, query strategy, dispatch action.
 
-        Gets a fresh DataPoint each call from live_data.data_point.
+        LiveData contract (phase-03 task-05): build_candles() refreshes from
+        the exchange, get_data_point() returns the resulting LiveDataPoint.
         """
-        data_point = self.live_data.data_point
+        self.live_data.build_candles()
+        data_point = self.live_data.get_data_point()
         position_state = self.position.get_state()
         cur_time = data_point.timestamp
 
