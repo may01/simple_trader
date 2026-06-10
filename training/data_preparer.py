@@ -243,8 +243,7 @@ class DataPreparer:
         new_cols = [c for c in nn_df.columns if c not in df.columns]
         if new_cols:
             joined = df.join(nn_df[new_cols], how="left")
-            for col in new_cols:
-                df[col] = joined[col]
+            df[new_cols] = joined[new_cols]
 
     def _compute_nn_attributes(self, df: pd.DataFrame) -> "DataAttributes":
         """Compute NN normalisation stats and return a populated DataAttributes.
