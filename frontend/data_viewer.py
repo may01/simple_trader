@@ -167,6 +167,8 @@ class DataViewer:
         """
         indicators = self._resolve_indicators(indicators)
         df_slice = self._slice(start_idx, end_idx)
+        if df_slice.empty:
+            return
         fig = self._build_figure(df_slice, indicators)
         fig.show()
 
@@ -228,5 +230,7 @@ class DataViewer:
         """
         indicators = self._resolve_indicators(indicators)
         df_slice = self._slice(start_idx, end_idx)
+        if df_slice.empty:
+            return
         fig = self._build_figure(df_slice, indicators)
         self.renderer.save(fig, path)
