@@ -149,6 +149,11 @@ class DataPreparer:
         """
         raw: pd.DataFrame = pd.read_pickle(path)
 
+        # Phase-02 contract: open_time is the index of graber_data.pkl.
+        # Normalize to a column so validation/rename below has one shape to handle.
+        if "open_time" not in raw.columns and raw.index.name == "open_time":
+            raw = raw.reset_index()
+
         # Validate required columns are present
         missing = [col for col in _REQUIRED_RAW_COLS if col not in raw.columns]
         if missing:
