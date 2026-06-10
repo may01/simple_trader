@@ -2,13 +2,17 @@
 # Implements candle fetching (get_candles_history, get_candles_range) for live trading
 # and historical data retrieval.
 
+import logging
 import os
 import time
 import pandas as pd
 
 from binance.client import Client
 
+from constants import STATUS_SUCCESS, STATUS_FAIL, TRADE_BUY, TRADE_SELL
 from stocks.base_stock import StockInterface
+
+log = logging.getLogger(__name__)
 
 # Base interval → (binance interval constant, lookback string, list of TFs it covers)
 _BASE_INTERVALS = [
@@ -64,7 +68,7 @@ def _parse_klines(klines: list) -> pd.DataFrame:
 
 
 class Stock_Binance(StockInterface):
-    """Binance exchange implementation — candle fetching."""
+    """Binance exchange implementation — candle fetching and order management."""
 
     def __init__(self):
         key = os.environ["BINANCE_API_KEY"]
@@ -186,3 +190,269 @@ class Stock_Binance(StockInterface):
 
         result = pd.concat(all_dfs).drop_duplicates().sort_index()
         return result
+
+    # ------------------------------------------------------------------
+    # Order management
+    # ------------------------------------------------------------------
+
+    def trade(self, trade_type: str, price: float, amount: float, force: bool = False) -> tuple:
+        """Place a margin limit order.
+
+        Args:
+            trade_type: TRADE_BUY or TRADE_SELL constant.
+            price: Limit price (rounded to 2 decimal places).
+            amount: Quantity (rounded to 2 decimal places).
+            force: Unused flag kept for interface compatibility.
+
+        Returns:
+            (STATUS_SUCCESS, {"order_id": str}) on success,
+            (STATUS_FAIL, {}) on invalid amount or exception.
+        """
+        if self.is_invalid_amount(amount, price):
+            return (STATUS_FAIL, {})
+
+        amount = round(amount, 2)
+        price = round(price, 2)
+        symbol = self.get_pair_name()
+        side = "BUY" if trade_type == TRADE_BUY else "SELL"
+
+        try:
+            result = self.client.create_margin_order(
+                symbol=symbol,
+                side=side,
+                type="LIMIT",
+                timeInForce="GTC",
+                quantity=amount,
+                price=price,
+            )
+            self.weight += 6
+            return (STATUS_SUCCESS, {"order_id": str(result["orderId"])})
+        except Exception as exc:
+            log.error("trade() error: %s", exc)
+            # Network timeout — wait and retry once
+            if "timeout" in str(exc).lower() or "timed out" in str(exc).lower():
+                time.sleep(60)
+                try:
+                    result = self.client.create_margin_order(
+                        symbol=symbol,
+                        side=side,
+                        type="LIMIT",
+                        timeInForce="GTC",
+                        quantity=amount,
+                        price=price,
+                    )
+                    self.weight += 6
+                    return (STATUS_SUCCESS, {"order_id": str(result["orderId"])})
+                except Exception as exc2:
+                    log.error("trade() retry error: %s", exc2)
+            return (STATUS_FAIL, {})
+
+    def order_info(self, order_id: str) -> tuple:
+        """Fetch current status of a margin order.
+
+        Args:
+            order_id: Exchange order ID string.
+
+        Returns:
+            (STATUS_SUCCESS, info_dict) or (STATUS_FAIL, {}).
+            info_dict keys: status, start_amount, left_amount, rate.
+        """
+        try:
+            result = self.client.get_margin_order(
+                symbol=self.get_pair_name(), orderId=order_id
+            )
+            self.weight += 10
+            return (STATUS_SUCCESS, {
+                "status": result["status"],
+                "start_amount": float(result["origQty"]),
+                "left_amount": float(result["origQty"]) - float(result["executedQty"]),
+                "rate": float(result["price"]),
+            })
+        except Exception as exc:
+            log.error("order_info() error: %s", exc)
+            return (STATUS_FAIL, {})
+
+    def cancel_order(self, order_id: str) -> tuple:
+        """Cancel a margin order, polling until cancellation is confirmed.
+
+        Polls order_info() up to 10 times (2 s apart) when the exchange
+        returns PENDING_CANCEL.
+
+        Args:
+            order_id: Exchange order ID string.
+
+        Returns:
+            Final (status, info_dict) from order_info(), or (STATUS_FAIL, {}).
+        """
+        try:
+            result = self.client.cancel_margin_order(
+                symbol=self.get_pair_name(), orderId=order_id
+            )
+            self.weight += 10
+            if result.get("status") == "PENDING_CANCEL":
+                for _ in range(10):
+                    time.sleep(2)
+                    status, info = self.order_info(order_id)
+                    if status == STATUS_SUCCESS and info.get("status") != "PENDING_CANCEL":
+                        return (status, info)
+            return self.order_info(order_id)
+        except Exception as exc:
+            log.error("cancel_order() error: %s", exc)
+            return (STATUS_FAIL, {})
+
+    def depth(self, quantity: int) -> tuple:
+        """Fetch order book depth.
+
+        Args:
+            quantity: Number of price levels to fetch.
+
+        Returns:
+            (asks_df, bids_df) — each a DataFrame with columns
+            [price, quantity, cumulative], all float64, sorted by price.
+        """
+        result = self.client.get_order_book(
+            symbol=self.get_pair_name(), limit=quantity
+        )
+
+        if quantity < 100:
+            self.weight += 5
+        elif quantity < 500:
+            self.weight += 25
+        elif quantity < 1000:
+            self.weight += 50
+        else:
+            self.weight += 250
+
+        def _build_df(entries: list) -> pd.DataFrame:
+            df = pd.DataFrame(entries, columns=["price", "quantity"])
+            df = df.astype({"price": float, "quantity": float})
+            df = df.sort_values("price").reset_index(drop=True)
+            df["cumulative"] = df["quantity"].cumsum()
+            return df[["price", "quantity", "cumulative"]]
+
+        asks_df = _build_df(result["asks"])
+        bids_df = _build_df(result["bids"])
+        return (asks_df, bids_df)
+
+    def info(self) -> dict:
+        """Return Binance symbol info for the current trading pair.
+
+        Returns:
+            Symbol info dict, or {} on error.
+        """
+        try:
+            return self.client.get_symbol_info(self.get_pair_name())
+        except Exception as exc:
+            log.error("info() error: %s", exc)
+            return {}
+
+    def is_invalid_amount(self, amount: float, price: float) -> bool:
+        """Check whether an amount violates exchange minimums.
+
+        Checks LOT_SIZE (minQty) and MIN_NOTIONAL filters from symbol info.
+        Uses 2× the minimums as a safety margin.
+
+        Args:
+            amount: Quantity to trade.
+            price: Price per unit.
+
+        Returns:
+            True if the amount is too small or notional is too low; False otherwise.
+        """
+        try:
+            symbol_info = self.info()
+            if not symbol_info:
+                return True
+            filters = {f["filterType"]: f for f in symbol_info.get("filters", [])}
+            lot = filters.get("LOT_SIZE")
+            notional = filters.get("MIN_NOTIONAL")
+            if lot is None or notional is None:
+                return True
+            min_qty = float(lot["minQty"])
+            min_notional = float(notional["minNotional"])
+            if amount < 2 * min_qty:
+                return True
+            if amount * price < 2 * min_notional:
+                return True
+            return False
+        except Exception as exc:
+            log.error("is_invalid_amount() error: %s", exc)
+            return True
+
+    def funds(self, coin: str, asset_type: str = "free") -> tuple:
+        """Get margin account balance for a coin.
+
+        Args:
+            coin: Coin symbol (e.g., "LINK").
+            asset_type: Asset sub-type key: "free", "locked", "borrowed", etc.
+
+        Returns:
+            (STATUS_SUCCESS, float) or (STATUS_FAIL, 0.0).
+        """
+        try:
+            result = self.client.get_margin_account()
+            for asset in result.get("userAssets", []):
+                if asset.get("asset", "").upper() == coin.upper():
+                    return (STATUS_SUCCESS, float(asset[asset_type]))
+            return (STATUS_SUCCESS, 0.0)
+        except Exception as exc:
+            log.error("funds() error: %s", exc)
+            return (STATUS_FAIL, 0.0)
+
+    def get_aviable_loan(self, coin: str) -> tuple:
+        """Query the maximum available margin loan for a coin.
+
+        Note: Method name matches legacy spelling "aviable".
+
+        Args:
+            coin: Coin symbol (e.g., "LINK").
+
+        Returns:
+            (STATUS_SUCCESS, float) or (STATUS_FAIL, 0.0).
+        """
+        try:
+            result = self.client.get_max_margin_loan(asset=coin.upper())
+            return (STATUS_SUCCESS, float(result["amount"]))
+        except Exception as exc:
+            log.error("get_aviable_loan() error: %s", exc)
+            return (STATUS_FAIL, 0.0)
+
+    def borrow(self, coin: str, amount: float) -> tuple:
+        """Borrow funds via margin loan.
+
+        Args:
+            coin: Coin symbol (e.g., "LINK").
+            amount: Amount to borrow.
+
+        Returns:
+            (STATUS_SUCCESS, amount) or (STATUS_FAIL, 0.0).
+        """
+        try:
+            self.client.create_margin_loan(asset=coin.upper(), amount=str(amount))
+            return (STATUS_SUCCESS, amount)
+        except Exception as exc:
+            log.error("borrow() error: %s", exc)
+            return (STATUS_FAIL, 0.0)
+
+    def repay(self, coin: str, amount: float) -> tuple:
+        """Repay a margin loan.
+
+        Args:
+            coin: Coin symbol (e.g., "LINK").
+            amount: Amount to repay.
+
+        Returns:
+            (STATUS_SUCCESS, amount) or (STATUS_FAIL, 0.0).
+        """
+        try:
+            self.client.repay_margin_loan(asset=coin.upper(), amount=str(amount))
+            return (STATUS_SUCCESS, amount)
+        except Exception as exc:
+            log.error("repay() error: %s", exc)
+            return (STATUS_FAIL, 0.0)
+
+    def set_operation_sleep(self) -> None:
+        """Sleep and reset weight counter if API weight limit is exceeded."""
+        if self.weight > self.overflow_weight:
+            time.sleep(self.overflow_weight_time)
+            self.weight = 0
