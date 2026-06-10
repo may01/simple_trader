@@ -7,6 +7,7 @@ tensorflow[and-cuda]
 keras
 dash
 plotly
+kaleido
 pyyaml
 pytest
 pytest-mock
