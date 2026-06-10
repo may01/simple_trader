@@ -183,10 +183,16 @@ class Robot:
             return
 
         price = open_prices[0]
-        amount = self.position.full_position / price if price else 0.0
+        if price <= 0:
+            logger.error("_open_position: price <= 0, aborting")
+            return
+        amount = self.position.full_position / price
 
         if strategy_action == STRATEGY_ACTION_OPEN_LONG:
             order_id = self._place_valid_order(TRADE_BUY, price, amount)
+            if order_id == "":
+                logger.error("_open_position: LONG order placement failed, skipping tracking")
+                return
             self.tracker.set_buy_order(order_id)
         elif strategy_action == STRATEGY_ACTION_OPEN_SHORT:
             # Borrow coin before placing sell order
@@ -194,7 +200,11 @@ class Robot:
                 self.stock.borrow(self.stock.coin, amount)
             except Exception:
                 logger.exception("_open_position: stock.borrow raised")
+                return
             order_id = self._place_valid_order(TRADE_SELL, price, amount)
+            if order_id == "":
+                logger.error("_open_position: SHORT order placement failed, skipping tracking")
+                return
             self.tracker.set_sell_order(order_id)
 
     def _close_position(
@@ -206,7 +216,8 @@ class Robot:
         tf: int,
     ) -> None:
         """Close the current position: cancel existing order, place exit order."""
-        self.position.close(strategy_action, close_prices, stop_price, tf, action_msg=None)
+        if not self.position.close(strategy_action, close_prices, stop_price, tf, action_msg=None):
+            return
 
         # Cancel any existing open order for this side
         if self.tracker.buy_id:
@@ -255,8 +266,10 @@ class Robot:
 
     def _do_finalize_action(self) -> None:
         """Finalize the completed position: record P&L and clear tracker."""
-        revenue_pct, revenue_abs = self.position.finalize()
-        self.tracker.clear()
+        try:
+            revenue_pct, revenue_abs = self.position.finalize()
+        finally:
+            self.tracker.clear()
         logger.info(
             "Trade finalized: revenue_pct=%.4f revenue_abs=%.2f",
             revenue_pct,
