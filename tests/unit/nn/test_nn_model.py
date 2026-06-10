@@ -126,7 +126,21 @@ def test_epoch_callback_called(small_model):
         assert "val_accuracy" in m
 
 
-# 11. binary classification (num_classes=2) works
+# 11. run_batch() raises RuntimeError when not trained
+def test_run_batch_raises_when_not_trained(small_model):
+    small_model.build()
+    X_batch = np.random.randn(5, 10).astype("float32")
+    with pytest.raises(RuntimeError, match="not trained"):
+        small_model.run_batch(X_batch)
+
+
+# 12. save_model() raises when model not built
+def test_save_model_raises_when_not_built(small_model):
+    with pytest.raises(RuntimeError, match="not been built"):
+        small_model.save_model("/tmp/should_not_exist.pt")
+
+
+# 13. binary classification (num_classes=2) works
 def test_binary_classification():
     model = NNModel(input_size=10, hidden_size=16, num_classes=2)
     X = np.random.randn(50, 10).astype("float32")

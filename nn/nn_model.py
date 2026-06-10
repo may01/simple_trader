@@ -70,7 +70,7 @@ class NNModel:
         metrics: dict = {}
 
         for epoch in range(epochs):
-            self.model.train_mode() if hasattr(self.model, "train_mode") else self.model.train()
+            self.model.train()
 
             optimizer.zero_grad()
             logits_train = self.model(X_train_t)
@@ -118,7 +118,8 @@ class NNModel:
 
     def run_batch(self, features: np.ndarray) -> np.ndarray:
         """Batch inference. Returns probabilities of shape (N, num_classes)."""
-        self.build()
+        if not self.is_trained:
+            raise RuntimeError("NNModel is not trained")
 
         x = torch.tensor(features, dtype=torch.float32)
         self.model.eval()
@@ -133,6 +134,8 @@ class NNModel:
 
     def save_model(self, path: str) -> None:
         """Save model weights to path."""
+        if self.model is None:
+            raise RuntimeError("NNModel has not been built yet")
         torch.save(self.model.state_dict(), path)
 
     def load_model(self, path: str) -> None:
