@@ -1,0 +1,423 @@
+fields:
+
+  # --- momentum ---
+  - name: rsi_14
+    group: momentum
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      length: 14
+
+  - name: rsi_ma8
+    group: momentum
+    applies_to: all
+    depends_on: [rsi_14]
+    params: {}
+
+  - name: rsi_ma12
+    group: momentum
+    applies_to: all
+    depends_on: [rsi_14]
+    params: {}
+
+  - name: rsi_ma24
+    group: momentum
+    applies_to: all
+    depends_on: [rsi_14]
+    params: {}
+
+  - name: rsi_ma8_diff
+    group: momentum
+    applies_to: all
+    depends_on: [rsi_ma8]
+    params: {}
+
+  - name: rsi_ma12_diff
+    group: momentum
+    applies_to: all
+    depends_on: [rsi_ma12]
+    params: {}
+
+  - name: rsi_ma24_diff
+    group: momentum
+    applies_to: all
+    depends_on: [rsi_ma24]
+    params: {}
+
+  # --- trend ---
+  - name: ema_7
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      length: 7
+
+  - name: ema_14
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      length: 14
+
+  - name: ema_25
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      length: 25
+
+  - name: ema_50
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      length: 50
+
+  - name: ema_100
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      length: 100
+
+  - name: macd
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: macd_signal
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: macd_hist
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: macd_fast
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: macd_fast_signal
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  # --- volatility ---
+  - name: atr_14
+    group: volatility
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      length: 14
+
+  - name: natr_14
+    group: volatility
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      length: 14
+
+  - name: atr_ma
+    group: volatility
+    applies_to: all
+    depends_on: [atr_14]
+    params: {}
+
+  - name: bb_upper
+    group: volatility
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: bb_middle
+    group: volatility
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: bb_lower
+    group: volatility
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: bb_fast_upper
+    group: volatility
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: bb_fast_lower
+    group: volatility
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: bb_wide_upper
+    group: volatility
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: bb_wide_lower
+    group: volatility
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  # --- oscillators ---
+  - name: cci_14
+    group: oscillators
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      length: 14
+
+  - name: cci_ma
+    group: oscillators
+    applies_to: all
+    depends_on: [cci_14]
+    params: {}
+
+  - name: sar
+    group: oscillators
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  # --- volume ---
+  - name: vol_ma
+    group: volume
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: vol_buy_ma
+    group: volume
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: vol_sell_ma
+    group: volume
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  # --- price_derivatives ---
+  - name: close_diff_prc
+    group: price_derivatives
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: close_diff_prc_rm
+    group: price_derivatives
+    applies_to: all
+    depends_on: [close_diff_prc]
+    params: {}
+
+  - name: close_diff_prc_rm_mean_above
+    group: price_derivatives
+    applies_to: all
+    depends_on: [close_diff_prc_rm]
+    params: {}
+
+  - name: close_diff_prc_rm_mean_below
+    group: price_derivatives
+    applies_to: all
+    depends_on: [close_diff_prc_rm]
+    params: {}
+
+  - name: high_diff_prc
+    group: price_derivatives
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: high_diff_prc_rm
+    group: price_derivatives
+    applies_to: all
+    depends_on: [high_diff_prc]
+    params: {}
+
+  - name: high_diff_prc_rm_mean_above
+    group: price_derivatives
+    applies_to: all
+    depends_on: [high_diff_prc_rm]
+    params: {}
+
+  - name: high_diff_prc_rm_mean_below
+    group: price_derivatives
+    applies_to: all
+    depends_on: [high_diff_prc_rm]
+    params: {}
+
+  - name: low_diff_prc
+    group: price_derivatives
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: low_diff_prc_rm
+    group: price_derivatives
+    applies_to: all
+    depends_on: [low_diff_prc]
+    params: {}
+
+  - name: low_diff_prc_rm_mean_above
+    group: price_derivatives
+    applies_to: all
+    depends_on: [low_diff_prc_rm]
+    params: {}
+
+  - name: low_diff_prc_rm_mean_below
+    group: price_derivatives
+    applies_to: all
+    depends_on: [low_diff_prc_rm]
+    params: {}
+
+  # --- classification (applies_to: [15, 60, 240, 1440] only) ---
+  - name: move_class
+    group: classification
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: zone_class
+    group: classification
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: over_low
+    group: classification
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: over_high
+    group: classification
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  # --- targets (applies_to: [15, 60, 240, 1440] only) ---
+  - name: tgt_long
+    group: targets
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: sl_long
+    group: targets
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: tgt_short
+    group: targets
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: sl_short
+    group: targets
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: ZB
+    group: targets
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: ZS
+    group: targets
+    applies_to: [15, 60, 240, 1440]
+    depends_on: []
+    library: talib
+    params: {}
+
+  # --- trend_flags ---
+  - name: trend_up
+    group: trend_flags
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  - name: trend_down
+    group: trend_flags
+    applies_to: all
+    depends_on: []
+    library: talib
+    params: {}
+
+  # --- nn_features ---
+  - name: nn_rsi_ma8_norm_mean
+    group: nn_features
+    applies_to: all
+    depends_on: [rsi_ma8]
+    params: {}
+
+  - name: nn_close_diff_atr_ma
+    group: nn_features
+    applies_to: all
+    depends_on: [close_diff_prc, atr_ma]
+    params: {}
+
+nn:
+  feature_cols:
+    - "15_nn_rsi_ma8_norm_mean"
+    - "15_nn_close_diff_atr_ma"
+    - "60_nn_rsi_ma8_norm_mean"
+    - "60_nn_close_diff_atr_ma"
+    - "240_nn_rsi_ma8_norm_mean"
+  checkpoint_dir: "checkpoints/"
