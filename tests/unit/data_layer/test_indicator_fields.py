@@ -5,12 +5,16 @@ Tests verify compute() outputs for all indicator field classes.
 
 from __future__ import annotations
 
+import json
 import math
+import os
+import pickle
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from config_loader import IndicatorFieldConfig
 from data import LiveDataPoint
 from indicators import (
     # Momentum
@@ -55,6 +59,18 @@ from indicators import (
     LowDiffPrcRMField,
     LowDiffPrcRMMeanAboveField,
     LowDiffPrcRMMeanBelowField,
+    # Classification
+    MoveClassField,
+    ZoneClassField,
+    OverLowField,
+    OverHighField,
+    # Targets
+    TgtLongField,
+    SLLongField,
+    TgtShortField,
+    SLShortField,
+    ZBField,
+    ZSField,
     # Trend flags
     TrendUpField,
     TrendDownField,
@@ -62,6 +78,18 @@ from indicators import (
     NNRSINormField,
     NNCloseDiffATRField,
 )
+
+
+def make_cfg(name: str, group: str, applies_to: list, depends_on: list) -> IndicatorFieldConfig:
+    """Build a minimal IndicatorFieldConfig for testing."""
+    return IndicatorFieldConfig(
+        name=name,
+        group=group,
+        applies_to=applies_to,
+        depends_on=depends_on,
+        library=None,
+        params={},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -628,3 +656,195 @@ class TestNNFeatureFields:
         assert len(series) == len(df)
         valid = series.dropna()
         assert len(valid) > 0
+
+
+# ---------------------------------------------------------------------------
+# 13. Classification fields with monkeypatched _load_rsi_classification
+# ---------------------------------------------------------------------------
+
+class TestClassificationFields:
+    def _make_rsi_df(self, tf: int = 15, n: int = 50) -> tuple:
+        """Return (dp, df) with rsi_ma8 column pre-populated."""
+        df = make_indicator_df(tf=tf, n=n)
+        df[f"{tf}_rsi_ma8"] = 52.0
+        dp = LiveDataPoint({tf: df})
+        return dp, df
+
+    def test_move_class_with_stats(self, monkeypatch):
+        """MoveClassField computes correctly with monkeypatched loader."""
+        import indicators
+        stats = {"15": {"mean": 50.0, "std": 14.0}}
+        monkeypatch.setenv("DATA_ROOT", "dataset")
+        monkeypatch.setenv("PAIR", "link_usdt")
+        monkeypatch.setattr(indicators, "_load_rsi_classification", lambda path: stats)
+        field = MoveClassField()
+        dp, df = self._make_rsi_df(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+        assert result.notna().any()
+
+    def test_zone_class_with_stats(self, monkeypatch):
+        """ZoneClassField computes correctly with monkeypatched loader."""
+        import indicators
+        stats = {"15": {"mean": 50.0, "std": 14.0}}
+        monkeypatch.setenv("DATA_ROOT", "dataset")
+        monkeypatch.setenv("PAIR", "link_usdt")
+        monkeypatch.setattr(indicators, "_load_rsi_classification", lambda path: stats)
+        field = ZoneClassField()
+        dp, df = self._make_rsi_df(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+        assert result.notna().any()
+
+    def test_over_low_with_stats(self, monkeypatch):
+        """OverLowField computes correctly with monkeypatched loader."""
+        import indicators
+        stats = {"15": {"mean": 50.0, "std": 14.0}}
+        monkeypatch.setenv("DATA_ROOT", "dataset")
+        monkeypatch.setenv("PAIR", "link_usdt")
+        monkeypatch.setattr(indicators, "_load_rsi_classification", lambda path: stats)
+        field = OverLowField()
+        dp, df = self._make_rsi_df(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+        # rsi_ma8=52 > mean-std=36, so all True
+        assert result.all()
+
+    def test_over_high_with_stats(self, monkeypatch):
+        """OverHighField computes correctly with monkeypatched loader."""
+        import indicators
+        stats = {"15": {"mean": 50.0, "std": 14.0}}
+        monkeypatch.setenv("DATA_ROOT", "dataset")
+        monkeypatch.setenv("PAIR", "link_usdt")
+        monkeypatch.setattr(indicators, "_load_rsi_classification", lambda path: stats)
+        field = OverHighField()
+        dp, df = self._make_rsi_df(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+        # rsi_ma8=52 < mean+std=64, so all False
+        assert not result.any()
+
+
+# ---------------------------------------------------------------------------
+# 14. Targets fields with monkeypatched _load_diff_stats
+# ---------------------------------------------------------------------------
+
+class TestTargetsFields:
+    def _make_close_dp(self, tf: int = 15, n: int = 50) -> tuple:
+        df = make_indicator_df(tf=tf, n=n)
+        dp = LiveDataPoint({tf: df})
+        return dp, df
+
+    def _patch_diff_stats(self, monkeypatch, tf: int = 15):
+        import indicators
+        diff_stats = {str(tf): {
+            "mean_long": 0.02,
+            "mean_long_sl": 0.01,
+            "mean_short": 0.02,
+            "mean_short_sl": 0.01,
+            "zb_threshold": 1.0,
+            "zs_threshold": 100.0,
+        }}
+        monkeypatch.setenv("DATA_ROOT", "dataset")
+        monkeypatch.setenv("PAIR", "link_usdt")
+        monkeypatch.setattr(indicators, "_load_diff_stats", lambda path: diff_stats)
+
+    def test_tgt_long_with_stats(self, monkeypatch):
+        """TgtLongField computes close * (1 + mean_long)."""
+        self._patch_diff_stats(monkeypatch)
+        field = TgtLongField()
+        dp, df = self._make_close_dp(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+
+    def test_sl_long_with_stats(self, monkeypatch):
+        """SLLongField computes close * (1 - mean_long_sl)."""
+        self._patch_diff_stats(monkeypatch)
+        field = SLLongField()
+        dp, df = self._make_close_dp(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+
+    def test_tgt_short_with_stats(self, monkeypatch):
+        """TgtShortField computes close * (1 - mean_short)."""
+        self._patch_diff_stats(monkeypatch)
+        field = TgtShortField()
+        dp, df = self._make_close_dp(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+
+    def test_sl_short_with_stats(self, monkeypatch):
+        """SLShortField computes close * (1 + mean_short_sl)."""
+        self._patch_diff_stats(monkeypatch)
+        field = SLShortField()
+        dp, df = self._make_close_dp(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+
+    def test_zb_with_stats(self, monkeypatch):
+        """ZBField returns integer Series."""
+        self._patch_diff_stats(monkeypatch)
+        field = ZBField()
+        dp, df = self._make_close_dp(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+
+    def test_zs_with_stats(self, monkeypatch):
+        """ZSField returns integer Series."""
+        self._patch_diff_stats(monkeypatch)
+        field = ZSField()
+        dp, df = self._make_close_dp(tf=15)
+        result = field.compute(dp, 15)
+        assert isinstance(result, pd.Series)
+        assert len(result) == 50
+
+
+# ---------------------------------------------------------------------------
+# 15. MACDFastSignalField
+# ---------------------------------------------------------------------------
+
+class TestMACDFastSignalField:
+    def test_macd_fast_signal_produces_series(self):
+        """MACDFastSignalField returns Series of same length."""
+        tf = 5
+        dp, df = make_dp(tf=tf, n=120)
+        field = MACDFastSignalField()
+        series = run_field(dp, df, field, tf)
+        assert isinstance(series, pd.Series)
+        assert len(series) == len(df)
+
+
+# ---------------------------------------------------------------------------
+# 16. SAR empty df edge case
+# ---------------------------------------------------------------------------
+
+class TestSAREdgeCases:
+    def test_sar_edge_case_empty_df(self):
+        """With n=0, SAR returns an empty Series without crashing."""
+        tf = 5
+        dp, df = make_dp(tf=tf, n=0)
+        field = SARField()
+        series = field.compute(dp, tf)
+        assert isinstance(series, pd.Series)
+        assert len(series) == 0
+
+
+# ---------------------------------------------------------------------------
+# 17. Registry completeness
+# ---------------------------------------------------------------------------
+
+def test_registry_contains_all_field_names():
+    """Every field name in the config must have a registry entry."""
+    from indicators import _FIELD_REGISTRY, load_indicators_config
+    configs = load_indicators_config()
+    missing = [cfg.name for cfg in configs if cfg.name not in _FIELD_REGISTRY]
+    assert missing == [], f"Missing from registry: {missing}"

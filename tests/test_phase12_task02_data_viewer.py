@@ -303,6 +303,13 @@ class TestViewFullLevels:
         assert "rsi" in call_subplots
         assert "cci" in call_subplots
 
+    def test_view_full_levels_empty_slice_no_crash(self, viewer, mock_renderer):
+        """Empty slice (start_idx == end_idx) should not raise IndexError."""
+        viewer.view_full_levels(start_idx=0, end_idx=0, levels=MagicMock())
+        # Should not raise and should still show the figure
+        fig = mock_renderer.create_figure.return_value
+        fig.show.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # save_chart

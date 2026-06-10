@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pandas as pd
 
+import constants
 from frontend.chart_renderer import ChartRenderer
 
 # ---------------------------------------------------------------------------
@@ -191,7 +192,9 @@ class DataViewer:
         fig = self._build_figure(df_slice, indicators)
 
         if levels is not None:
-            import constants
+            if df_slice.empty:
+                fig.show()
+                return
 
             last_row = df_slice.index[-1]
             cur_time = int(pd.Timestamp(last_row).timestamp())

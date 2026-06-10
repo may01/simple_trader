@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import pickle
@@ -914,6 +915,24 @@ class LowDiffPrcRMMeanBelowField(IndicatorField):
 
 
 # ---------------------------------------------------------------------------
+# Cached resource loaders
+# ---------------------------------------------------------------------------
+
+@functools.lru_cache(maxsize=None)
+def _load_rsi_classification(stats_path: str) -> dict:
+    """Load rsi_classification.json from stats_path (cached by path)."""
+    with open(stats_path, "r") as fh:
+        return json.load(fh)
+
+
+@functools.lru_cache(maxsize=None)
+def _load_diff_stats(stats_path: str) -> dict:
+    """Load diff_stats.pkl from stats_path (cached by path)."""
+    with open(stats_path, "rb") as fh:
+        return pickle.load(fh)
+
+
+# ---------------------------------------------------------------------------
 # Classification Group
 # ---------------------------------------------------------------------------
 
@@ -922,7 +941,7 @@ class MoveClassField(IndicatorField):
 
     name = "move_class"
     group = "classification"
-    dependencies: list[str] = []
+    dependencies: list[str] = ["rsi_ma8"]
     resource_dependencies: list[str] = ["rsi_classification.json"]
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
@@ -930,8 +949,7 @@ class MoveClassField(IndicatorField):
     def compute(self, data_point, tf: int) -> pd.Series:
         from helpers import stats_folder
         path = os.path.join(stats_folder(), "rsi_classification.json")
-        with open(path, "r") as fh:
-            data = json.load(fh)
+        data = _load_rsi_classification(path)
         tf_data = data[str(tf)]
         mean = float(tf_data["mean"])
         std = float(tf_data["std"])
@@ -954,7 +972,7 @@ class ZoneClassField(IndicatorField):
 
     name = "zone_class"
     group = "classification"
-    dependencies: list[str] = []
+    dependencies: list[str] = ["rsi_ma8"]
     resource_dependencies: list[str] = ["rsi_classification.json"]
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
@@ -962,8 +980,7 @@ class ZoneClassField(IndicatorField):
     def compute(self, data_point, tf: int) -> pd.Series:
         from helpers import stats_folder
         path = os.path.join(stats_folder(), "rsi_classification.json")
-        with open(path, "r") as fh:
-            data = json.load(fh)
+        data = _load_rsi_classification(path)
         tf_data = data[str(tf)]
         mean = float(tf_data["mean"])
         std = float(tf_data["std"])
@@ -986,7 +1003,7 @@ class OverLowField(IndicatorField):
 
     name = "over_low"
     group = "classification"
-    dependencies: list[str] = []
+    dependencies: list[str] = ["rsi_ma8"]
     resource_dependencies: list[str] = ["rsi_classification.json"]
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
@@ -994,8 +1011,7 @@ class OverLowField(IndicatorField):
     def compute(self, data_point, tf: int) -> pd.Series:
         from helpers import stats_folder
         path = os.path.join(stats_folder(), "rsi_classification.json")
-        with open(path, "r") as fh:
-            data = json.load(fh)
+        data = _load_rsi_classification(path)
         tf_data = data[str(tf)]
         mean = float(tf_data["mean"])
         std = float(tf_data["std"])
@@ -1010,7 +1026,7 @@ class OverHighField(IndicatorField):
 
     name = "over_high"
     group = "classification"
-    dependencies: list[str] = []
+    dependencies: list[str] = ["rsi_ma8"]
     resource_dependencies: list[str] = ["rsi_classification.json"]
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
@@ -1018,8 +1034,7 @@ class OverHighField(IndicatorField):
     def compute(self, data_point, tf: int) -> pd.Series:
         from helpers import stats_folder
         path = os.path.join(stats_folder(), "rsi_classification.json")
-        with open(path, "r") as fh:
-            data = json.load(fh)
+        data = _load_rsi_classification(path)
         tf_data = data[str(tf)]
         mean = float(tf_data["mean"])
         std = float(tf_data["std"])
@@ -1033,12 +1048,11 @@ class OverHighField(IndicatorField):
 # Targets Group
 # ---------------------------------------------------------------------------
 
-def _load_diff_stats(tf: int) -> dict:
-    """Load diff_stats.pkl and return the per-tf entry."""
+def _get_tf_diff_stats(tf: int) -> dict:
+    """Return per-tf entry from diff_stats.pkl (uses cached _load_diff_stats)."""
     from helpers import stats_folder
     path = os.path.join(stats_folder(), "diff_stats.pkl")
-    with open(path, "rb") as fh:
-        data = pickle.load(fh)
+    data = _load_diff_stats(path)
     return data.get(str(tf), data.get(tf, {}))
 
 
@@ -1053,7 +1067,7 @@ class TgtLongField(IndicatorField):
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _load_diff_stats(tf)
+        stats = _get_tf_diff_stats(tf)
         mean_diff = float(stats.get("mean_long", 0.0))
         df = data_point.get_df(tf)
         close = df[f"{tf}_close"]
@@ -1071,7 +1085,7 @@ class SLLongField(IndicatorField):
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _load_diff_stats(tf)
+        stats = _get_tf_diff_stats(tf)
         mean_sl = float(stats.get("mean_long_sl", 0.0))
         df = data_point.get_df(tf)
         close = df[f"{tf}_close"]
@@ -1089,7 +1103,7 @@ class TgtShortField(IndicatorField):
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _load_diff_stats(tf)
+        stats = _get_tf_diff_stats(tf)
         mean_diff = float(stats.get("mean_short", 0.0))
         df = data_point.get_df(tf)
         close = df[f"{tf}_close"]
@@ -1107,7 +1121,7 @@ class SLShortField(IndicatorField):
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _load_diff_stats(tf)
+        stats = _get_tf_diff_stats(tf)
         mean_sl = float(stats.get("mean_short_sl", 0.0))
         df = data_point.get_df(tf)
         close = df[f"{tf}_close"]
@@ -1125,7 +1139,7 @@ class ZBField(IndicatorField):
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _load_diff_stats(tf)
+        stats = _get_tf_diff_stats(tf)
         threshold = float(stats.get("zb_threshold", 0.0))
         df = data_point.get_df(tf)
         close = df[f"{tf}_close"]
@@ -1143,7 +1157,7 @@ class ZSField(IndicatorField):
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _load_diff_stats(tf)
+        stats = _get_tf_diff_stats(tf)
         threshold = float(stats.get("zs_threshold", 0.0))
         df = data_point.get_df(tf)
         close = df[f"{tf}_close"]
