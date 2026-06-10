@@ -120,24 +120,28 @@ class NNPredictor:
                     )
                 value = 0.0
 
+            try:
+                fvalue = float(value)
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"NNPredictor: non-numeric value for column '{col}'; using 0.0"
+                )
+                fvalue = 0.0
+
             # Normalize: (value - mean) / std
             try:
                 mean, std = self.data_attributes.get_stats(col)
             except (KeyError, AttributeError):
-                # If stats not available, use raw value
                 logger.warning(
                     f"NNPredictor: no stats for column '{col}'; using raw value"
                 )
-                feature_vector.append(float(value))
+                feature_vector.append(fvalue)
                 continue
 
             if std == 0.0:
-                # std=0: use raw value
-                feature_vector.append(float(value))
+                feature_vector.append(fvalue)
             else:
-                # Normal normalization
-                normalized = (value - mean) / std
-                feature_vector.append(normalized)
+                feature_vector.append((fvalue - mean) / std)
 
         # Run model
         features_array = np.array(feature_vector, dtype=np.float32)

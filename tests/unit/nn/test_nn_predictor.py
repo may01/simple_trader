@@ -6,8 +6,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import nn.nn_predictor as _nn_predictor_module
 from nn.nn_predictor import NNPredictor
 from nn.nn_model import NNModel
+
+
+@pytest.fixture(autouse=True)
+def reset_warned_missing_columns():
+    """Reset the module-level warning set before each test to prevent cross-test pollution."""
+    _nn_predictor_module._warned_missing_columns.clear()
+    yield
+    _nn_predictor_module._warned_missing_columns.clear()
 
 
 # ============================================================================
