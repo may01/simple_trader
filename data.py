@@ -313,6 +313,119 @@ class LiveData:
 item: LiveData = LiveData()
 
 
+# ---------------------------------------------------------------------------
+# SimulationData — single-load replay with O(1) per-step access
+# ---------------------------------------------------------------------------
+
+def _wide_df_path_for_pair(pair: str) -> str:
+    """Return path to df_with_indicators.pkl for the given pair.
+
+    Reads ROOT_FOLDER, DATA_ROOT, DATA_SET_NAME from env and combines with
+    the pair argument — does NOT mutate os.environ["PAIR"].
+    """
+    import os
+    from helpers import root_folder  # local import — avoids circular dep at module level
+    data_root = os.environ["DATA_ROOT"]
+    data_set_name = os.environ["DATA_SET_NAME"]
+    return f"{root_folder()}/{data_root}/{data_set_name}_{pair}/df_with_indicators.pkl"
+
+
+class SimulationData:
+    """Single-load wide-DataFrame replay cursor for backtesting/simulation.
+
+    Loads df_with_indicators.pkl once at construction time.  Each step is O(1):
+    only the current timestamp index advances; no slice copies are made.
+    """
+
+    def __init__(self, pair: str, begin_ts: int, end_ts: int, step_min: int) -> None:
+        """Load df_with_indicators.pkl and build a filtered timestamp range.
+
+        Args:
+            pair:      Trading pair string, e.g. "btc_usdt".
+            begin_ts:  Start of simulation window as Unix seconds (inclusive).
+            end_ts:    End of simulation window as Unix seconds (inclusive).
+            step_min:  Step size in minutes between simulation ticks.
+
+        Side-effects:
+            Logs a warning via log_warning() if more than 1% of the requested
+            timestamps are absent from the loaded DataFrame's index.
+        """
+        from logs import log_warning  # local import — avoids circular dep
+        path = _wide_df_path_for_pair(pair)
+        self._df: pd.DataFrame = pd.read_pickle(path)
+
+        begin = pd.Timestamp(begin_ts, unit="s", tz="UTC")
+        end = pd.Timestamp(end_ts, unit="s", tz="UTC")
+        full_range = pd.date_range(begin, end, freq=f"{step_min}min", tz="UTC")
+
+        self._timestamps = full_range.intersection(self._df.index)
+        self._cur_idx: int = 0
+
+        if len(full_range) > 0:
+            missing_ratio = (len(full_range) - len(self._timestamps)) / len(full_range)
+            if missing_ratio > 0.01:
+                log_warning(
+                    f"SimulationData({pair}): {missing_ratio:.1%} of requested timestamps "
+                    f"are missing from df_with_indicators.pkl "
+                    f"({len(full_range) - len(self._timestamps)} / {len(full_range)})"
+                )
+
+    # ------------------------------------------------------------------
+    # Core iteration interface
+    # ------------------------------------------------------------------
+
+    def get(self) -> WideDataPoint:
+        """Return WideDataPoint for the current timestamp. O(1)."""
+        return WideDataPoint(self._df, self._timestamps[self._cur_idx])
+
+    def next(self) -> None:
+        """Advance cursor by one step."""
+        self._cur_idx += 1
+
+    def is_end(self) -> bool:
+        """Return True when all timestamps have been consumed."""
+        return self._cur_idx >= len(self._timestamps)
+
+    @property
+    def steps(self) -> int:
+        """Total number of timestamps in this simulation window."""
+        return len(self._timestamps)
+
+    @property
+    def current_ts(self) -> pd.Timestamp:
+        """Timestamp at the current cursor position."""
+        return self._timestamps[self._cur_idx]
+
+    # ------------------------------------------------------------------
+    # Splitting
+    # ------------------------------------------------------------------
+
+    def _make_slice(self, timestamps) -> "SimulationData":
+        """Create a new SimulationData sharing the same _df (no reload)."""
+        obj = object.__new__(SimulationData)
+        obj._df = self._df  # shared reference — no copy
+        obj._timestamps = timestamps
+        obj._cur_idx = 0
+        return obj
+
+    def split(self, n: int) -> list:
+        """Divide timestamps into *n* roughly equal slices.
+
+        Returns a list of *n* SimulationData instances that share the same
+        underlying DataFrame object.  The last slice absorbs any remainder rows.
+
+        Args:
+            n: Number of slices to produce (must be >= 1).
+        """
+        size = len(self._timestamps) // n
+        slices = []
+        for i in range(n):
+            start = i * size
+            end = (i + 1) * size if i < n - 1 else len(self._timestamps)
+            slices.append(self._make_slice(self._timestamps[start:end]))
+        return slices
+
+
 def get_stock_data(pair: str) -> pd.DataFrame:
     """Load graber_data.pkl for *pair* and build a wide DataFrame.
 
