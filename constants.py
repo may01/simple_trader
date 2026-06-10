@@ -54,3 +54,7 @@ TRADE_SELL = "TRADE_SELL"
 # --- Status codes ---
 STATUS_SUCCESS = "STATUS_SUCCESS"
 STATUS_FAIL = "STATUS_FAIL"
+
+# --- Candle wick types ---
+CANDLE_HIGH = 1  # upper wick analysis
+CANDLE_LOW = 2   # lower wick analysis
