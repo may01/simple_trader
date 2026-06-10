@@ -2,25 +2,34 @@
 
 Drives live trading: polls live_data for the current DataPoint each second,
 asks StrategyManager what to do, and dispatches to order management methods
-(stubs in Task 02; filled in Task 03).
+(implemented in Task 03).
 """
 
+import logging
 import time
 
 from constants import (
+    POSITION_TYPE_LONG,
+    POSITION_TYPE_SHORT,
+    STATUS_FAIL,
+    STATUS_SUCCESS,
+    STRATEGY_ACTION_CLOSE_LONG,
+    STRATEGY_ACTION_CLOSE_LONG_PART,
+    STRATEGY_ACTION_CLOSE_SHORT,
+    STRATEGY_ACTION_CLOSE_SHORT_PART,
+    STRATEGY_ACTION_DO_STOP_LOSS,
     STRATEGY_ACTION_NOTHING,
     STRATEGY_ACTION_OPEN_LONG,
     STRATEGY_ACTION_OPEN_SHORT,
-    STRATEGY_ACTION_CLOSE_LONG,
-    STRATEGY_ACTION_CLOSE_SHORT,
-    STRATEGY_ACTION_CLOSE_LONG_PART,
-    STRATEGY_ACTION_CLOSE_SHORT_PART,
-    STRATEGY_ACTION_DO_STOP_LOSS,
+    TRADE_BUY,
+    TRADE_SELL,
 )
 from position.position import Position
 from robots.live_order_tracker import LiveOrderTracker
 from stocks.base_stock import StockInterface
 from strategies.strategy_manager import StrategyManager
+
+logger = logging.getLogger(__name__)
 
 # Action dispatch sets
 _OPEN_ACTIONS = {STRATEGY_ACTION_OPEN_LONG, STRATEGY_ACTION_OPEN_SHORT}
@@ -75,11 +84,19 @@ class Robot:
         Sets running=True before entering the loop.
         Handles KeyboardInterrupt gracefully by setting running=False.
         """
-        self.tracker.load()
+        try:
+            self.tracker.load()
+        except Exception:
+            logger.exception("tracker.load() failed; starting fresh")
         self.running = True
         try:
             while self.running:
-                self.do()
+                try:
+                    self.do()
+                except KeyboardInterrupt:
+                    raise
+                except Exception:
+                    logger.exception("do() raised an exception; continuing loop")
                 time.sleep(1)
         except KeyboardInterrupt:
             self.running = False
@@ -124,8 +141,28 @@ class Robot:
         self._stop_loss_cancel_actions(data_point)
 
     # ------------------------------------------------------------------
-    # Order management stubs (Task 03 will implement these)
+    # Order management (Task 03)
     # ------------------------------------------------------------------
+
+    def _place_valid_order(self, trade_type: str, price: float, amount: float) -> str:
+        """Place a LIMIT order if the entry price is still valid.
+
+        Checks position.check_stop_open(price) first; returns "" if stale.
+        Wraps stock.trade() in try/except — returns "" on any failure.
+
+        Returns:
+            order_id string on success, "" on any failure.
+        """
+        if not self.position.check_stop_open(price):
+            return ""
+        try:
+            status, result = self.stock.trade(trade_type, price, amount)
+            if status == STATUS_FAIL:
+                return ""
+            return result.get("order_id", "")
+        except Exception:
+            logger.exception("_place_valid_order: stock.trade raised")
+            return ""
 
     def _open_position(
         self,
@@ -136,8 +173,29 @@ class Robot:
         stop_price: float,
         tf: int,
     ) -> None:
-        """Place entry order to open a new position. (Task 03)"""
-        pass
+        """Open a new position: create position, borrow (SHORT), place entry order."""
+        if not open_prices:
+            return
+        opened = self.position.open(
+            strategy_action, open_prices, close_prices, stop_price, tf, action_msg=None
+        )
+        if not opened:
+            return
+
+        price = open_prices[0]
+        amount = self.position.full_position / price if price else 0.0
+
+        if strategy_action == STRATEGY_ACTION_OPEN_LONG:
+            order_id = self._place_valid_order(TRADE_BUY, price, amount)
+            self.tracker.set_buy_order(order_id)
+        elif strategy_action == STRATEGY_ACTION_OPEN_SHORT:
+            # Borrow coin before placing sell order
+            try:
+                self.stock.borrow(self.stock.coin, amount)
+            except Exception:
+                logger.exception("_open_position: stock.borrow raised")
+            order_id = self._place_valid_order(TRADE_SELL, price, amount)
+            self.tracker.set_sell_order(order_id)
 
     def _close_position(
         self,
@@ -147,23 +205,94 @@ class Robot:
         stop_price: float,
         tf: int,
     ) -> None:
-        """Place exit order to close the current position. (Task 03)"""
-        pass
+        """Close the current position: cancel existing order, place exit order."""
+        self.position.close(strategy_action, close_prices, stop_price, tf, action_msg=None)
+
+        # Cancel any existing open order for this side
+        if self.tracker.buy_id:
+            self.tracker.cancel_buy()
+        if self.tracker.sell_id:
+            self.tracker.cancel_sell()
+
+        if not close_prices:
+            return
+        price = close_prices[0]
+        amount = self.position.full_position / price if price else 0.0
+
+        if strategy_action == STRATEGY_ACTION_CLOSE_LONG or \
+                strategy_action == STRATEGY_ACTION_CLOSE_LONG_PART:
+            order_id = self._place_valid_order(TRADE_SELL, price, amount)
+            self.tracker.set_sell_order(order_id)
+        elif strategy_action == STRATEGY_ACTION_CLOSE_SHORT or \
+                strategy_action == STRATEGY_ACTION_CLOSE_SHORT_PART:
+            order_id = self._place_valid_order(TRADE_BUY, price, amount)
+            self.tracker.set_buy_order(order_id)
 
     def _stop_loss(
         self,
         data_point,
-        close_prices: list,
-        stop_price: float,
-        tf: int,
+        close_prices: list = None,
+        stop_price: float = 0.0,
+        tf: int = 0,
     ) -> None:
-        """Execute stop-loss exit order. (Task 03)"""
-        pass
+        """Cancel all open orders and place a LIMIT exit at current price."""
+        if self.tracker.buy_id:
+            self.tracker.cancel_buy()
+        if self.tracker.sell_id:
+            self.tracker.cancel_sell()
+
+        cur_price = data_point.cur_price("close")
+        amount = self.position.full_position / cur_price if cur_price else 0.0
+
+        pos_impl = self.position.posImpl
+        if pos_impl is not None and pos_impl.position_type == POSITION_TYPE_SHORT:
+            order_id = self._place_valid_order(TRADE_BUY, cur_price, amount)
+            self.tracker.set_buy_order(order_id)
+        else:
+            # Default: LONG or unknown — sell to exit
+            order_id = self._place_valid_order(TRADE_SELL, cur_price, amount)
+            self.tracker.set_sell_order(order_id)
+
+    def _do_finalize_action(self) -> None:
+        """Finalize the completed position: record P&L and clear tracker."""
+        revenue_pct, revenue_abs = self.position.finalize()
+        self.tracker.clear()
+        logger.info(
+            "Trade finalized: revenue_pct=%.4f revenue_abs=%.2f",
+            revenue_pct,
+            revenue_abs,
+        )
 
     def _process_executed_orders(self, data_point) -> None:
-        """Check for and process any filled orders. (Task 03)"""
-        pass
+        """Poll for filled orders and record fills; finalize on full exit fill."""
+        if self.tracker.buy_id:
+            status, fill = self.tracker.check_fill(self.tracker.buy_id)
+            if status == STATUS_SUCCESS:
+                coin_amount = fill["start_amount"] - fill["left_amount"]
+                price = fill["rate"]
+                self.position.record_entry_fill(coin_amount, price)
+
+        if self.tracker.sell_id:
+            status, fill = self.tracker.check_fill(self.tracker.sell_id)
+            if status == STATUS_SUCCESS:
+                coin_amount = fill["start_amount"] - fill["left_amount"]
+                price = fill["rate"]
+                self.position.record_exit_fill(coin_amount, price)
+                if fill["left_amount"] == 0:
+                    self._do_finalize_action()
 
     def _stop_loss_cancel_actions(self, data_point) -> None:
-        """Cancel stale stop-loss orders if conditions changed. (Task 03)"""
-        pass
+        """Trigger stop-loss or time-based close if conditions are met."""
+        cur_price = data_point.cur_price("close")
+        cur_time = data_point.timestamp
+
+        if self.position.is_stop_loss_triggered(cur_price):
+            self._stop_loss(data_point)
+        elif self.position.close_by_time(cur_time):
+            # Close at current price using CLOSE_LONG (direction resolved in _close_position)
+            pos_impl = self.position.posImpl
+            if pos_impl is not None and pos_impl.position_type == POSITION_TYPE_SHORT:
+                action = STRATEGY_ACTION_CLOSE_SHORT
+            else:
+                action = STRATEGY_ACTION_CLOSE_LONG
+            self._close_position(data_point, action, [cur_price], cur_price, 0)
