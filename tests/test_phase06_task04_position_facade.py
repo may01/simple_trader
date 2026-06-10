@@ -640,3 +640,32 @@ class TestSerialization:
         pos2.from_dict(d)
         assert pos2.posImpl.fee == 0.002
         assert pos2.posImpl.full_position == 5000.0
+
+    def test_from_dict_syncs_facade_fields(self):
+        """Verify that from_dict() syncs facade fields from posImpl."""
+        # Create a position with fee=0.001 and full_position=500
+        pos = Position(fee=0.001)
+        pos.full_position = 500.0
+        pos.open(
+            STRATEGY_ACTION_OPEN_LONG,
+            price_open=[20.0],
+            price_close=[21.0],
+            price_stop_loss=19.0,
+            time_period=15,
+            action_msg=None,
+        )
+        d = pos.to_dict()
+
+        # Create a new Position with different facade values
+        pos2 = Position(fee=0.002)
+        pos2.full_position = 10000.0
+        # Verify initial facade state is different
+        assert pos2.fee == 0.002
+        assert pos2.full_position == 10000.0
+
+        # Call from_dict() - should sync facade fields from posImpl
+        pos2.from_dict(d)
+
+        # Assert that facade fields are synced from the restored posImpl
+        assert pos2.fee == 0.001
+        assert pos2.full_position == 500.0

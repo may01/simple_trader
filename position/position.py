@@ -109,13 +109,13 @@ class Position:
     # Read-only queries
     # ------------------------------------------------------------------
 
-    def get_action(self) -> int:
+    def get_action(self) -> str:
         """Return current action, or STRATEGY_ACTION_NOTHING if no position."""
         if self.posImpl is None:
             return STRATEGY_ACTION_NOTHING
         return self.posImpl.get_action()
 
-    def get_state(self) -> int:
+    def get_state(self) -> str:
         """Return current state, or POSITION_STATE_WAIT if no position."""
         if self.posImpl is None:
             return POSITION_STATE_WAIT
@@ -164,6 +164,8 @@ class Position:
 
         Reads data["position_type"] to determine whether to create a
         LongPosition or ShortPosition, then restores all state in-place.
+        After restoring, syncs the facade's own fields from posImpl to ensure
+        consistency for subsequent finalize() / open() calls.
         """
         position_type = data.get("position_type")
         if position_type == POSITION_TYPE_LONG:
@@ -173,3 +175,7 @@ class Position:
         else:
             return
         self.posImpl.from_dict(data)
+        # Sync facade fields from the restored posImpl
+        self.fee = self.posImpl.fee
+        self.full_position = self.posImpl.full_position
+        self.thread_num = self.posImpl.thread_num
