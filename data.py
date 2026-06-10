@@ -426,6 +426,59 @@ class SimulationData:
         return slices
 
 
+# ---------------------------------------------------------------------------
+# FullData — read-only view over the full wide DataFrame
+# ---------------------------------------------------------------------------
+
+class FullData:
+    """Read-only view over a wide DataFrame for batch/training access.
+
+    Provides filtered slices by timeframe and single closed-candle lookup.
+    """
+
+    def __init__(self, df: pd.DataFrame) -> None:
+        self._df = df
+
+    def get(self, tf: int) -> pd.DataFrame:
+        """Return all closed-candle rows for *tf*, keeping only ``{tf}_*`` columns.
+
+        Args:
+            tf: Timeframe in minutes.
+
+        Returns:
+            DataFrame with 1-min timestamps at candle close (the DatetimeIndex of
+            closed rows) and only columns prefixed with ``f"{tf}_"``.
+        """
+        closed_col = f"{tf}_is_closed"
+        mask = self._df[closed_col] == True  # noqa: E712 — explicit bool comparison
+        closed_rows = self._df[mask]
+        tf_cols = [c for c in closed_rows.columns if c.startswith(f"{tf}_")]
+        return closed_rows[tf_cols]
+
+    def get_candle(self, tf: int, open_time: pd.Timestamp) -> pd.Series:
+        """Return the single closed-candle row for the candle that opened at *open_time*.
+
+        Args:
+            tf:        Timeframe in minutes.
+            open_time: The candle open timestamp (stored in ``{tf}_open_index``).
+
+        Returns:
+            pd.Series for the matching row.
+
+        Raises:
+            KeyError: If no closed candle with the given open_time is found.
+        """
+        open_index_col = f"{tf}_open_index"
+        closed_col = f"{tf}_is_closed"
+        mask = (self._df[open_index_col] == open_time) & (self._df[closed_col] == True)  # noqa: E712
+        matching = self._df[mask]
+        if len(matching) == 0:
+            raise KeyError(
+                f"No closed candle for tf={tf} with open_time={open_time!r}"
+            )
+        return matching.iloc[0]
+
+
 def get_stock_data(pair: str) -> pd.DataFrame:
     """Load graber_data.pkl for *pair* and build a wide DataFrame.
 
