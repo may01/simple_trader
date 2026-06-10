@@ -264,16 +264,36 @@ class Robot:
         )
 
     def _process_executed_orders(self, data_point) -> None:
-        """Poll for filled orders and record fills; finalize on full exit fill."""
-        if self.tracker.buy_id:
-            status, fill = self.tracker.check_fill(self.tracker.buy_id)
+        """Poll for filled orders and record fills; finalize on full exit fill.
+
+        Direction-aware routing:
+          LONG:  buy_id  → entry_fill,  sell_id → exit_fill  (sell-to-close)
+          SHORT: sell_id → entry_fill,  buy_id  → exit_fill  (buy-back-to-close)
+        """
+        pos_impl = self.position.posImpl
+        is_short = (
+            pos_impl is not None
+            and pos_impl.position_type == POSITION_TYPE_SHORT
+        )
+
+        if is_short:
+            # SHORT entry order is a sell; SHORT exit order is a buy-back
+            entry_id = self.tracker.sell_id
+            exit_id = self.tracker.buy_id
+        else:
+            # LONG (or no position yet): entry is a buy, exit is a sell
+            entry_id = self.tracker.buy_id
+            exit_id = self.tracker.sell_id
+
+        if entry_id:
+            status, fill = self.tracker.check_fill(entry_id)
             if status == STATUS_SUCCESS:
                 coin_amount = fill["start_amount"] - fill["left_amount"]
                 price = fill["rate"]
                 self.position.record_entry_fill(coin_amount, price)
 
-        if self.tracker.sell_id:
-            status, fill = self.tracker.check_fill(self.tracker.sell_id)
+        if exit_id:
+            status, fill = self.tracker.check_fill(exit_id)
             if status == STATUS_SUCCESS:
                 coin_amount = fill["start_amount"] - fill["left_amount"]
                 price = fill["rate"]

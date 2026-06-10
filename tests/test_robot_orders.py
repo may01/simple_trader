@@ -369,16 +369,20 @@ class TestDoFinalizeAction:
 
 
 # ---------------------------------------------------------------------------
-# _process_executed_orders
+# _process_executed_orders — LONG path
 # ---------------------------------------------------------------------------
 
-class TestProcessExecutedOrders:
+class TestProcessExecutedOrdersLong:
+    """LONG position: buy_id → entry_fill, sell_id → exit_fill."""
 
     def setup_method(self):
         self.robot = make_robot()
         self.robot.tracker.buy_id = ""
         self.robot.tracker.sell_id = ""
         self.dp = make_data_point()
+        # Simulate a LONG position
+        self.robot.position.posImpl = MagicMock()
+        self.robot.position.posImpl.position_type = POSITION_TYPE_LONG
 
     def test_no_action_when_no_orders(self):
         self.robot._process_executed_orders(self.dp)
@@ -386,9 +390,7 @@ class TestProcessExecutedOrders:
 
     def test_checks_buy_fill_when_buy_id_present(self):
         self.robot.tracker.buy_id = "buy1"
-        self.robot.tracker.check_fill.return_value = (
-            STATUS_FAIL, {}
-        )
+        self.robot.tracker.check_fill.return_value = (STATUS_FAIL, {})
         self.robot._process_executed_orders(self.dp)
         self.robot.tracker.check_fill.assert_called_once_with("buy1")
 
@@ -428,7 +430,7 @@ class TestProcessExecutedOrders:
         fill = {"status": "FILLED", "start_amount": 1.0, "left_amount": 0.0, "rate": 105.0}
         self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
 
-        with patch.object(self.robot, '_do_finalize_action') as mock_fin:
+        with patch.object(self.robot, '_do_finalize_action'):
             self.robot._process_executed_orders(self.dp)
 
         self.robot.position.record_exit_fill.assert_called_once_with(1.0, 105.0)
@@ -453,27 +455,157 @@ class TestProcessExecutedOrders:
 
         mock_fin.assert_not_called()
 
-    def test_repays_loan_after_buy_fully_filled_for_short(self):
-        """After a buy-back fill (sell_id path for SHORT), repay loan."""
-        # For SHORT: sell_id is the entry, buy_id is the exit.
-        # Actually per spec: exit fill on sell_id calls record_exit_fill.
-        # For SHORT close: tracker.buy_id is set (buy-back order).
-        # We test the buy-back (buy_id) fill triggers repay for SHORT.
+    def test_buy_id_does_not_trigger_exit_fill_for_long(self):
+        """LONG: buy_id should never route to record_exit_fill."""
+        self.robot.tracker.buy_id = "buy1"
+        fill = {"status": "FILLED", "start_amount": 1.0, "left_amount": 0.0, "rate": 100.0}
+        self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
+
+        self.robot._process_executed_orders(self.dp)
+
+        self.robot.position.record_exit_fill.assert_not_called()
+
+    def test_sell_id_does_not_trigger_entry_fill_for_long(self):
+        """LONG: sell_id should never route to record_entry_fill."""
+        self.robot.tracker.sell_id = "sell1"
+        fill = {"status": "FILLED", "start_amount": 1.0, "left_amount": 0.0, "rate": 105.0}
+        self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
+
+        with patch.object(self.robot, '_do_finalize_action'):
+            self.robot._process_executed_orders(self.dp)
+
+        self.robot.position.record_entry_fill.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _process_executed_orders — SHORT path
+# ---------------------------------------------------------------------------
+
+class TestProcessExecutedOrdersShort:
+    """SHORT position: sell_id → entry_fill, buy_id → exit_fill."""
+
+    def setup_method(self):
+        self.robot = make_robot()
+        self.robot.tracker.buy_id = ""
+        self.robot.tracker.sell_id = ""
+        self.dp = make_data_point()
+        # Simulate a SHORT position
+        self.robot.position.posImpl = MagicMock()
+        self.robot.position.posImpl.position_type = POSITION_TYPE_SHORT
+
+    def test_no_action_when_no_orders(self):
+        self.robot._process_executed_orders(self.dp)
+        self.robot.tracker.check_fill.assert_not_called()
+
+    def test_checks_sell_fill_as_entry_for_short(self):
+        """SHORT entry: sell_id is checked for the entry fill."""
+        self.robot.tracker.sell_id = "sell_entry"
+        self.robot.tracker.check_fill.return_value = (STATUS_FAIL, {})
+        self.robot._process_executed_orders(self.dp)
+        self.robot.tracker.check_fill.assert_called_once_with("sell_entry")
+
+    def test_records_entry_fill_on_filled_sell_for_short(self):
+        """SHORT: filled sell_id → record_entry_fill."""
+        self.robot.tracker.sell_id = "sell_entry"
+        fill = {"status": "FILLED", "start_amount": 1.0, "left_amount": 0.0, "rate": 100.0}
+        self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
+
+        self.robot._process_executed_orders(self.dp)
+
+        self.robot.position.record_entry_fill.assert_called_once_with(1.0, 100.0)
+
+    def test_sell_id_does_not_trigger_exit_fill_for_short(self):
+        """SHORT: sell_id (entry) must never call record_exit_fill."""
+        self.robot.tracker.sell_id = "sell_entry"
+        fill = {"status": "FILLED", "start_amount": 1.0, "left_amount": 0.0, "rate": 100.0}
+        self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
+
+        self.robot._process_executed_orders(self.dp)
+
+        self.robot.position.record_exit_fill.assert_not_called()
+
+    def test_checks_buy_fill_as_exit_for_short(self):
+        """SHORT exit: buy_id (buy-back) is checked for the exit fill."""
+        self.robot.tracker.buy_id = "buyback1"
+        self.robot.tracker.check_fill.return_value = (STATUS_FAIL, {})
+        self.robot._process_executed_orders(self.dp)
+        self.robot.tracker.check_fill.assert_called_once_with("buyback1")
+
+    def test_records_exit_fill_on_filled_buy_for_short(self):
+        """SHORT: filled buy_id (buy-back) → record_exit_fill."""
+        self.robot.tracker.buy_id = "buyback1"
+        fill = {"status": "FILLED", "start_amount": 2.0, "left_amount": 0.0, "rate": 90.0}
+        self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
+
+        with patch.object(self.robot, '_do_finalize_action'):
+            self.robot._process_executed_orders(self.dp)
+
+        self.robot.position.record_exit_fill.assert_called_once_with(2.0, 90.0)
+
+    def test_buy_id_does_not_trigger_entry_fill_for_short(self):
+        """SHORT: buy_id (exit) must never call record_entry_fill."""
+        self.robot.tracker.buy_id = "buyback1"
+        fill = {"status": "FILLED", "start_amount": 2.0, "left_amount": 0.0, "rate": 90.0}
+        self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
+
+        with patch.object(self.robot, '_do_finalize_action'):
+            self.robot._process_executed_orders(self.dp)
+
+        self.robot.position.record_entry_fill.assert_not_called()
+
+    def test_calls_do_finalize_when_buyback_fully_filled_for_short(self):
+        """SHORT: fully filled buy-back (buy_id) triggers finalize."""
+        self.robot.tracker.buy_id = "buyback1"
+        fill = {"status": "FILLED", "start_amount": 2.0, "left_amount": 0.0, "rate": 90.0}
+        self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
+
+        with patch.object(self.robot, '_do_finalize_action') as mock_fin:
+            self.robot._process_executed_orders(self.dp)
+
+        mock_fin.assert_called_once()
+
+    def test_no_finalize_on_partially_filled_buyback_for_short(self):
+        """SHORT: partially filled buy-back must not trigger finalize."""
+        self.robot.tracker.buy_id = "buyback1"
+        fill = {"status": "PARTIALLY_FILLED", "start_amount": 2.0, "left_amount": 1.0, "rate": 90.0}
+        self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
+
+        with patch.object(self.robot, '_do_finalize_action') as mock_fin:
+            self.robot._process_executed_orders(self.dp)
+
+        mock_fin.assert_not_called()
+
+    def test_skips_exit_fill_on_status_fail_for_short(self):
+        """SHORT: STATUS_FAIL on buy-back check → no record_exit_fill."""
+        self.robot.tracker.buy_id = "buyback1"
+        self.robot.tracker.check_fill.return_value = (STATUS_FAIL, {})
+        self.robot._process_executed_orders(self.dp)
+        self.robot.position.record_exit_fill.assert_not_called()
+
+    def test_records_partial_entry_fill_on_partial_sell_for_short(self):
+        """SHORT: partial sell fill → record_entry_fill with partial amount."""
+        self.robot.tracker.sell_id = "sell_entry"
+        fill = {"status": "PARTIALLY_FILLED", "start_amount": 3.0, "left_amount": 1.5, "rate": 102.0}
+        self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
+
+        self.robot._process_executed_orders(self.dp)
+
+        self.robot.position.record_entry_fill.assert_called_once_with(1.5, 102.0)
+
+    def test_repays_loan_note_after_buy_fully_filled_for_short(self):
+        """After a buy-back fill for SHORT, no exception is raised (loan repay tracked separately)."""
         self.robot.tracker.buy_id = "buyback1"
         self.robot.tracker.loan_id = "loan1"
         self.robot.tracker.loan_amount = 2.0
         self.robot.stock.coin = "BTC"
         fill = {"status": "FILLED", "start_amount": 2.0, "left_amount": 0.0, "rate": 90.0}
         self.robot.tracker.check_fill.return_value = (STATUS_SUCCESS, fill)
-        # Simulate short position
-        self.robot.position.posImpl = MagicMock()
-        self.robot.position.posImpl.position_type = POSITION_TYPE_SHORT
 
-        self.robot._process_executed_orders(self.dp)
+        with patch.object(self.robot, '_do_finalize_action'):
+            self.robot._process_executed_orders(self.dp)
 
-        # repay should be called when short position has a loan
-        # This test passes if no exception; repay logic is optional for now.
-        # (Tracked as concern if not implemented.)
+        # record_exit_fill must have been called correctly
+        self.robot.position.record_exit_fill.assert_called_once_with(2.0, 90.0)
 
 
 # ---------------------------------------------------------------------------
