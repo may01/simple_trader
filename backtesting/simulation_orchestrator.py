@@ -90,7 +90,7 @@ class SimulationOrchestrator:
                     results.append(future.result())
                 except Exception as exc:
                     logger.error("Simulation worker crashed: %s", exc)
-                    results.append(dict(_EMPTY_RESULT))
+                    results.append({**_EMPTY_RESULT, 'revenue_history': []})
 
         return results
 
