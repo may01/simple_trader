@@ -21,6 +21,21 @@ def _nn_output_path() -> str:
     return nn_folder() + "df_with_nn.pkl"
 
 
+class _DefaultStrategyFactory:
+    """Picklable StrategyManager factory.
+
+    SimulationOrchestrator sends the factory to worker processes via
+    ProcessPoolExecutor — a closure can't cross that boundary.
+    """
+
+    def __init__(self, fee: float) -> None:
+        self.fee = fee
+
+    def __call__(self):
+        from strategies.strategy_manager import StrategyManager  # lazy
+        return StrategyManager(self.fee)
+
+
 class Trainer:
     """Top-level pipeline orchestrator.
 
@@ -151,12 +166,8 @@ class Trainer:
 
         fee = float(os.environ.get("FEE", os.environ.get("EXCHANGE_FEE", "0.001")))
 
-        def _default_strategy_factory():
-            from strategies.strategy_manager import StrategyManager  # lazy
-            return StrategyManager(fee)
-
         orch = SimulationOrchestrator(
-            strategy_factory=_default_strategy_factory,
+            strategy_factory=_DefaultStrategyFactory(fee),
             fee=fee,
         )
         results = orch.run(simulation_data)

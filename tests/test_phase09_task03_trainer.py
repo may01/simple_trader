@@ -678,3 +678,22 @@ class TestRunTrainNNRealWiring:
             checkpoint_dir=nn_cfg["checkpoint_dir"],
             feature_cols=nn_cfg["feature_cols"],
         )
+
+
+class TestStrategyFactoryPicklable:
+    """SimulationOrchestrator runs workers via ProcessPoolExecutor — the
+    strategy_factory crosses the process boundary and must be picklable.
+    A closure inside _run_simulate is not."""
+
+    def test_strategy_factory_pickles(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "simulate"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        helper = TestRunSimulateRealSignatures()
+        with helper._injected(tmp_path) as (_, orch_cls, __):
+            mod.Trainer()._run_simulate()
+            factory = orch_cls.call_args.kwargs["strategy_factory"]
+
+        pickle.dumps(factory)  # must not raise
