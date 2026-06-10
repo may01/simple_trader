@@ -1,2 +1,4 @@
-import sys
-print(f"[stub] {__file__} args={sys.argv[1:]}")
+from frontend.live_dashboard import LiveDashboard
+
+ld = LiveDashboard()
+ld.run()
