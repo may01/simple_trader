@@ -225,6 +225,94 @@ def _build_wide_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+from stocks_holder import stock_holder  # noqa: E402 — after class definitions to avoid circular import
+from indicators import Indicators  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# LiveData — per-tick candle fetch + indicator compute
+# ---------------------------------------------------------------------------
+
+class LiveData:
+    """Fetches live candles for all timeframes and computes indicators.
+
+    Usage:
+        data.item.build_candles()          # call each tick
+        dp = data.item.get_data_point()    # access current OHLC + indicators
+    """
+
+    def __init__(self, nn_predictor=None) -> None:
+        import os
+        pair = os.environ.get("PAIR", "")
+        # Derive coin from PAIR, e.g. "link_usdt" → "link"
+        self.coin = pair.split("_")[0] if "_" in pair else pair
+        self.candles = CANDLES
+        self.nn_predictor = nn_predictor
+        self.ohlc: dict[int, pd.DataFrame] = {}
+
+    def build_candles(self, time_point: int = 0) -> None:
+        """Fetch candles, rename to {tf}_* columns, compute indicators."""
+        raw: dict[int, pd.DataFrame] = stock_holder.item.get_candles_history(
+            self.candles, self.coin, time_point
+        )
+
+        # First loop: rename columns, compute indicators, store enriched dfs.
+        # Track (point, tf) pairs so nn_predictor can be called after ALL
+        # Indicators.compute calls complete.
+        points: dict[int, LiveDataPoint] = {}
+
+        for tf, df in raw.items():
+            # Rename OHLCV columns to {tf}_{col} convention
+            rename_cols = [
+                "open", "high", "low", "close", "volume", "taker_base_vol",
+                "open_time", "close_time", "qav", "num_trades",
+                "taker_quote_vol", "ignore",
+            ]
+            rename_map = {col: f"{tf}_{col}" for col in rename_cols if col in df.columns}
+            renamed_df = df.rename(columns=rename_map)
+
+            # All historical candles are closed
+            renamed_df[f"{tf}_is_closed"] = True
+
+            # buy_volume is expected by volume indicator fields (VolBuyMAField etc.)
+            # Source column is taker_base_vol (renamed to {tf}_taker_base_vol above)
+            taker_col = f"{tf}_taker_base_vol"
+            if taker_col in renamed_df.columns:
+                renamed_df[f"{tf}_buy_volume"] = renamed_df[taker_col]
+
+            # Wrap in LiveDataPoint so Indicators.compute can call get_df(tf)
+            point = LiveDataPoint({tf: renamed_df})
+
+            # Compute indicators — mutates renamed_df in place via point.get_df(tf)
+            Indicators.compute(point, tf)
+
+            # Store the enriched (mutated) DataFrame
+            self.ohlc[tf] = renamed_df
+
+            # Track point for nn_predictor pass below
+            points[tf] = point
+
+        # Second pass: call nn_predictor AFTER all Indicators.compute calls complete.
+        if self.nn_predictor is not None:
+            for tf, point in points.items():
+                self.nn_predictor.compute(point, tf)
+
+    def get_data_point(self) -> "LiveDataPoint":
+        """Return LiveDataPoint wrapping the current self.ohlc."""
+        return LiveDataPoint(self.ohlc)
+
+    def get_depth_data(self, quantity: int):
+        """Fetch order book depth from the exchange."""
+        return stock_holder.item.depth(quantity)
+
+
+# ---------------------------------------------------------------------------
+# Module-level singleton — used by Robot
+# ---------------------------------------------------------------------------
+
+item: LiveData = LiveData()
+
+
 def get_stock_data(pair: str) -> pd.DataFrame:
     """Load graber_data.pkl for *pair* and build a wide DataFrame.
 
