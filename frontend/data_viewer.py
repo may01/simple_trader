@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Optional, Any
+
 import pandas as pd
+import plotly.graph_objects as go
 
 import constants
 from frontend.chart_renderer import ChartRenderer
@@ -105,7 +108,7 @@ class DataViewer:
 
     def _draw_indicators(
         self,
-        fig: object,
+        fig: go.Figure,
         df_slice: pd.DataFrame,
         indicators: list[str],
     ) -> None:
@@ -124,7 +127,7 @@ class DataViewer:
         self,
         df_slice: pd.DataFrame,
         indicators: list[str],
-    ) -> object:
+    ) -> go.Figure:
         """Create and populate a figure (candles + indicators). Does not show/save."""
         subplots = self._subplot_list(indicators)
         fig = self.renderer.create_figure(subplots)
@@ -176,7 +179,7 @@ class DataViewer:
         self,
         start_idx: int = 0,
         end_idx: int | None = None,
-        levels=None,
+        levels: Optional[Any] = None,
         indicators: list[str] | None = None,
     ) -> None:
         """Render OHLCV + indicators + price-level overlays.
