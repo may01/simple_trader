@@ -233,7 +233,7 @@ fields:
   - name: vol_sell_ma
     group: volume
     applies_to: all
-    depends_on: []
+    depends_on: [vol_ma, vol_buy_ma]
     library: talib
     params: {}
 
@@ -317,28 +317,28 @@ fields:
   - name: move_class
     group: classification
     applies_to: [15, 60, 240, 1440]
-    depends_on: []
+    depends_on: [rsi_ma8]
     library: talib
     params: {}
 
   - name: zone_class
     group: classification
     applies_to: [15, 60, 240, 1440]
-    depends_on: []
+    depends_on: [rsi_ma8]
     library: talib
     params: {}
 
   - name: over_low
     group: classification
     applies_to: [15, 60, 240, 1440]
-    depends_on: []
+    depends_on: [rsi_ma8]
     library: talib
     params: {}
 
   - name: over_high
     group: classification
     applies_to: [15, 60, 240, 1440]
-    depends_on: []
+    depends_on: [rsi_ma8]
     library: talib
     params: {}
 
@@ -389,14 +389,14 @@ fields:
   - name: trend_up
     group: trend_flags
     applies_to: all
-    depends_on: []
+    depends_on: [ema_50]
     library: talib
     params: {}
 
   - name: trend_down
     group: trend_flags
     applies_to: all
-    depends_on: []
+    depends_on: [ema_50]
     library: talib
     params: {}
 

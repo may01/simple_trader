@@ -301,9 +301,44 @@ class DataPreparer:
             groups: Indicator groups to compute.
             tfs:    Timeframes to compute indicators for.
         """
-        from data import WideDataPoint  # lazy import
-        from indicators import Indicators  # lazy import
-        for ts in df.index:
-            data_point = WideDataPoint(df, ts)
-            for tf in tfs:
+        from indicators import Indicators, build_indicator_input  # lazy import
+
+        class _SliceDataPoint:
+            """Holds ONE indicator-input slice so successive fields share it.
+
+            WideDataPoint.get_df builds a fresh slice per call, so writes from
+            earlier fields would be lost to later (dependent) fields and never
+            reach the wide df. This wrapper pins the slice for the (ts, tf)
+            computation; the slice's last row is then copied back.
+            """
+
+            def __init__(self, slice_df: pd.DataFrame, ts: pd.Timestamp) -> None:
+                self._df = slice_df
+                self._ts = ts
+
+            def get_df(self, tf: int) -> pd.DataFrame:
+                return self._df
+
+            @property
+            def timestamp(self) -> pd.Timestamp:
+                return self._ts
+
+        for tf in tfs:
+            fields = Indicators._sorted_fields(tf, groups=groups)
+            if not fields:
+                continue
+            out_cols = [f"{tf}_{field.name}" for field in fields]
+
+            # Collect per-row results in plain lists; bulk-assign once per tf
+            # (per-cell .loc writes on a 20k×100+ frame are prohibitively slow).
+            results: dict[str, list[float]] = {col: [] for col in out_cols}
+            for ts in df.index:
+                slice_df = build_indicator_input(df, ts, tf)
+                data_point = _SliceDataPoint(slice_df, ts)
                 Indicators.compute_group(data_point, tf, groups=groups)
+                last = slice_df.iloc[-1]
+                for col in out_cols:
+                    results[col].append(last[col] if col in slice_df.columns else float("nan"))
+
+            for col in out_cols:
+                df[col] = results[col]

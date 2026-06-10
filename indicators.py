@@ -22,6 +22,11 @@ from logs import log_warning
 # Module-level set to track which missing resource deps have already been warned about.
 _warned_resources: set[str] = set()
 
+# Cache of closed-row integer positions per (id(df), tf) for build_indicator_input.
+# Invalidated by frame length change; id() collisions after gc are guarded by the
+# length check and the fact that {tf}_is_closed never changes for a given frame.
+_closed_pos_cache: dict[tuple[int, int], tuple[int, np.ndarray]] = {}
+
 
 # ---------------------------------------------------------------------------
 # IndicatorField — abstract base class
@@ -130,15 +135,31 @@ def build_indicator_input(df: pd.DataFrame, ts: pd.Timestamp, tf: int) -> pd.Dat
     """
     closed_col = f"{tf}_is_closed"
 
-    subset = df[:ts]
+    # Positional fast path: label-slicing the prefix (df[:ts]) and boolean-
+    # filtering it copies O(prefix) data per call, which makes the offline
+    # per-row indicator pass O(n²). Cache the closed-row positions per
+    # (frame, tf) and select just the needed window with iloc instead.
+    i = df.index.get_loc(ts)
+    key = (id(df), tf)
+    cached = _closed_pos_cache.get(key)
+    if cached is None or cached[0] != len(df):
+        pos = np.flatnonzero(df[closed_col].to_numpy(dtype=bool))
+        _closed_pos_cache[key] = (len(df), pos)
+    else:
+        pos = cached[1]
 
-    closed = subset[subset[closed_col].astype(bool)]
+    k = np.searchsorted(pos, i, side="right")
+    closed_pos = pos[:k]
 
-    # If the current row is NOT closed, append it as a partial candle.
-    if not subset.empty and not subset.iloc[-1][closed_col]:
-        closed = pd.concat([closed, subset.iloc[[-1]]])
+    if len(closed_pos) > 0 and closed_pos[-1] == i:
+        # Current row is a closed candle — window is the last 105 closed rows.
+        sel = closed_pos[-105:]
+    else:
+        # Append the current row as a partial candle (104 closed + partial,
+        # matching the previous tail(105)-after-append behavior).
+        sel = np.append(closed_pos[-104:], i)
 
-    return closed.tail(105)
+    return df.iloc[sel]
 
 
 # ---------------------------------------------------------------------------
