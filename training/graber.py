@@ -32,7 +32,7 @@ class Graber:
     # ------------------------------------------------------------------
 
     def ensure_data(self, symbol: str, start_ms: int, end_ms: int) -> None:
-        """Ensure graber_data.pkl covers [start_ms, end_ms].
+        """Ensure graber_data.pkl covers the range [start_ms, end_ms) — data is current if last candle open_time + 60000ms >= end_ms.
 
         - If file is present and already covers the range: no-op.
         - If file is missing: fetch full range, save.
@@ -54,7 +54,7 @@ class Graber:
                 return
 
             # Fetch only the missing tail.
-            fetch_start = existing_end_ms
+            fetch_start = existing_end_ms + 60_000
             new_data = self.stock.get_candles_range(symbol, fetch_start, end_ms)
             if new_data is None or new_data.empty:
                 raise ValueError(

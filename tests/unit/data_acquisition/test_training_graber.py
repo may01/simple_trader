@@ -107,16 +107,42 @@ def test_ensure_data_fetches_missing_range_only(tmp_path):
     graber = Graber(stock, path)
     graber.ensure_data("LINKUSDT", start_ms, end_ms)
 
-    # Should have fetched only from existing end onwards
+    # Should have fetched from one minute past the existing end (skip already-saved candle)
     call_args = stock.get_candles_range.call_args
     assert call_args is not None
     fetched_start = call_args[0][1]
     existing_end_ms = int(existing_df.index[-1].timestamp() * 1000)
-    assert fetched_start == existing_end_ms
+    assert fetched_start == existing_end_ms + 60_000
 
     # Merged file should contain more rows than original
     loaded = pd.read_pickle(path)
     assert len(loaded) > len(existing_df)
+
+
+# ---------------------------------------------------------------------------
+# ensure_data — fetch_start skips already-saved candle (T + 60_000)
+# ---------------------------------------------------------------------------
+
+def test_ensure_data_fetch_start_skips_last_candle(tmp_path):
+    """ensure_data calls get_candles_range with start_ms = existing_end_ms + 60_000."""
+    existing_df = _make_df(5, "2024-01-01")
+    path = str(tmp_path / "graber_data.pkl")
+    existing_df.to_pickle(path)
+
+    tail_df = _make_df(5, "2024-01-01 00:05")
+    stock = _make_mock_stock(tail_df)
+
+    start_ms = _ts_ms("2024-01-01")
+    end_ms = _ts_ms("2024-01-01 00:09")
+
+    graber = Graber(stock, path)
+    graber.ensure_data("LINKUSDT", start_ms, end_ms)
+
+    existing_end_ms = int(existing_df.index[-1].timestamp() * 1000)
+    call_args = stock.get_candles_range.call_args
+    assert call_args is not None
+    fetched_start = call_args[0][1]
+    assert fetched_start == existing_end_ms + 60_000
 
 
 # ---------------------------------------------------------------------------
