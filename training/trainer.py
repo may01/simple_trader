@@ -25,7 +25,7 @@ class Trainer:
     """Top-level pipeline orchestrator.
 
     Args:
-        config_path: Path to the config directory.  Defaults to ``"config/"``.
+        config_path: Path to the config directory.  Defaults to ``"configs/"``.
                      Override in tests to avoid touching real config files.
 
     Attributes:
@@ -35,7 +35,7 @@ class Trainer:
         metadata:    Dict accumulated across pipeline stages for logging.
     """
 
-    def __init__(self, config_path: str = "config/") -> None:
+    def __init__(self, config_path: str = "configs/") -> None:
         self.config_path = config_path
         self.run_type: str = os.environ["RUN_TYPE"]
         self.metadata: dict = {}
@@ -117,8 +117,10 @@ class Trainer:
         )
         from training.data_preparer import DataPreparer  # lazy
 
+        # DataPreparer wants the path to indicators_config.yaml (a file),
+        # not the config directory.
         preparer = DataPreparer(
-            self.config_path,
+            self.config_path + "indicators_config.yaml",
             wide_df_path(),
             data_attributes_path(),
             nn_output_path=_nn_output_path(),
@@ -172,66 +174,53 @@ class Trainer:
         self.metadata["simulate"] = metrics
 
     def _run_train_nn(self) -> None:
-        """Train the neural network using NNOrchestrator.
-
-        NNOrchestrator is imported lazily so a missing module does not break
-        other run types.
-        """
-        try:
-            from training.nn_orchestrator import NNOrchestrator  # noqa: F401 lazy
-        except ModuleNotFoundError:
-            raise RuntimeError(
-                "NNOrchestrator is not yet implemented (Phase 11). "
-                "Cannot run run_type='train_nn'."
-            )
-
+        """Train the neural network using NNOrchestrator (nn/, Phase 11)."""
         import pandas as pd  # lazy
-        from config_loader import CANDLES as tfs  # lazy
+        from config_loader import CANDLES as tfs, load_nn_config  # lazy
         from helpers import data_attributes_path, shared_folder, wide_df_path  # lazy
         from indicators import DataAttributes  # lazy
-        from training.nn_orchestrator import NNOrchestrator  # now safe to import
+        from nn.nn_orchestrator import NNOrchestrator  # lazy
 
         df = pd.read_pickle(wide_df_path())
         data_attributes = DataAttributes.load(data_attributes_path())
 
-        orch = NNOrchestrator(self.config_path)
+        nn_cfg = load_nn_config(self.config_path + "indicators_config.yaml")
+        orch = NNOrchestrator(
+            checkpoint_dir=nn_cfg["checkpoint_dir"],
+            feature_cols=nn_cfg["feature_cols"],
+        )
 
         shared = shared_folder()
         os.makedirs(shared, exist_ok=True)
         state_path = shared + "training_state.pkl"
 
-        def epoch_callback(epoch: int, metrics: dict) -> None:
+        # Orchestrator contract: epoch_callback(tf_str, epoch, metrics)
+        def epoch_callback(tf_str: str, epoch: int, metrics: dict) -> None:
             with open(state_path, "wb") as f:
-                pickle.dump({"phase": "nn_train", "epoch": epoch, **metrics}, f)
+                pickle.dump(
+                    {"phase": "nn_train", "tf": tf_str, "epoch": epoch, **metrics}, f
+                )
 
         train_metrics = orch.train(df, data_attributes, tfs, epoch_callback=epoch_callback)
 
         self.metadata["train_nn"] = train_metrics or {}
 
     def _run_simulate_nn(self) -> None:
-        """Run NN inference and save the result to nn_output_path atomically.
-
-        NNOrchestrator is imported lazily so a missing module does not break
-        other run types.
-        """
-        try:
-            from training.nn_orchestrator import NNOrchestrator  # noqa: F401 lazy
-        except ModuleNotFoundError:
-            raise RuntimeError(
-                "NNOrchestrator is not yet implemented (Phase 11). "
-                "Cannot run run_type='simulate_nn'."
-            )
-
+        """Run NN inference and save the result to nn_output_path atomically."""
         import pandas as pd  # lazy
-        from config_loader import CANDLES as tfs  # lazy
+        from config_loader import CANDLES as tfs, load_nn_config  # lazy
         from helpers import data_attributes_path, wide_df_path  # lazy
         from indicators import DataAttributes  # lazy
-        from training.nn_orchestrator import NNOrchestrator  # now safe to import
+        from nn.nn_orchestrator import NNOrchestrator  # lazy
 
         df = pd.read_pickle(wide_df_path())
         data_attributes = DataAttributes.load(data_attributes_path())
 
-        orch = NNOrchestrator(self.config_path)
+        nn_cfg = load_nn_config(self.config_path + "indicators_config.yaml")
+        orch = NNOrchestrator(
+            checkpoint_dir=nn_cfg["checkpoint_dir"],
+            feature_cols=nn_cfg["feature_cols"],
+        )
         nn_df = orch.run_inference(df, data_attributes, tfs)
 
         out_path = _nn_output_path()

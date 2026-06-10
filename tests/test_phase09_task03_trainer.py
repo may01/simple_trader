@@ -53,11 +53,11 @@ class TestTrainerConstruction:
         assert t.run_type == "grab_data"
 
     def test_default_config_path(self, monkeypatch):
-        """config_path defaults to 'config/'."""
+        """config_path defaults to 'configs/' — the repo's config directory."""
         _set_env(monkeypatch)
         from training.trainer import Trainer
         t = Trainer()
-        assert t.config_path == "config/"
+        assert t.config_path == "configs/"
 
     def test_custom_config_path(self, monkeypatch):
         """config_path can be overridden."""
@@ -361,7 +361,7 @@ class TestRunPrepareData:
             t._run_prepare_data()
 
         mock_dp_cls.assert_called_once_with(
-            "/cfg/",
+            "/cfg/indicators_config.yaml",
             "/data/wide.pkl",
             "/data/attrs.pkl",
             nn_output_path="/data/nn/df_with_nn.pkl",
@@ -491,9 +491,9 @@ class TestRunSimulateNN:
         mock_config_module = MagicMock()
         mock_config_module.CANDLES = [1, 5, 15, 60]
 
-        _nn_keys = ["training.nn_orchestrator", "indicators", "config_loader"]
+        _nn_keys = ["nn.nn_orchestrator", "indicators", "config_loader"]
         _nn_saved = {k: sys.modules.get(k) for k in _nn_keys}
-        sys.modules["training.nn_orchestrator"] = mock_nn_module
+        sys.modules["nn.nn_orchestrator"] = mock_nn_module
         sys.modules["indicators"] = mock_indicators_module
         sys.modules["config_loader"] = mock_config_module
 
@@ -585,3 +585,96 @@ class TestRunSimulateRealSignatures:
 
         strategy_manager_cls.assert_called_once_with(0.002)
         assert orch_cls.call_args.kwargs["fee"] == 0.002
+
+
+class TestRunTrainNNRealWiring:
+    """_run_train_nn/_run_simulate_nn must import NNOrchestrator from
+    nn.nn_orchestrator (it exists — phase 11 is implemented) and construct it
+    as NNOrchestrator(checkpoint_dir, feature_cols) from the nn section of
+    configs/indicators_config.yaml. The epoch callback must accept
+    (tf_str, epoch, metrics) — the orchestrator's contract."""
+
+    @contextmanager
+    def _injected(self, tmp_path):
+        import sys
+
+        import pandas as real_pd
+
+        mock_orch_instance = MagicMock()
+        mock_orch_instance.train.return_value = {"15": {"loss": 0.1}}
+        # real DataFrame so the atomic to_pickle + os.rename path works
+        mock_orch_instance.run_inference.return_value = real_pd.DataFrame({"x": [1]})
+        mock_orch_cls = MagicMock(return_value=mock_orch_instance)
+
+        mock_indicators_mod = MagicMock()
+        mock_indicators_mod.DataAttributes.load.return_value = MagicMock()
+
+        mods = {
+            "nn.nn_orchestrator": MagicMock(NNOrchestrator=mock_orch_cls),
+            "indicators": mock_indicators_mod,
+        }
+        saved = {k: sys.modules.get(k) for k in mods}
+        sys.modules.update(mods)
+        try:
+            with patch("helpers.wide_df_path", return_value="/data/wide.pkl"), \
+                 patch("helpers.data_attributes_path", return_value="/data/attrs.pkl"), \
+                 patch("helpers.shared_folder", return_value=str(tmp_path) + "/"), \
+                 patch("helpers.nn_folder", return_value=str(tmp_path) + "/"), \
+                 patch("pandas.read_pickle", return_value=MagicMock()):
+                yield (mock_orch_cls, mock_orch_instance)
+        finally:
+            for key, original in saved.items():
+                if original is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = original
+
+    def test_train_nn_constructs_orchestrator_from_nn_config(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "train_nn"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as (orch_cls, _):
+            mod.Trainer(config_path="configs/")._run_train_nn()
+
+        from config_loader import load_nn_config
+        nn_cfg = load_nn_config("configs/indicators_config.yaml")
+        orch_cls.assert_called_once_with(
+            checkpoint_dir=nn_cfg["checkpoint_dir"],
+            feature_cols=nn_cfg["feature_cols"],
+        )
+
+    def test_train_nn_epoch_callback_accepts_tf_str(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "train_nn"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as (_, orch_instance):
+            mod.Trainer(config_path="configs/")._run_train_nn()
+            cb = orch_instance.train.call_args.kwargs["epoch_callback"]
+            cb("15", 3, {"loss": 0.5})  # orchestrator contract: (tf_str, epoch, metrics)
+
+        state_path = str(tmp_path) + "/training_state.pkl"
+        assert os.path.exists(state_path)
+        with open(state_path, "rb") as f:
+            state = pickle.load(f)
+        assert state["epoch"] == 3
+        assert state["tf"] == "15"
+
+    def test_simulate_nn_constructs_orchestrator_from_nn_config(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "simulate_nn"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as (orch_cls, _):
+            mod.Trainer(config_path="configs/")._run_simulate_nn()
+
+        from config_loader import load_nn_config
+        nn_cfg = load_nn_config("configs/indicators_config.yaml")
+        orch_cls.assert_called_once_with(
+            checkpoint_dir=nn_cfg["checkpoint_dir"],
+            feature_cols=nn_cfg["feature_cols"],
+        )
