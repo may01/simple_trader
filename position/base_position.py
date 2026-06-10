@@ -96,11 +96,21 @@ class BasePosition(ABC):
 
     @abstractmethod
     def direction_profit(self, val: float) -> float:
-        """Transform a price delta into a signed profit direction."""
+        """Transform a price delta into a signed profit direction.
+
+        Called by subclasses for direction-aware comparisons. The base class uses
+        explicit position_type branches in finalize and check_stop_open for clarity;
+        subclasses use these helpers in their direction-specific logic.
+        """
 
     @abstractmethod
     def direction_loss(self, val: float) -> float:
-        """Transform a price delta into a signed loss direction."""
+        """Transform a price delta into a signed loss direction.
+
+        Called by subclasses for direction-aware comparisons. The base class uses
+        explicit position_type branches in finalize and check_stop_open for clarity;
+        subclasses use these helpers in their direction-specific logic.
+        """
 
     @abstractmethod
     def first_in_profit(self, a: float, b: float) -> bool:
@@ -198,6 +208,8 @@ class BasePosition(ABC):
 
         WAIT_SAFETY_* states follow the same WAIT_SELL / WAIT_BUY logic.
 
+        Note: Caller must ensure price > 0 when state is WAIT_BUY to avoid ZeroDivisionError.
+
         Args:
             price: Current market price for USD/coin conversion.
 
@@ -223,6 +235,10 @@ class BasePosition(ABC):
         If all targets are exhausted (close_idx >= len(price_close)), transitions state
         to POSITION_STATE_WAIT_SAFETY_SELL (long) or POSITION_STATE_WAIT_SAFETY_BUY
         (short) and returns the last target to signal a forced close.
+
+        Note: Callers must increment `close_idx` after each successful fill. This method
+        only reads the current target. The intentional design is that `record_exit_fill`
+        (in subclasses) increments `close_idx`, not `get_target`.
 
         Returns:
             Next exit price target.

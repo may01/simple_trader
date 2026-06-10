@@ -340,6 +340,12 @@ class TestCheckStopOpen:
         pos.price_open = [100.0]
         assert pos.check_stop_open(110.0) is False
 
+    def test_empty_price_open_returns_false(self):
+        """check_stop_open with empty price_open list returns False (no order to cancel)."""
+        pos = ConcreteLong(fee=0.001)
+        assert pos.price_open == []
+        assert pos.check_stop_open(50.0) is False
+
 
 # ---------------------------------------------------------------------------
 # close_by_time
@@ -607,6 +613,14 @@ class TestFinalize:
         result = pos.finalize()
         assert isinstance(result, tuple)
         assert len(result) == 2
+
+    def test_finalize_no_fills_does_not_crash(self):
+        """finalize() with no fills (executed_open=[], executed_close=[]) does not crash and returns revenue 0.0."""
+        pos = ConcreteLong(fee=0.001)
+        # No fills recorded — avg_price_open and avg_price_close both return 0.0
+        revenue_pct, revenue_abs = pos.finalize()
+        assert revenue_pct == 0.0
+        assert revenue_abs == 0.0
 
 
 # ---------------------------------------------------------------------------
