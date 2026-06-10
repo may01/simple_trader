@@ -374,3 +374,20 @@ def test_start_handles_keyboard_interrupt(tmp_path):
         collector.start()
 
     assert collector.running is False
+
+
+# ---------------------------------------------------------------------------
+# 9. _poll() — no-op when get_candles_history returns empty dict (key 1 missing)
+# ---------------------------------------------------------------------------
+
+def test_poll_handles_missing_key_1_in_result(tmp_path):
+    """_poll() should be a no-op when get_candles_history doesn't return key 1."""
+    path = str(tmp_path / "graber_data.pkl")
+
+    stock = MagicMock()
+    stock.get_candles_history.return_value = {}
+
+    collector = LiveDataCollector(stock=stock, output_path=path, coin="link")
+    collector._poll()  # must not raise
+
+    assert not os.path.exists(path)

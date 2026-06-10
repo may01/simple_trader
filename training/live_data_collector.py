@@ -109,6 +109,8 @@ class LiveDataCollector:
 
         # Step 3: fetch from exchange
         result = self.stock.get_candles_history([1], self.coin)
+        if 1 not in result:
+            return  # no data available yet — skip this poll cycle
         raw_df: pd.DataFrame = result[1]
 
         # Step 4: rename columns
