@@ -8,6 +8,7 @@ import json
 import os
 import pickle
 import pytest
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch, call, mock_open
 
 
@@ -514,3 +515,73 @@ class TestRunSimulateNN:
         # Result should be saved as a pkl file
         out_path = str(tmp_path) + "/df_with_nn.pkl"
         assert os.path.exists(out_path)
+
+
+class TestRunSimulateRealSignatures:
+    """_run_simulate must construct collaborators with their REAL signatures:
+    SimulationData(pair, begin_ts, end_ts, step_min) — seconds, loads its own
+    pickle; StrategyManager(fee) from strategies.strategy_manager."""
+
+    @contextmanager
+    def _injected(self, tmp_path):
+        import sys
+
+        mock_sim_data_cls = MagicMock(return_value=MagicMock())
+        mock_orch_instance = MagicMock()
+        mock_orch_instance.run.return_value = []
+        mock_orch_cls = MagicMock(return_value=mock_orch_instance)
+        mock_analyzer_cls = MagicMock(
+            return_value=MagicMock(analyze=MagicMock(return_value={"total_trades": 0}))
+        )
+        mock_strategy_manager_cls = MagicMock(return_value=MagicMock())
+
+        mods = {
+            "data": MagicMock(SimulationData=mock_sim_data_cls),
+            "backtesting.simulation_orchestrator": MagicMock(
+                SimulationOrchestrator=mock_orch_cls
+            ),
+            "backtesting.performance_analyzer": MagicMock(
+                PerformanceAnalyzer=mock_analyzer_cls
+            ),
+            "strategies.strategy_manager": MagicMock(
+                StrategyManager=mock_strategy_manager_cls
+            ),
+        }
+        saved = {k: sys.modules.get(k) for k in mods}
+        sys.modules.update(mods)
+        try:
+            with patch("helpers.shared_folder", return_value=str(tmp_path) + "/"):
+                yield (mock_sim_data_cls, mock_orch_cls, mock_strategy_manager_cls)
+        finally:
+            for key, original in saved.items():
+                if original is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = original
+
+    def test_simulation_data_gets_pair_and_window_seconds(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "simulate"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as (sim_data_cls, _, __):
+            mod.Trainer()._run_simulate()
+
+        # env DATA_START/DATA_END are epoch ms; SimulationData wants seconds
+        sim_data_cls.assert_called_once_with("link_usdt", 1700000000, 1700100000, 1)
+
+    def test_strategy_factory_builds_strategy_manager_with_fee(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "simulate", "EXCHANGE_FEE": "0.002"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as (_, orch_cls, strategy_manager_cls):
+            mod.Trainer()._run_simulate()
+
+            factory = orch_cls.call_args.kwargs["strategy_factory"]
+            factory()
+
+        strategy_manager_cls.assert_called_once_with(0.002)
+        assert orch_cls.call_args.kwargs["fee"] == 0.002

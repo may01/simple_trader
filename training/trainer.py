@@ -130,23 +130,29 @@ class Trainer:
     def _run_simulate(self) -> None:
         """Run the backtesting simulation and analyze results.
 
-        Loads SimulationData from wide_df_path(), runs SimulationOrchestrator,
-        analyzes performance, and writes training_state.pkl to shared_folder().
+        SimulationData loads df_with_indicators.pkl itself (by pair); the
+        simulation window comes from DATA_START/DATA_END (epoch ms in env,
+        seconds for SimulationData). Writes training_state.pkl to
+        shared_folder().
         """
-        import pandas as pd  # lazy
         from backtesting.performance_analyzer import PerformanceAnalyzer  # lazy
         from backtesting.simulation_orchestrator import SimulationOrchestrator  # lazy
         from data import SimulationData  # lazy
-        from helpers import shared_folder, wide_df_path  # lazy
+        from helpers import shared_folder  # lazy
 
-        df = pd.read_pickle(wide_df_path())
-        simulation_data = SimulationData(df)
+        pair = os.environ["PAIR"]
+        begin_ts = int(os.environ["DATA_START"]) // 1000
+        end_ts = int(os.environ["DATA_END"]) // 1000
+        step_min = int(os.environ.get("STEP_MIN", "1"))
+
+        simulation_data = SimulationData(pair, begin_ts, end_ts, step_min)
+
+        fee = float(os.environ.get("FEE", os.environ.get("EXCHANGE_FEE", "0.001")))
 
         def _default_strategy_factory():
-            from strategy_manager import StrategyManager  # lazy
-            return StrategyManager()
+            from strategies.strategy_manager import StrategyManager  # lazy
+            return StrategyManager(fee)
 
-        fee = float(os.environ.get("FEE", "0.001"))
         orch = SimulationOrchestrator(
             strategy_factory=_default_strategy_factory,
             fee=fee,
