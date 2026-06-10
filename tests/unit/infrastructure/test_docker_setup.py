@@ -1,4 +1,4 @@
-import subprocess, os, yaml
+import os, yaml
 
 # Resolve project root relative to this test file
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))

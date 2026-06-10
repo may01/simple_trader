@@ -14,6 +14,7 @@ services:
 
   ohlc_gen:
     image: simple_trader
+    build: .
     command: python3 trainer.py generate_full_ohlc
     env_file: ${TRAIN_ENV:-configs/train_dataset.env}
     volumes:
@@ -23,6 +24,7 @@ services:
 
   simulate:
     image: simple_trader
+    build: .
     command: python3 trainer.py simulate
     env_file: ${TRAIN_ENV:-configs/train_dataset.env}
     volumes:
@@ -32,6 +34,7 @@ services:
 
   prepare-nn-data:
     image: simple_trader
+    build: .
     command: python3 trainer.py group_nn
     env_file: ${NN_TRAIN_ENV:-configs/nn_train_dataset.env}
     volumes:
@@ -41,6 +44,7 @@ services:
 
   nn-train:
     image: simple_trader
+    build: .
     command: python3 trainer.py nn_train
     env_file: ${NN_TRAIN_ENV:-configs/nn_train_dataset.env}
     volumes:
@@ -61,6 +65,7 @@ services:
 
   simulate-nn:
     image: simple_trader
+    build: .
     command: python3 trainer.py simulate_nn
     env_file: ${TRAIN_ENV:-configs/train_dataset.env}
     volumes:
@@ -70,6 +75,7 @@ services:
 
   live:
     image: simple_trader
+    build: .
     command: python3 trader.py
     env_file: ${LIVE_ENV:-configs/live.env}
     ports:
@@ -84,6 +90,7 @@ services:
 
   view-sim:
     image: simple_trader
+    build: .
     command: python3 view_online_point.py none
     env_file: ${LIVE_ENV:-configs/live.env}
     ports:
@@ -99,6 +106,7 @@ services:
 
   view-full:
     image: simple_trader
+    build: .
     command: python3 view_full.py none
     env_file: ${LONG_ENV:-configs/long_dataset.env}
     ports:
@@ -110,6 +118,7 @@ services:
 
   view-live:
     image: simple_trader
+    build: .
     command: python3 view_onlineB.py none
     env_file: ${LIVE_ENV:-configs/live.env}
     ports:
