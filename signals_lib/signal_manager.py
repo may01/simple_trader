@@ -132,3 +132,53 @@ class SignalChain:
         self.cur_pos = 0
         self.timer = 0
         self._completion_logged = False
+
+
+class SignalManager:
+    """Container for multiple :class:`SignalChain` objects.
+
+    On every call to :meth:`check`, ALL registered chains are evaluated.
+    Any chain that completes has its action collected and is immediately
+    reset so it can begin accumulating signals again on the next tick.
+
+    Attributes:
+        chains: All registered :class:`SignalChain` instances.
+    """
+
+    def __init__(self) -> None:
+        self.chains: list[SignalChain] = []
+
+    def add_chain(self, chain: SignalChain) -> None:
+        """Append *chain* to :attr:`chains`.
+
+        Args:
+            chain: A :class:`SignalChain` instance to register.
+        """
+        self.chains.append(chain)
+
+    def check(self, data_point, levels: dict, cur_time: float, action) -> list:
+        """Evaluate all registered chains for the current tick.
+
+        Every chain is checked regardless of its current position.  Chains
+        that complete during this tick have their action appended to the
+        results list and are immediately reset so they can fire again on
+        subsequent ticks.
+
+        Args:
+            data_point: Current market data point.
+            levels: Dictionary of price levels passed through to each chain.
+            cur_time: Unix timestamp of the current tick.
+            action: Action accumulator; may be ``None``.
+
+        Returns:
+            A (possibly empty) list of completed-action tuples, each of the
+            form ``[result_action, tf, price, data_dict]``.
+        """
+        actions = []
+        current_price: float = data_point.get("close", 1, 0)
+        for chain in self.chains:
+            chain.check(data_point, levels, cur_time, action)
+            if chain.completed(data_point, action):
+                actions.append(chain.get_action(current_price, action))
+                chain.reset(action)
+        return actions
