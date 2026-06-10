@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from nn.nn_model import NNModel
@@ -44,19 +45,29 @@ class CheckpointManager:
         tmp_path = epoch_path + ".tmp"
 
         # Atomically save to .tmp then rename
-        model.save_model(tmp_path)
-        os.rename(tmp_path, epoch_path)
+        try:
+            model.save_model(tmp_path)
+            os.rename(tmp_path, epoch_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
         # Check if this is the best model so far
-        val_accuracy = metrics.get("val_accuracy", -float("inf"))
+        val_accuracy = metrics["val_accuracy"]
         if val_accuracy > self.best_metric:
             self.best_metric = val_accuracy
 
             # Save best model atomically
             best_path = os.path.join(self.checkpoint_dir, f"{self.model_name}_best.pt")
             best_tmp_path = best_path + ".tmp"
-            model.save_model(best_tmp_path)
-            os.rename(best_tmp_path, best_path)
+            try:
+                model.save_model(best_tmp_path)
+                os.rename(best_tmp_path, best_path)
+            except Exception:
+                if os.path.exists(best_tmp_path):
+                    os.remove(best_tmp_path)
+                raise
 
         return epoch_path
 
@@ -116,9 +127,11 @@ class CheckpointManager:
                 # Extract epoch number from "{model_name}_epoch{epoch}.pt"
                 if "_epoch" in filename:
                     try:
-                        # Parse epoch number: "model_epoch5.pt" -> 5
-                        epoch_str = filename.split("_epoch")[1].replace(".pt", "")
-                        epoch = int(epoch_str)
+                        # Parse epoch number strictly: "{model_name}_epoch{N}.pt"
+                        m = re.match(r"^.+_epoch(\d+)\.pt$", filename)
+                        if m is None:
+                            continue
+                        epoch = int(m.group(1))
 
                         full_path = os.path.join(self.checkpoint_dir, filename)
                         size_bytes = os.path.getsize(full_path)
