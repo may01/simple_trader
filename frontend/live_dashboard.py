@@ -39,9 +39,19 @@ class LiveDashboard:
     # ------------------------------------------------------------------
 
     def run(self, state_path: str = "shared/live_state.pkl") -> None:
-        """Start the Dash app, polling *state_path* every 1 000 ms. Blocking."""
+        """Start the Dash app, polling *state_path* every 1 000 ms. Blocking.
+
+        Binds 0.0.0.0:$DASH_PORT (default 8080) — the compose port mapping
+        cannot reach the Dash default of 127.0.0.1:8050 inside the container.
+        """
+        import os
+
         self._state_path = state_path
-        self._app.run(debug=False)
+        self._app.run(
+            host="0.0.0.0",
+            port=int(os.environ.get("DASH_PORT", "8080")),
+            debug=False,
+        )
 
     def _update_charts(self, state: dict) -> list[go.Figure]:
         """Return a list of Plotly figures derived from *state*.
