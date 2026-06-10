@@ -239,7 +239,7 @@ class Strategy(ABC):
         """
         return [data_point.get("close", 1, 0)]
 
-    def get_close_prices(self, data_point, tf: int, action: int) -> list:
+    def get_close_prices(self, data_point, tf: int, action: str) -> list:
         """Return exit price targets.
 
         Default: +0.8% for OPEN_LONG, -0.8% for OPEN_SHORT (and NOTHING).
@@ -257,7 +257,7 @@ class Strategy(ABC):
             return [open_price * (1 - 0.008)]
         return [open_price * (1 + 0.008)]
 
-    def get_stop_loss_price(self, data_point, tf: int, action: int) -> float:
+    def get_stop_loss_price(self, data_point, tf: int, action: str) -> float:
         """Return stop-loss price.
 
         Default:
