@@ -468,14 +468,11 @@ class FullData:
         Raises:
             KeyError: If no closed candle with the given open_time is found.
         """
-        open_index_col = f"{tf}_open_index"
-        closed_col = f"{tf}_is_closed"
-        mask = (self._df[open_index_col] == open_time) & (self._df[closed_col] == True)  # noqa: E712
-        matching = self._df[mask]
-        if len(matching) == 0:
-            raise KeyError(
-                f"No closed candle for tf={tf} with open_time={open_time!r}"
-            )
+        closed = self._df[self._df[f"{tf}_is_closed"].astype(bool)]
+        tf_cols = [c for c in closed.columns if c.startswith(f"{tf}_")]
+        matching = closed[closed[f"{tf}_open_index"] == open_time][tf_cols]
+        if matching.empty:
+            raise KeyError(f"No closed candle for tf={tf} at open_time={open_time}")
         return matching.iloc[0]
 
 
