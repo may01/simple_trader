@@ -29,6 +29,7 @@ class SignalChain:
         self.signals: list[BaseSignal] = []
         self.cur_pos: int = 0
         self.timer: float = 0
+        self._completion_logged: bool = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -96,7 +97,8 @@ class SignalChain:
             ``True`` if ``cur_pos == len(signals)``, ``False`` otherwise.
         """
         if self.cur_pos == len(self.signals) and len(self.signals) > 0:
-            if action is not None and self.notify:
+            if action is not None and self.notify and not self._completion_logged:
+                self._completion_logged = True
                 marker = self.signals[-1].get_marker_pos(data_point)
                 action.add_multiply_action(marker, f"CPLTD: {self.name}")
             return True
@@ -115,6 +117,7 @@ class SignalChain:
         Returns:
             ``[result_action, tf, price, data_dict]``
         """
+        assert self.cur_pos == len(self.signals), "get_action() called before chain completed"
         data_dict: dict = {"position_time": self.tf}
         for signal in self.signals:
             data_dict.update(signal.get_data())
@@ -128,3 +131,4 @@ class SignalChain:
         """
         self.cur_pos = 0
         self.timer = 0
+        self._completion_logged = False

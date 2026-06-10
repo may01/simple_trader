@@ -293,6 +293,17 @@ class TestSignalChainGetAction:
         assert result[3]["key_alpha"] == "alpha"
         assert result[3]["key_beta"] == "beta"
 
+    def test_get_action_raises_when_chain_not_completed(self):
+        """get_action() must raise AssertionError if called before chain completes."""
+        from signals_lib.signal_manager import SignalChain
+        chain = SignalChain("c", STRATEGY_ACTION_OPEN_LONG, tf=15, notify=False)
+        chain.add(AlwaysFiresSignal("a"))
+        chain.add(NeverFiresSignal())
+        dp = make_dp(15, 50.0)
+        chain.check(dp, {}, 1000.0, None)  # pos -> 1, but not completed
+        with pytest.raises(AssertionError, match="get_action\\(\\) called before chain completed"):
+            chain.get_action(50.0, None)
+
 
 # ---------------------------------------------------------------------------
 # reset()
@@ -384,6 +395,23 @@ class TestSignalChainNotify:
         # Must not raise even though action=None and notify=True
         chain.check(dp, {}, 1000.0, None)
         chain.completed(dp, None)
+
+    def test_completed_called_twice_logs_only_once(self):
+        """completed() must emit the completion log at most once before reset()."""
+        from signals_lib.signal_manager import SignalChain
+        chain = SignalChain("c", STRATEGY_ACTION_OPEN_LONG, tf=15, notify=True)
+        chain.add(AlwaysFiresSignal("z"))
+        dp = make_dp(15, 50.0)
+        mock_action = MockAction()
+        chain.check(dp, {}, 1000.0, mock_action)
+        mock_action.calls.clear()
+
+        # Call completed() twice without reset() in between
+        chain.completed(dp, mock_action)
+        chain.completed(dp, mock_action)
+
+        # Log must have been emitted exactly once
+        assert len(mock_action.calls) == 1
 
 
 # ---------------------------------------------------------------------------
