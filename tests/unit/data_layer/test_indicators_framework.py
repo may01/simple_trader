@@ -76,11 +76,15 @@ class TestSortedFields:
         assert len(fields) > 0
 
     def test_sorted_fields_filters_by_tf(self):
-        """Fields with applies_to=[15,60,240,1440] (classification group) NOT in _sorted_fields(1)."""
-        fields_1 = Indicators._sorted_fields(1)
+        """Fields with applies_to=[15,60,240,1440] (classification group) NOT in _sorted_fields(1).
+
+        Uses check_resources=False so resource-dependent fields are included regardless
+        of whether the stats files exist in the test environment.
+        """
+        fields_1 = Indicators._sorted_fields(1, check_resources=False)
         names_1 = {f.name for f in fields_1}
 
-        fields_15 = Indicators._sorted_fields(15)
+        fields_15 = Indicators._sorted_fields(15, check_resources=False)
         names_15 = {f.name for f in fields_15}
 
         # Classification group only applies to [15, 60, 240, 1440].
