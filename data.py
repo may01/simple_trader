@@ -147,12 +147,13 @@ class WideDataPoint(DataPoint):
         return float(closed_rows[full_col].iloc[-shift])
 
     def get_df(self, tf: int) -> pd.DataFrame:
-        """Return a slice of the wide DataFrame up to ts (placeholder).
+        """Return indicator input slice at ts for tf.
 
-        This will be replaced in Task 03 with a call to build_indicator_input,
-        which reconstructs a proper per-TF DataFrame for Indicators.compute().
+        Delegates to build_indicator_input() from indicators.py (lazy import
+        to avoid the data.py ↔ indicators.py circular import).
         """
-        return self._df[: self._ts]
+        from indicators import build_indicator_input  # lazy import: avoids circular dep
+        return build_indicator_input(self._df, self._ts, tf)
 
     @property
     def timestamp(self) -> pd.Timestamp:
