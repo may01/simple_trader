@@ -542,5 +542,4 @@ class TestStrategyManagerIntegration:
 
         sm = StrategyManager(fee=0.001)
         sm.register(ExampleStrategyLong(fee=0.001))
-        assert 'strategy_manager ok' or True  # Always true for verification
         assert len(sm.strategies) == 1
