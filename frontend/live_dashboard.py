@@ -230,5 +230,6 @@ class LiveDashboard:
             with open(path, "rb") as fh:
                 data = pickle.load(fh)
             return data if isinstance(data, dict) else {}
-        except Exception:
+        except Exception as e:
+            print(f"[LiveDashboard] _load_state error: {e}")
             return {}
