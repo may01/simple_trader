@@ -340,5 +340,6 @@ class DataPreparer:
                 for col in out_cols:
                     results[col].append(last[col] if col in slice_df.columns else float("nan"))
 
-            for col in out_cols:
-                df[col] = results[col]
+            # Single multi-column setitem — per-column inserts fragment the
+            # frame (one block each) and trigger PerformanceWarning spam.
+            df[out_cols] = pd.DataFrame(results, index=df.index)

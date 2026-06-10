@@ -177,28 +177,33 @@ def _build_wide_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
+    # Collect all per-tf columns and append with one concat at the end —
+    # 8 inserts × len(CANDLES) sequential setitems fragment the frame
+    # (one memory block per insert) and pandas warns on every later insert.
+    new_cols: dict[str, object] = {}
+
     for tf in CANDLES:
         open_index = df.index.floor(f"{tf}min")
 
-        df[f"{tf}_open_index"] = open_index
+        new_cols[f"{tf}_open_index"] = open_index
 
         # open — first value of the candle period
-        df[f"{tf}_open"] = df.groupby(open_index)["open"].transform("first")
+        new_cols[f"{tf}_open"] = df.groupby(open_index)["open"].transform("first")
 
         # high — cumulative max within candle
-        df[f"{tf}_high"] = df.groupby(open_index)["high"].cummax()
+        new_cols[f"{tf}_high"] = df.groupby(open_index)["high"].cummax()
 
         # low — cumulative min within candle
-        df[f"{tf}_low"] = df.groupby(open_index)["low"].cummin()
+        new_cols[f"{tf}_low"] = df.groupby(open_index)["low"].cummin()
 
         # close — raw 1-min close, never forward-looking
-        df[f"{tf}_close"] = df["close"]
+        new_cols[f"{tf}_close"] = df["close"]
 
         # volume — cumulative sum within candle
-        df[f"{tf}_volume"] = df.groupby(open_index)["volume"].cumsum()
+        new_cols[f"{tf}_volume"] = df.groupby(open_index)["volume"].cumsum()
 
         # buy_volume — cumulative sum of taker_base_vol within candle
-        df[f"{tf}_buy_volume"] = df.groupby(open_index)["taker_base_vol"].cumsum()
+        new_cols[f"{tf}_buy_volume"] = df.groupby(open_index)["taker_base_vol"].cumsum()
 
         # is_closed — True at the last 1-min row of each tf-period candle
         idx = df.index
@@ -220,9 +225,9 @@ def _build_wide_df(df: pd.DataFrame) -> pd.DataFrame:
                 f"{tf}min"
             )
 
-        df[f"{tf}_is_closed"] = is_closed
+        new_cols[f"{tf}_is_closed"] = is_closed
 
-    return df
+    return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
 
 from stocks_holder import stock_holder  # noqa: E402 — after class definitions to avoid circular import
