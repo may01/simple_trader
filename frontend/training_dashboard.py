@@ -33,7 +33,8 @@ class TrainingDashboard:
         """
         try:
             return self._build_figures(state)
-        except Exception:
+        except Exception as e:
+            print(f"[TrainingDashboard] _update_charts error: {e}")
             return [go.Figure(), go.Figure()]
 
     # ------------------------------------------------------------------
@@ -93,7 +94,7 @@ class TrainingDashboard:
         win_rate = state.get("win_rate")
         total_trades: int = state.get("total_trades", 0)
 
-        pct_values = [r[0] for r in revenue_history] if revenue_history else []
+        pct_values = [r[0] for r in revenue_history if isinstance(r, (list, tuple)) and len(r) >= 1]
 
         # Build histogram figure.
         hist_fig = go.Figure()

@@ -109,7 +109,8 @@ class TestUpdateChartsSimulate:
         combined_text = ""
         for fig in figs:
             combined_text += fig.layout.title.text or ""
-            for ann in fig.layout.annotations:
+            annotations = fig.layout.annotations or []
+            for ann in annotations:
                 combined_text += ann.text or ""
         assert "0.65" in combined_text or "65" in combined_text, (
             f"Win rate 0.65 not found in figure text: {combined_text!r}"
