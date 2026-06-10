@@ -1,0 +1,128 @@
+services:
+  graber:
+    image: simple_trader
+    build: .
+    command: python3 grabers/grab_binance.py
+    env_file: ${TRAIN_ENV:-configs/train_dataset.env}
+    volumes:
+      - .:/code
+      - simple_trader_vol:/trader_data
+      - simple_trader_vol_long:/trader_data_long
+    environment:
+      BINANCE_API_KEY: ${BINANCE_API_KEY}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET}
+
+  ohlc_gen:
+    image: simple_trader
+    command: python3 trainer.py generate_full_ohlc
+    env_file: ${TRAIN_ENV:-configs/train_dataset.env}
+    volumes:
+      - .:/code
+      - simple_trader_vol:/trader_data
+      - simple_trader_vol_long:/trader_data_long
+
+  simulate:
+    image: simple_trader
+    command: python3 trainer.py simulate
+    env_file: ${TRAIN_ENV:-configs/train_dataset.env}
+    volumes:
+      - .:/code
+      - simple_trader_vol:/trader_data
+      - simple_trader_vol_long:/trader_data_long
+
+  prepare-nn-data:
+    image: simple_trader
+    command: python3 trainer.py group_nn
+    env_file: ${NN_TRAIN_ENV:-configs/nn_train_dataset.env}
+    volumes:
+      - .:/code
+      - simple_trader_vol:/trader_data
+      - simple_trader_vol_long:/trader_data_long
+
+  nn-train:
+    image: simple_trader
+    command: python3 trainer.py nn_train
+    env_file: ${NN_TRAIN_ENV:-configs/nn_train_dataset.env}
+    volumes:
+      - .:/code
+      - simple_trader_vol:/trader_data
+      - simple_trader_vol_long:/trader_data_long
+    environment:
+      NN_CLS: ${NN_CLS}
+      NN_TGT: ${NN_TGT}
+      NN_TYPE: ${NN_TYPE}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  simulate-nn:
+    image: simple_trader
+    command: python3 trainer.py simulate_nn
+    env_file: ${TRAIN_ENV:-configs/train_dataset.env}
+    volumes:
+      - .:/code
+      - simple_trader_vol:/trader_data
+      - simple_trader_vol_long:/trader_data_long
+
+  live:
+    image: simple_trader
+    command: python3 trader.py
+    env_file: ${LIVE_ENV:-configs/live.env}
+    ports:
+      - "8050:8050"
+    volumes:
+      - .:/code
+      - simple_trader_vol:/trader_data
+      - simple_trader_vol_long:/trader_data_long
+    environment:
+      BINANCE_API_KEY: ${BINANCE_API_KEY}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET}
+
+  view-sim:
+    image: simple_trader
+    command: python3 view_online_point.py none
+    env_file: ${LIVE_ENV:-configs/live.env}
+    ports:
+      - "8080:8080"
+      - "8090:8090"
+    volumes:
+      - .:/code
+      - simple_trader_vol:/trader_data
+      - simple_trader_vol_long:/trader_data_long
+    environment:
+      BINANCE_API_KEY: ${BINANCE_API_KEY}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET}
+
+  view-full:
+    image: simple_trader
+    command: python3 view_full.py none
+    env_file: ${LONG_ENV:-configs/long_dataset.env}
+    ports:
+      - "8080:8080"
+      - "8090:8090"
+    volumes:
+      - .:/code
+      - simple_trader_vol_long:/trader_data_long
+
+  view-live:
+    image: simple_trader
+    command: python3 view_onlineB.py none
+    env_file: ${LIVE_ENV:-configs/live.env}
+    ports:
+      - "8070:8070"
+    volumes:
+      - .:/code
+      - simple_trader_vol:/trader_data
+    environment:
+      BINANCE_API_KEY: ${BINANCE_API_KEY}
+      BINANCE_API_SECRET: ${BINANCE_API_SECRET}
+
+volumes:
+  simple_trader_vol:
+    external: true
+  simple_trader_vol_long:
+    external: true

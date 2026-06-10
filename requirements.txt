@@ -1,0 +1,12 @@
+pandas
+numpy
+ta-lib
+pandas-ta
+python-binance
+tensorflow[and-cuda]
+keras
+dash
+plotly
+pyyaml
+pytest
+pytest-mock

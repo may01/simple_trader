@@ -1,3 +1,7 @@
+# Output directory — logs and generated files; keep directory marker
+output/*
+!output/.gitkeep
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -135,7 +139,7 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+# .env is committed (contains only path defaults, no secrets)
 .envrc
 .venv
 env/
