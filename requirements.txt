@@ -11,3 +11,4 @@ kaleido
 pyyaml
 pytest
 pytest-mock
+torch
