@@ -7,7 +7,6 @@ from constants import (
     POSITION_STATE_WAIT_BUY,
     POSITION_STATE_WAIT_SELL,
     POSITION_TYPE_LONG,
-    STRATEGY_ACTION_OPEN_LONG,
 )
 from position.base_position import BasePosition
 from position.coin import Coin
