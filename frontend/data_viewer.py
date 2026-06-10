@@ -174,6 +174,7 @@ class DataViewer:
         start_idx: int = 0,
         end_idx: int | None = None,
         levels=None,
+        indicators: list[str] | None = None,
     ) -> None:
         """Render OHLCV + indicators + price-level overlays.
 
@@ -182,8 +183,10 @@ class DataViewer:
             end_idx: End row (exclusive, iloc-based). None means end of data.
             levels: Levels object with ``get_active_levels(level_type, cur_time) →
                 list[(price, label)]``. If ``None``, behaves like ``view_full()``.
+            indicators: List of indicator column base names (without TF prefix),
+                e.g. ``["rsi_14", "cci_14"]``. ``None`` defaults to RSI-14 and CCI-14.
         """
-        indicators = self._resolve_indicators(None)
+        indicators = self._resolve_indicators(indicators)
         df_slice = self._slice(start_idx, end_idx)
         fig = self._build_figure(df_slice, indicators)
 
@@ -209,6 +212,7 @@ class DataViewer:
         path: str,
         start_idx: int = 0,
         end_idx: int | None = None,
+        indicators: list[str] | None = None,
     ) -> None:
         """Build the default chart (RSI + CCI) and save to a PNG file.
 
@@ -216,8 +220,10 @@ class DataViewer:
             path: Destination file path (PNG).
             start_idx: Start row (inclusive, iloc-based).
             end_idx: End row (exclusive, iloc-based). None means end of data.
+            indicators: List of indicator column base names (without TF prefix),
+                e.g. ``["rsi_14", "cci_14"]``. ``None`` defaults to RSI-14 and CCI-14.
         """
-        indicators = self._resolve_indicators(None)
+        indicators = self._resolve_indicators(indicators)
         df_slice = self._slice(start_idx, end_idx)
         fig = self._build_figure(df_slice, indicators)
         self.renderer.save(fig, path)

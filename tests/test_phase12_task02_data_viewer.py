@@ -288,6 +288,21 @@ class TestViewFullLevels:
         fig = mock_renderer.create_figure.return_value
         fig.show.assert_called_once()
 
+    def test_indicators_param_controls_indicators(self, viewer, mock_renderer):
+        """When indicators are specified, they are used instead of defaults."""
+        viewer.view_full_levels(indicators=["rsi_14"])
+        call_subplots = [c[0][1] for c in mock_renderer.draw_line.call_args_list]
+        # Only RSI should be drawn, not CCI
+        assert "rsi" in call_subplots
+        assert "cci" not in call_subplots
+
+    def test_indicators_none_uses_defaults(self, viewer, mock_renderer):
+        """When indicators=None, defaults to rsi_14 and cci_14."""
+        viewer.view_full_levels(indicators=None)
+        call_subplots = [c[0][1] for c in mock_renderer.draw_line.call_args_list]
+        assert "rsi" in call_subplots
+        assert "cci" in call_subplots
+
 
 # ---------------------------------------------------------------------------
 # save_chart
@@ -317,3 +332,18 @@ class TestSaveChart:
         args = mock_renderer.draw_candles.call_args[0]
         _fig, times, opens, highs, lows, closes = args
         assert len(opens) == 3  # rows 1,2,3
+
+    def test_indicators_param_controls_indicators(self, viewer, mock_renderer):
+        """When indicators are specified, they are used instead of defaults."""
+        viewer.save_chart("out.png", indicators=["rsi_14"])
+        call_subplots = [c[0][1] for c in mock_renderer.draw_line.call_args_list]
+        # Only RSI should be drawn, not CCI
+        assert "rsi" in call_subplots
+        assert "cci" not in call_subplots
+
+    def test_indicators_none_uses_defaults(self, viewer, mock_renderer):
+        """When indicators=None, defaults to rsi_14 and cci_14."""
+        viewer.save_chart("out.png", indicators=None)
+        call_subplots = [c[0][1] for c in mock_renderer.draw_line.call_args_list]
+        assert "rsi" in call_subplots
+        assert "cci" in call_subplots
