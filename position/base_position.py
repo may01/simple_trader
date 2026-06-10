@@ -7,6 +7,7 @@ from constants import (
     POSITION_STATE_WAIT_SAFETY_SELL,
     POSITION_TYPE_LONG,
     POSITION_TYPE_SHORT,
+    POSITION_TYPE_UNKNOWN,
     POSITION_STATE_WAIT_BUY,
     POSITION_STATE_WAIT_SELL,
     STRATEGY_ACTION_NOTHING,
@@ -33,7 +34,7 @@ class BasePosition(ABC):
         # State machine
         self.state: str = POSITION_STATE_WAIT
         self.action: str = STRATEGY_ACTION_NOTHING
-        self.position_type: str = "POSITION_TYPE_UNKNOWN"  # overridden by subclass
+        self.position_type: str = POSITION_TYPE_UNKNOWN  # overridden by subclass
 
         # Configuration
         self.fee: float = fee
