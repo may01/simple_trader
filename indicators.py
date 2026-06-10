@@ -1242,10 +1242,6 @@ class NNCloseDiffATRField(IndicatorField):
 
 
 # ===========================================================================
-# Factory registry — maps field names → factory callables
-# ===========================================================================
-
-# ===========================================================================
 # DataAttributes — stats computation and storage
 # ===========================================================================
 
@@ -1316,8 +1312,10 @@ class DataAttributes:
             }
 
         out_path = base + "rsi_classification.json"
-        with open(out_path, "w") as fh:
+        tmp_path = out_path + ".tmp"
+        with open(tmp_path, "w") as fh:
             json.dump(result, fh)
+        os.rename(tmp_path, out_path)
 
     def _compute_diff_stats(self, df: pd.DataFrame) -> None:
         """Compute price differential stats per TF.

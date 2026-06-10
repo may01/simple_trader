@@ -128,15 +128,23 @@ class TestDataAttributes:
         assert os.path.exists(path), f"Expected file at {path}"
 
     def test_compute_idempotent(self, wide_df_with_rsi, patched_stats_folder):
-        """Calling compute() twice does not raise and produces same file."""
+        """Calling compute() twice does not raise and produces same files."""
         da = DataAttributes()
         da.compute(wide_df_with_rsi)
-        path = patched_stats_folder + "rsi_classification.json"
-        mtime_first = os.path.getmtime(path)
-        # Second call should be a no-op (file already exists)
+        json_path = patched_stats_folder + "rsi_classification.json"
+        pkl_path = patched_stats_folder + "diff_stats.pkl"
+        json_mtime_first = os.path.getmtime(json_path)
+        pkl_mtime_first = os.path.getmtime(pkl_path)
+        # Second call should be a no-op (files already exist)
         da.compute(wide_df_with_rsi)
-        mtime_second = os.path.getmtime(path)
-        assert mtime_first == mtime_second, "compute() should not overwrite existing files"
+        json_mtime_second = os.path.getmtime(json_path)
+        pkl_mtime_second = os.path.getmtime(pkl_path)
+        assert json_mtime_first == json_mtime_second, (
+            "compute() should not overwrite existing rsi_classification.json"
+        )
+        assert pkl_mtime_first == pkl_mtime_second, (
+            "compute() should not overwrite existing diff_stats.pkl"
+        )
 
     def test_load_rsi_classification_raises_if_absent(
         self, tmp_path, monkeypatch
@@ -190,3 +198,61 @@ class TestDataAttributes:
         assert loaded.column_stats == da.column_stats
         for col in feature_cols:
             assert col in loaded.column_stats
+
+    def test_load_diff_stats_raises_if_absent(self, tmp_path, monkeypatch):
+        """load_diff_stats() raises FileNotFoundError when file is missing."""
+        stats_dir = tmp_path / "empty_stats"
+        stats_dir.mkdir()
+        import helpers
+        monkeypatch.setattr(helpers, "stats_folder", lambda: str(stats_dir) + "/")
+        with pytest.raises(FileNotFoundError):
+            DataAttributes.load_diff_stats()
+
+    def test_compute_creates_diff_stats_file(
+        self, wide_df_with_rsi, patched_stats_folder
+    ):
+        """compute() creates diff_stats.pkl in stats_folder()."""
+        da = DataAttributes()
+        da.compute(wide_df_with_rsi)
+        path = patched_stats_folder + "diff_stats.pkl"
+        assert os.path.exists(path), f"Expected file at {path}"
+
+    def test_compute_nn_stats_uses_closed_rows_only(
+        self, wide_df, patched_stats_folder
+    ):
+        """compute_nn_stats() computes mean from closed-candle rows only.
+
+        Build a df where closed rows for tf=15 have value=100 and open rows
+        have value=0; the resulting mean must be 100.0, not the full-df mean.
+        """
+        df = wide_df.copy()
+        closed_mask = df["15_is_closed"].astype(bool)
+        df["15_test_col"] = 0.0
+        df.loc[closed_mask, "15_test_col"] = 100.0
+
+        da = DataAttributes()
+        da.compute_nn_stats(df, ["15_test_col"])
+
+        full_mean = df["15_test_col"].mean()
+        stats_mean = da.column_stats["15_test_col"]["mean"]
+        assert stats_mean == pytest.approx(100.0), (
+            f"Expected mean=100.0 (closed rows only), got {stats_mean}"
+        )
+        assert stats_mean != pytest.approx(full_mean), (
+            "Mean should differ from full-df mean when open rows have value=0"
+        )
+
+    def test_compute_idempotent_diff_stats(
+        self, wide_df_with_rsi, patched_stats_folder
+    ):
+        """Calling compute() twice does not overwrite diff_stats.pkl."""
+        da = DataAttributes()
+        da.compute(wide_df_with_rsi)
+        path = patched_stats_folder + "diff_stats.pkl"
+        mtime_first = os.path.getmtime(path)
+        # Second call should be a no-op (file already exists)
+        da.compute(wide_df_with_rsi)
+        mtime_second = os.path.getmtime(path)
+        assert mtime_first == mtime_second, (
+            "compute() should not overwrite existing diff_stats.pkl"
+        )
