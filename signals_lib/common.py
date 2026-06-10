@@ -412,3 +412,368 @@ class Diff_GreaterIndi_Signal(BaseSignal):
 
         diff = val_1 - val_2
         return diff > 0 and diff > val_dist
+
+
+# ============================================================================
+# CROSSOVER SIGNALS (Phase 04, Task 03)
+# ============================================================================
+
+
+class Cross_Up_Signal(BaseSignal):
+    """Signal: current indi_1 > indi_2 AND previous indi_1 < indi_2."""
+
+    def __init__(self, tf: int, indi_1: str, indi_2: str) -> None:
+        """Initialize Cross_Up_Signal.
+
+        Args:
+            tf: Timeframe (in minutes).
+            indi_1: First indicator name (without tf prefix).
+            indi_2: Second indicator name (without tf prefix).
+        """
+        super().__init__()
+        self.tf = tf
+        self.indi_1 = indi_1
+        self.indi_2 = indi_2
+
+    def check(self, data_point: DataPoint, levels: dict, action) -> bool:
+        """Check if current indi_1 > indi_2 AND previous indi_1 < indi_2.
+
+        Args:
+            data_point: Current market data point.
+            levels: Dictionary of price levels (unused).
+            action: The action being evaluated (unused).
+
+        Returns:
+            bool: True if crossover detected, False otherwise.
+                  Returns False if any value is NaN.
+        """
+        val_1_current = data_point.get(self.indi_1, self.tf, self.shift)
+        val_2_current = data_point.get(self.indi_2, self.tf, self.shift)
+        val_1_previous = data_point.get(self.indi_1, self.tf, self.shift + 1)
+        val_2_previous = data_point.get(self.indi_2, self.tf, self.shift + 1)
+
+        if _any_nan(val_1_current, val_2_current, val_1_previous, val_2_previous):
+            return False
+
+        return val_1_current > val_2_current and val_1_previous < val_2_previous
+
+
+class Cross_Down_Signal(BaseSignal):
+    """Signal: current indi_1 < indi_2 AND previous indi_1 > indi_2."""
+
+    def __init__(self, tf: int, indi_1: str, indi_2: str) -> None:
+        """Initialize Cross_Down_Signal.
+
+        Args:
+            tf: Timeframe (in minutes).
+            indi_1: First indicator name (without tf prefix).
+            indi_2: Second indicator name (without tf prefix).
+        """
+        super().__init__()
+        self.tf = tf
+        self.indi_1 = indi_1
+        self.indi_2 = indi_2
+
+    def check(self, data_point: DataPoint, levels: dict, action) -> bool:
+        """Check if current indi_1 < indi_2 AND previous indi_1 > indi_2.
+
+        Args:
+            data_point: Current market data point.
+            levels: Dictionary of price levels (unused).
+            action: The action being evaluated (unused).
+
+        Returns:
+            bool: True if crossover detected, False otherwise.
+                  Returns False if any value is NaN.
+        """
+        val_1_current = data_point.get(self.indi_1, self.tf, self.shift)
+        val_2_current = data_point.get(self.indi_2, self.tf, self.shift)
+        val_1_previous = data_point.get(self.indi_1, self.tf, self.shift + 1)
+        val_2_previous = data_point.get(self.indi_2, self.tf, self.shift + 1)
+
+        if _any_nan(val_1_current, val_2_current, val_1_previous, val_2_previous):
+            return False
+
+        return val_1_current < val_2_current and val_1_previous > val_2_previous
+
+
+class Cross_Up_Val_Signal(BaseSignal):
+    """Signal: current indi_1 > val AND previous indi_1 < val."""
+
+    def __init__(self, tf: int, indi_1: str, val: float) -> None:
+        """Initialize Cross_Up_Val_Signal.
+
+        Args:
+            tf: Timeframe (in minutes).
+            indi_1: Indicator name (without tf prefix).
+            val: Threshold value to cross above.
+        """
+        super().__init__()
+        self.tf = tf
+        self.indi_1 = indi_1
+        self.val = val
+
+    def check(self, data_point: DataPoint, levels: dict, action) -> bool:
+        """Check if current indi_1 > val AND previous indi_1 < val.
+
+        Args:
+            data_point: Current market data point.
+            levels: Dictionary of price levels (unused).
+            action: The action being evaluated (unused).
+
+        Returns:
+            bool: True if crossover detected, False otherwise.
+                  Returns False if any value is NaN.
+        """
+        val_current = data_point.get(self.indi_1, self.tf, self.shift)
+        val_previous = data_point.get(self.indi_1, self.tf, self.shift + 1)
+
+        if _any_nan(val_current, val_previous):
+            return False
+
+        return val_current > self.val and val_previous < self.val
+
+
+class Cross_Down_Val_Signal(BaseSignal):
+    """Signal: current indi_1 < val AND previous indi_1 > val."""
+
+    def __init__(self, tf: int, indi_1: str, val: float) -> None:
+        """Initialize Cross_Down_Val_Signal.
+
+        Args:
+            tf: Timeframe (in minutes).
+            indi_1: Indicator name (without tf prefix).
+            val: Threshold value to cross below.
+        """
+        super().__init__()
+        self.tf = tf
+        self.indi_1 = indi_1
+        self.val = val
+
+    def check(self, data_point: DataPoint, levels: dict, action) -> bool:
+        """Check if current indi_1 < val AND previous indi_1 > val.
+
+        Args:
+            data_point: Current market data point.
+            levels: Dictionary of price levels (unused).
+            action: The action being evaluated (unused).
+
+        Returns:
+            bool: True if crossover detected, False otherwise.
+                  Returns False if any value is NaN.
+        """
+        val_current = data_point.get(self.indi_1, self.tf, self.shift)
+        val_previous = data_point.get(self.indi_1, self.tf, self.shift + 1)
+
+        if _any_nan(val_current, val_previous):
+            return False
+
+        return val_current < self.val and val_previous > self.val
+
+
+# ============================================================================
+# LEVEL-BASED SIGNALS (Phase 04, Task 03)
+# ============================================================================
+
+
+class Near_Level_Signal(BaseSignal):
+    """Signal: abs(price - level_val) <= buffer for any level in levels[level_type]."""
+
+    def __init__(self, tf: int, indi_1: str, level_type: int, buffer: float) -> None:
+        """Initialize Near_Level_Signal.
+
+        Args:
+            tf: Timeframe (in minutes).
+            indi_1: Indicator name (without tf prefix).
+            level_type: Key to lookup in levels dict.
+            buffer: Distance threshold for proximity.
+        """
+        super().__init__()
+        self.tf = tf
+        self.indi_1 = indi_1
+        self.level_type = level_type
+        self.buffer = buffer
+        self._matched_level = None
+
+    def check(self, data_point: DataPoint, levels: dict, action) -> bool:
+        """Check if price is within buffer of any level.
+
+        Args:
+            data_point: Current market data point.
+            levels: Dictionary mapping level_type to list of level values.
+            action: The action being evaluated (unused).
+
+        Returns:
+            bool: True if price within buffer of any level, False otherwise.
+                  Returns False if price is NaN or no levels for type.
+        """
+        price = data_point.get(self.indi_1, self.tf, self.shift)
+
+        if math.isnan(price):
+            return False
+
+        level_list = levels.get(self.level_type, [])
+        if not level_list:
+            return False
+
+        self._matched_level = None
+        for level_val in level_list:
+            if abs(price - level_val) <= self.buffer:
+                self._matched_level = level_val
+
+        return self._matched_level is not None
+
+    def get_data(self) -> dict:
+        """Return matched level value.
+
+        Returns:
+            dict: {"level_val": level_val} if a level matched, {} otherwise.
+        """
+        if self._matched_level is not None:
+            return {"level_val": self._matched_level}
+        return {}
+
+
+class Near_Price_Level_Signal(BaseSignal):
+    """Signal: abs(price - level_val) <= (buffer × buffer_indi) for any level."""
+
+    def __init__(
+        self, tf: int, indi_1: str, level_type: int, buffer: float, buffer_indi: str
+    ) -> None:
+        """Initialize Near_Price_Level_Signal.
+
+        Args:
+            tf: Timeframe (in minutes).
+            indi_1: Indicator name (without tf prefix).
+            level_type: Key to lookup in levels dict.
+            buffer: Coefficient multiplied by buffer_indi.
+            buffer_indi: Indicator name for dynamic buffer (without tf prefix).
+        """
+        super().__init__()
+        self.tf = tf
+        self.indi_1 = indi_1
+        self.level_type = level_type
+        self.buffer = buffer
+        self.buffer_indi = buffer_indi
+        # Create internal Near_Level_Signal for delegation
+        self._inner_signal = Near_Level_Signal(tf, indi_1, level_type, 0.0)
+
+    def set_shift(self, shift: int) -> None:
+        """Propagate shift to inner Near_Level_Signal.
+
+        Args:
+            shift: Number of candles to shift back.
+        """
+        super().set_shift(shift)
+        self._inner_signal.set_shift(shift)
+
+    def check(self, data_point: DataPoint, levels: dict, action) -> bool:
+        """Check if price within dynamic buffer of any level.
+
+        Dynamic buffer = buffer × data_point.get(buffer_indi, tf, shift)
+
+        Args:
+            data_point: Current market data point.
+            levels: Dictionary mapping level_type to list of level values.
+            action: The action being evaluated (unused).
+
+        Returns:
+            bool: True if price within dynamic buffer, False otherwise.
+                  Returns False if buffer_indi is NaN.
+        """
+        buffer_val = data_point.get(self.buffer_indi, self.tf, self.shift)
+
+        if math.isnan(buffer_val):
+            return False
+
+        effective_buffer = self.buffer * buffer_val
+        self._inner_signal.buffer = effective_buffer
+        return self._inner_signal.check(data_point, levels, action)
+
+    def get_data(self) -> dict:
+        """Delegate to inner signal's get_data().
+
+        Returns:
+            dict: Signal metadata from inner signal.
+        """
+        return self._inner_signal.get_data()
+
+
+class Over_Level_Signal(BaseSignal):
+    """Signal: indi_1 > level_val for any level in levels[level_type]."""
+
+    def __init__(self, tf: int, indi_1: str, level_type: int) -> None:
+        """Initialize Over_Level_Signal.
+
+        Args:
+            tf: Timeframe (in minutes).
+            indi_1: Indicator name (without tf prefix).
+            level_type: Key to lookup in levels dict.
+        """
+        super().__init__()
+        self.tf = tf
+        self.indi_1 = indi_1
+        self.level_type = level_type
+
+    def check(self, data_point: DataPoint, levels: dict, action) -> bool:
+        """Check if price is above any level.
+
+        Args:
+            data_point: Current market data point.
+            levels: Dictionary mapping level_type to list of level values.
+            action: The action being evaluated (unused).
+
+        Returns:
+            bool: True if price above any level, False otherwise.
+                  Returns False if price is NaN or no levels for type.
+        """
+        price = data_point.get(self.indi_1, self.tf, self.shift)
+
+        if math.isnan(price):
+            return False
+
+        level_list = levels.get(self.level_type, [])
+        if not level_list:
+            return False
+
+        return any(price > level_val for level_val in level_list)
+
+
+class Under_Level_Signal(BaseSignal):
+    """Signal: indi_1 < level_val for any level in levels[level_type]."""
+
+    def __init__(self, tf: int, indi_1: str, level_type: int) -> None:
+        """Initialize Under_Level_Signal.
+
+        Args:
+            tf: Timeframe (in minutes).
+            indi_1: Indicator name (without tf prefix).
+            level_type: Key to lookup in levels dict.
+        """
+        super().__init__()
+        self.tf = tf
+        self.indi_1 = indi_1
+        self.level_type = level_type
+
+    def check(self, data_point: DataPoint, levels: dict, action) -> bool:
+        """Check if price is below any level.
+
+        Args:
+            data_point: Current market data point.
+            levels: Dictionary mapping level_type to list of level values.
+            action: The action being evaluated (unused).
+
+        Returns:
+            bool: True if price below any level, False otherwise.
+                  Returns False if price is NaN or no levels for type.
+        """
+        price = data_point.get(self.indi_1, self.tf, self.shift)
+
+        if math.isnan(price):
+            return False
+
+        level_list = levels.get(self.level_type, [])
+        if not level_list:
+            return False
+
+        return any(price < level_val for level_val in level_list)
