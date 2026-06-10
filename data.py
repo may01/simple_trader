@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 
 import pandas as pd
 
+from config_loader import CANDLES
+
 
 class DataPoint(ABC):
     """Abstract base for accessing OHLC/indicator data at a point in time."""
@@ -156,3 +158,98 @@ class WideDataPoint(DataPoint):
     def timestamp(self) -> pd.Timestamp:
         """The fixed timestamp this DataPoint represents."""
         return self._ts
+
+
+# ---------------------------------------------------------------------------
+# Wide DataFrame builder
+# ---------------------------------------------------------------------------
+
+
+def _build_wide_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Build wide DataFrame from renamed OHLCV df.
+
+    Input columns: open, high, low, close, volume, taker_base_vol.
+    For each tf in CANDLES, adds the following columns:
+      {tf}_open_index, {tf}_open, {tf}_high, {tf}_low, {tf}_close,
+      {tf}_volume, {tf}_buy_volume, {tf}_is_closed
+    The input DataFrame is copied so the caller's copy is not mutated.
+    """
+    df = df.copy()
+
+    for tf in CANDLES:
+        open_index = df.index.floor(f"{tf}min")
+
+        df[f"{tf}_open_index"] = open_index
+
+        # open — first value of the candle period
+        df[f"{tf}_open"] = df.groupby(open_index)["open"].transform("first")
+
+        # high — cumulative max within candle
+        df[f"{tf}_high"] = df.groupby(open_index)["high"].cummax()
+
+        # low — cumulative min within candle
+        df[f"{tf}_low"] = df.groupby(open_index)["low"].cummin()
+
+        # close — raw 1-min close, never forward-looking
+        df[f"{tf}_close"] = df["close"]
+
+        # volume — cumulative sum within candle
+        df[f"{tf}_volume"] = df.groupby(open_index)["volume"].cumsum()
+
+        # buy_volume — cumulative sum of taker_base_vol within candle
+        df[f"{tf}_buy_volume"] = df.groupby(open_index)["taker_base_vol"].cumsum()
+
+        # is_closed — True at the last 1-min row of each tf-period candle
+        idx = df.index
+        if tf == 1:
+            is_closed = pd.Series(True, index=idx)
+        elif tf == 5:
+            is_closed = idx.minute % 5 == 4
+        elif tf == 15:
+            is_closed = idx.minute % 15 == 14
+        elif tf == 60:
+            is_closed = idx.minute == 59
+        elif tf == 240:
+            is_closed = (idx.minute == 59) & (idx.hour % 4 == 3)
+        elif tf == 1440:
+            is_closed = (idx.minute == 59) & (idx.hour == 23)
+        else:
+            # Generic fallback: last minute of each tf-period
+            is_closed = (idx + pd.Timedelta(minutes=1)).floor(f"{tf}min") != idx.floor(
+                f"{tf}min"
+            )
+
+        df[f"{tf}_is_closed"] = is_closed
+
+    return df
+
+
+def get_stock_data(pair: str) -> pd.DataFrame:
+    """Load graber_data.pkl for *pair* and build a wide DataFrame.
+
+    Reads the pickle produced by the data grabber, renames short column names
+    (o→open, h→high, l→low, c→close, v→volume), then delegates to
+    _build_wide_df() to add all per-TF columns.
+    """
+    import os
+    from helpers import root_folder  # local import avoids circular deps at module level
+
+    data_root = os.environ["DATA_ROOT"]
+    data_set_name = os.environ["DATA_SET_NAME"]
+    path = f"{root_folder()}/{data_root}/{data_set_name}_{pair}/graber_data.pkl"
+
+    raw: pd.DataFrame = pd.read_pickle(path)
+
+    rename_map = {
+        "o": "open",
+        "h": "high",
+        "l": "low",
+        "c": "close",
+        "v": "volume",
+    }
+    # Only rename columns that actually exist in the pickle
+    actual_rename = {k: v for k, v in rename_map.items() if k in raw.columns}
+    if actual_rename:
+        raw = raw.rename(columns=actual_rename)
+
+    return _build_wide_df(raw)
