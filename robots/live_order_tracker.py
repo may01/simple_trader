@@ -1,10 +1,13 @@
 """robots/live_order_tracker.py — tracks live order IDs and persists state."""
 
 import json
+import logging
 import os
 
 from position.position import Position
 from stocks.base_stock import StockInterface
+
+logger = logging.getLogger(__name__)
 
 
 class LiveOrderTracker:
@@ -55,13 +58,19 @@ class LiveOrderTracker:
 
     def cancel_buy(self) -> None:
         """Cancel the active buy order on the exchange, clear buy_id, and save."""
-        self.stock.cancel_order(self.buy_id)
+        try:
+            self.stock.cancel_order(self.buy_id)
+        except Exception as exc:
+            logger.warning("cancel_buy: cancel_order raised: %s", exc)
         self.buy_id = ""
         self.save()
 
     def cancel_sell(self) -> None:
         """Cancel the active sell order on the exchange, clear sell_id, and save."""
-        self.stock.cancel_order(self.sell_id)
+        try:
+            self.stock.cancel_order(self.sell_id)
+        except Exception as exc:
+            logger.warning("cancel_sell: cancel_order raised: %s", exc)
         self.sell_id = ""
         self.save()
 
@@ -92,9 +101,14 @@ class LiveOrderTracker:
         data.update(self.position.to_dict())
 
         tmp_path = self.persist_path + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(data, f)
-        os.replace(tmp_path, self.persist_path)
+        try:
+            with open(tmp_path, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp_path, self.persist_path)
+        except Exception:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            raise
 
     def load(self) -> bool:
         """Load state from persist_path if it exists.
@@ -108,8 +122,12 @@ class LiveOrderTracker:
         if not os.path.exists(self.persist_path):
             return False
 
-        with open(self.persist_path, "r") as f:
-            data = json.load(f)
+        try:
+            with open(self.persist_path, "r") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as exc:
+            logger.warning("load: corrupt persist file %s: %s", self.persist_path, exc)
+            return False
 
         self.buy_id = data.get("buy_id", "")
         self.sell_id = data.get("sell_id", "")

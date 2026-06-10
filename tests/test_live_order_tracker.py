@@ -154,6 +154,22 @@ class TestCancel:
         tracker.cancel_sell()
         assert tracker.sell_id == ""
 
+    def test_cancel_buy_clears_id_even_if_cancel_order_raises(self, tmp_path):
+        stock = MagicMock(spec=StockInterface)
+        stock.cancel_order.side_effect = RuntimeError("exchange error")
+        tracker, _, _, _ = make_tracker(tmp_path, stock=stock)
+        tracker.set_buy_order("order-buy-err")
+        tracker.cancel_buy()
+        assert tracker.buy_id == ""
+
+    def test_cancel_sell_clears_id_even_if_cancel_order_raises(self, tmp_path):
+        stock = MagicMock(spec=StockInterface)
+        stock.cancel_order.side_effect = RuntimeError("exchange error")
+        tracker, _, _, _ = make_tracker(tmp_path, stock=stock)
+        tracker.set_sell_order("order-sell-err")
+        tracker.cancel_sell()
+        assert tracker.sell_id == ""
+
 
 # ---------------------------------------------------------------------------
 # check_fill
@@ -205,6 +221,21 @@ class TestSaveLoad:
         tracker.set_buy_order("b-1")
         tmp_path_str = persist_path + ".tmp"
         assert not os.path.exists(tmp_path_str)
+
+    def test_load_returns_false_on_corrupt_file(self, tmp_path):
+        tracker, _, _, persist_path = make_tracker(tmp_path)
+        with open(persist_path, "w") as f:
+            f.write("not-valid-json{{{")
+        result = tracker.load()
+        assert result is False
+
+    def test_save_cleans_up_tmp_on_failure(self, tmp_path):
+        tracker, _, _, persist_path = make_tracker(tmp_path)
+        tmp_file = persist_path + ".tmp"
+        with patch("builtins.open", side_effect=OSError("disk full")):
+            with pytest.raises(OSError):
+                tracker.save()
+        assert not os.path.exists(tmp_file)
 
     def test_load_returns_false_when_file_absent(self, tmp_path):
         tracker, _, _, _ = make_tracker(tmp_path)

@@ -36,6 +36,14 @@ class Stock_MockBinance(StockInterface):
             return (STATUS_SUCCESS, 10000.0)
         return (STATUS_SUCCESS, 0.0)
 
+    def borrow(self, coin: str, amount: float) -> tuple:
+        from constants import STATUS_SUCCESS
+        return (STATUS_SUCCESS, amount)
+
+    def repay(self, coin: str, amount: float) -> tuple:
+        from constants import STATUS_SUCCESS
+        return (STATUS_SUCCESS, amount)
+
 
 class Stock_Mock(StockInterface):
     stock_name = "mock"
