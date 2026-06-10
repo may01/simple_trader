@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 
 import pandas as pd
 
@@ -331,14 +332,19 @@ class DataPreparer:
 
             # Collect per-row results in plain lists; bulk-assign once per tf
             # (per-cell .loc writes on a 20k×100+ frame are prohibitively slow).
+            # Fragmentation of the throwaway slices is intentional — sequential
+            # inserts beat pre-allocation there (see Indicators._run_fields) —
+            # so silence pandas' PerformanceWarning for the loop.
             results: dict[str, list[float]] = {col: [] for col in out_cols}
-            for ts in df.index:
-                slice_df = build_indicator_input(df, ts, tf)
-                data_point = _SliceDataPoint(slice_df, ts)
-                Indicators.compute_group(data_point, tf, groups=groups)
-                last = slice_df.iloc[-1]
-                for col in out_cols:
-                    results[col].append(last[col] if col in slice_df.columns else float("nan"))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=pd.errors.PerformanceWarning)
+                for ts in df.index:
+                    slice_df = build_indicator_input(df, ts, tf)
+                    data_point = _SliceDataPoint(slice_df, ts)
+                    Indicators.compute_group(data_point, tf, groups=groups)
+                    last = slice_df.iloc[-1]
+                    for col in out_cols:
+                        results[col].append(last[col] if col in slice_df.columns else float("nan"))
 
             # Single multi-column setitem — per-column inserts fragment the
             # frame (one block each) and trigger PerformanceWarning spam.

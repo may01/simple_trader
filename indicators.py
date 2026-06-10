@@ -245,10 +245,7 @@ class Indicators:
             data_point: DataPoint providing mutable DataFrame access via get_df(tf).
             tf: Timeframe in minutes.
         """
-        df = data_point.get_df(tf)
-        for field in cls._sorted_fields(tf):
-            series = field.compute(data_point, tf)
-            df[f"{tf}_{field.name}"] = series
+        cls._run_fields(data_point, tf, cls._sorted_fields(tf))
 
     @classmethod
     def compute_group(cls, data_point, tf: int, groups: list[str]) -> None:
@@ -259,8 +256,21 @@ class Indicators:
             tf: Timeframe in minutes.
             groups: Only fields whose group is in this list will be computed.
         """
+        cls._run_fields(data_point, tf, cls._sorted_fields(tf, groups=groups))
+
+    @classmethod
+    def _run_fields(cls, data_point, tf: int, fields: list[IndicatorField]) -> None:
+        """Compute fields in order, writing each into data_point.get_df(tf).
+
+        Sequential single-column inserts are intentional: dependent fields
+        must see earlier results, and on the small per-timestamp slices this
+        is faster than pre-allocating (a shared multi-column block gets
+        copy-on-write duplicated on every subsequent field write). Callers
+        looping per timestamp should suppress pandas' fragmentation
+        PerformanceWarning around the loop.
+        """
         df = data_point.get_df(tf)
-        for field in cls._sorted_fields(tf, groups=groups):
+        for field in fields:
             series = field.compute(data_point, tf)
             df[f"{tf}_{field.name}"] = series
 
