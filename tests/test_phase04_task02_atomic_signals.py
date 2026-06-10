@@ -4,7 +4,6 @@ import math
 
 import pytest
 from data import DataPoint
-from signals_lib.base_signal import BaseSignal
 from signals_lib.common import (
     Less_Signal,
     Greater_Signal,

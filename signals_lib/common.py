@@ -6,6 +6,18 @@ from data import DataPoint
 from signals_lib.base_signal import BaseSignal
 
 
+def _any_nan(*values: float) -> bool:
+    """Check if any of the given float values is NaN.
+
+    Args:
+        *values: Variable number of float values to check.
+
+    Returns:
+        bool: True if any value is NaN, False otherwise.
+    """
+    return any(math.isnan(v) for v in values)
+
+
 class Less_Signal(BaseSignal):
     """Signal: indi_1 < indi_2."""
 
@@ -37,7 +49,7 @@ class Less_Signal(BaseSignal):
         val_1 = data_point.get(self.indi_1, self.tf, self.shift)
         val_2 = data_point.get(self.indi_2, self.tf, self.shift)
 
-        if math.isnan(val_1) or math.isnan(val_2):
+        if _any_nan(val_1, val_2):
             return False
 
         return val_1 < val_2
@@ -74,7 +86,7 @@ class Greater_Signal(BaseSignal):
         val_1 = data_point.get(self.indi_1, self.tf, self.shift)
         val_2 = data_point.get(self.indi_2, self.tf, self.shift)
 
-        if math.isnan(val_1) or math.isnan(val_2):
+        if _any_nan(val_1, val_2):
             return False
 
         return val_1 > val_2
@@ -110,7 +122,7 @@ class Less_Val_Signal(BaseSignal):
         """
         val_1 = data_point.get(self.indi_1, self.tf, self.shift)
 
-        if math.isnan(val_1):
+        if _any_nan(val_1):
             return False
 
         return val_1 < self.val
@@ -146,7 +158,7 @@ class Greater_Val_Signal(BaseSignal):
         """
         val_1 = data_point.get(self.indi_1, self.tf, self.shift)
 
-        if math.isnan(val_1):
+        if _any_nan(val_1):
             return False
 
         return val_1 > self.val
@@ -183,7 +195,7 @@ class Rising_Signal(BaseSignal):
         val_current = data_point.get(self.indi_1, self.tf, self.shift)
         val_previous = data_point.get(self.indi_1, self.tf, self.shift + 1)
 
-        if math.isnan(val_current) or math.isnan(val_previous):
+        if _any_nan(val_current, val_previous):
             return False
 
         return val_current > val_previous
@@ -220,7 +232,7 @@ class Falling_Signal(BaseSignal):
         val_current = data_point.get(self.indi_1, self.tf, self.shift)
         val_previous = data_point.get(self.indi_1, self.tf, self.shift + 1)
 
-        if math.isnan(val_current) or math.isnan(val_previous):
+        if _any_nan(val_current, val_previous):
             return False
 
         return val_current < val_previous
@@ -259,7 +271,7 @@ class Diff_Greater_Signal(BaseSignal):
         val_1 = data_point.get(self.indi_1, self.tf, self.shift)
         val_2 = data_point.get(self.indi_2, self.tf, self.shift)
 
-        if math.isnan(val_1) or math.isnan(val_2):
+        if _any_nan(val_1, val_2):
             return False
 
         return (val_1 - val_2) > self.val
@@ -298,7 +310,7 @@ class Diff_Less_Signal(BaseSignal):
         val_1 = data_point.get(self.indi_1, self.tf, self.shift)
         val_2 = data_point.get(self.indi_2, self.tf, self.shift)
 
-        if math.isnan(val_1) or math.isnan(val_2):
+        if _any_nan(val_1, val_2):
             return False
 
         return (val_1 - val_2) < self.val
@@ -340,7 +352,7 @@ class Diff_LessIndi_Signal(BaseSignal):
         val_2 = data_point.get(self.indi_2, self.tf, self.shift)
         val_dist = data_point.get(self.indi_dist, self.tf, self.shift)
 
-        if math.isnan(val_1) or math.isnan(val_2) or math.isnan(val_dist):
+        if _any_nan(val_1, val_2, val_dist):
             return False
 
         diff = val_1 - val_2
@@ -395,7 +407,7 @@ class Diff_GreaterIndi_Signal(BaseSignal):
         val_2 = data_point.get(self.indi_2, self.tf_2, self.shift)
         val_dist = data_point.get(self.indi_dist, self.tf_dist, self.shift)
 
-        if math.isnan(val_1) or math.isnan(val_2) or math.isnan(val_dist):
+        if _any_nan(val_1, val_2, val_dist):
             return False
 
         diff = val_1 - val_2
