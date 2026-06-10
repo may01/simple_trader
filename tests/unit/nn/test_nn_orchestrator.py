@@ -309,11 +309,7 @@ def test_train_uses_closed_candles_only(mock_nn_class, mock_cm_class, sample_df,
 def test_run_inference_returns_only_nn_columns(mock_nn_class, mock_cm_class, sample_df, mock_data_attributes):
     """run_inference() returns DataFrame with only NN columns."""
     mock_nn = MagicMock()
-    mock_nn.run_batch.return_value = np.array([
-        [0.1, 0.8, 0.1],
-        [0.2, 0.3, 0.5],
-        [0.6, 0.2, 0.2],
-    ] * 33)[:99]  # Match expected rows (closed rows)
+    mock_nn.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
 
     mock_nn_class.return_value = mock_nn
 
@@ -343,11 +339,7 @@ def test_run_inference_sets_nan_for_missing_features(
 ):
     """run_inference() sets NaN for rows with NaN features."""
     mock_nn = MagicMock()
-    # Simulate running on fewer rows (only non-NaN)
-    mock_nn.run_batch.return_value = np.array([
-        [0.1, 0.8, 0.1],
-        [0.2, 0.3, 0.5],
-    ] * 20)[:40]  # Fewer rows for non-NaN features
+    mock_nn.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
 
     mock_nn_class.return_value = mock_nn
 
@@ -397,10 +389,7 @@ def test_run_inference_skips_tf_with_no_checkpoint(
 def test_run_inference_preserves_index(mock_nn_class, mock_cm_class, sample_df, mock_data_attributes):
     """run_inference() preserves index from input df."""
     mock_nn = MagicMock()
-    mock_nn.run_batch.return_value = np.array([
-        [0.1, 0.8, 0.1],
-        [0.2, 0.3, 0.5],
-    ] * 50)[:99]
+    mock_nn.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
 
     mock_nn_class.return_value = mock_nn
     mock_cm = MagicMock()
@@ -440,7 +429,7 @@ def test_train_and_inference_multiple_tfs(
         "val_loss": 0.6,
         "val_accuracy": 0.7,
     }
-    mock_nn_15.run_batch.return_value = np.random.dirichlet([1, 1, 1], 99)
+    mock_nn_15.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
 
     mock_nn_60 = MagicMock()
     mock_nn_60.train.return_value = {
@@ -449,7 +438,7 @@ def test_train_and_inference_multiple_tfs(
         "val_loss": 0.5,
         "val_accuracy": 0.75,
     }
-    mock_nn_60.run_batch.return_value = np.random.dirichlet([1, 1, 1], 99)
+    mock_nn_60.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
 
     # Return different mocks for different calls
     mock_nn_class.side_effect = [mock_nn_15, mock_nn_60, mock_nn_15, mock_nn_60]

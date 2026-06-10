@@ -167,54 +167,44 @@ class NNOrchestrator:
         for tf in tfs:
             tf_str = str(tf)
 
-            # Load best checkpoint
-            model = NNModel(input_size=1)  # Placeholder, will be set during load
-            cm = CheckpointManager(self.checkpoint_dir, model_name=f"model_{tf}")
-            if not cm.load_best(model):
-                # No checkpoint available for this TF
-                continue
-
             # Determine feature columns for this TF
             feature_cols_for_tf = [col for col in self.feature_cols if col.startswith(f"{tf}_")]
             if not feature_cols_for_tf:
                 continue
 
-            # For each row, check if all features are non-NaN
-            # If yes, normalize and run inference
-            # If no, set NaN
-            probs_up = []
-            probs_neutral = []
-            probs_down = []
+            # Load best checkpoint using correct input_size
+            model = NNModel(input_size=len(feature_cols_for_tf))
+            cm = CheckpointManager(self.checkpoint_dir, model_name=f"model_{tf}")
+            if not cm.load_best(model):
+                continue
 
-            for idx in range(len(df)):
-                row = df.iloc[idx]
-                feature_values = row[feature_cols_for_tf]
+            # Build output arrays initialized to NaN
+            n = len(df)
+            probs_up = np.full(n, np.nan)
+            probs_neutral = np.full(n, np.nan)
+            probs_down = np.full(n, np.nan)
 
-                # Check if any feature is NaN
-                if feature_values.isna().any():
-                    probs_up.append(np.nan)
-                    probs_neutral.append(np.nan)
-                    probs_down.append(np.nan)
+            # Build feature matrix — normalize per column
+            feature_matrix = np.full((n, len(feature_cols_for_tf)), np.nan, dtype="float32")
+            for j, col in enumerate(feature_cols_for_tf):
+                if col not in df.columns:
+                    continue
+                values = df[col].values.astype("float64")
+                mean, std = data_attributes.get_stats(col)
+                if std == 0:
+                    feature_matrix[:, j] = values
                 else:
-                    # Normalize features
-                    normalized = []
-                    for col in feature_cols_for_tf:
-                        value = row[col]
-                        mean, std = data_attributes.get_stats(col)
-                        if std == 0:
-                            # std=0 → use raw value
-                            normalized.append(value)
-                        else:
-                            normalized.append((value - mean) / std)
+                    feature_matrix[:, j] = (values - mean) / std
 
-                    # Run inference on this single row
-                    X_single = np.array(normalized, dtype="float32")
-                    probs = model.run(X_single)  # Returns (3,) array
-                    probs_up.append(probs[0])
-                    probs_neutral.append(probs[1])
-                    probs_down.append(probs[2])
+            # Identify rows where ALL features are non-NaN
+            valid_mask = ~np.isnan(feature_matrix).any(axis=1)
+            if valid_mask.any():
+                X_batch = feature_matrix[valid_mask]
+                batch_probs = model.run_batch(X_batch)  # (M, 3)
+                probs_up[valid_mask] = batch_probs[:, 0]
+                probs_neutral[valid_mask] = batch_probs[:, 1]
+                probs_down[valid_mask] = batch_probs[:, 2]
 
-            # Create output columns
             result_data[f"{tf}_nn_prob_up"] = probs_up
             result_data[f"{tf}_nn_prob_neutral"] = probs_neutral
             result_data[f"{tf}_nn_prob_down"] = probs_down
