@@ -420,6 +420,9 @@ class TestRunSimulate:
         mock_backtesting_perf.PerformanceAnalyzer = mock_analyzer_cls
         mock_robots = MagicMock()
 
+        _keys_to_mock = ["data", "backtesting.simulation_orchestrator",
+                         "backtesting.performance_analyzer", "robots.train_robot"]
+        _saved = {k: sys.modules.get(k) for k in _keys_to_mock}
         sys.modules["data"] = mock_data_module
         sys.modules["backtesting.simulation_orchestrator"] = mock_backtesting_sim
         sys.modules["backtesting.performance_analyzer"] = mock_backtesting_perf
@@ -437,10 +440,11 @@ class TestRunSimulate:
                 t = mod.Trainer()
                 t._run_simulate()
         finally:
-            # Restore originals
-            for key in ["data", "backtesting.simulation_orchestrator",
-                        "backtesting.performance_analyzer", "robots.train_robot"]:
-                sys.modules.pop(key, None)
+            for key, original in _saved.items():
+                if original is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = original
             sys.modules["pandas"] = real_pd
 
         mock_orch_instance.run.assert_called_once_with(mock_sim_data)
@@ -486,6 +490,8 @@ class TestRunSimulateNN:
         mock_config_module = MagicMock()
         mock_config_module.CANDLES = [1, 5, 15, 60]
 
+        _nn_keys = ["training.nn_orchestrator", "indicators", "config_loader"]
+        _nn_saved = {k: sys.modules.get(k) for k in _nn_keys}
         sys.modules["training.nn_orchestrator"] = mock_nn_module
         sys.modules["indicators"] = mock_indicators_module
         sys.modules["config_loader"] = mock_config_module
@@ -498,8 +504,11 @@ class TestRunSimulateNN:
                 t = mod.Trainer()
                 t._run_simulate_nn()
         finally:
-            for key in ["training.nn_orchestrator", "indicators", "config_loader"]:
-                sys.modules.pop(key, None)
+            for key, original in _nn_saved.items():
+                if original is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = original
 
         mock_nn_orch.run_inference.assert_called_once()
         # Result should be saved as a pkl file
