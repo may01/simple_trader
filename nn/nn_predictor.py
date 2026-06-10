@@ -143,12 +143,17 @@ class NNPredictor:
             else:
                 feature_vector.append((fvalue - mean) / std)
 
+        last_idx = len(df) - 1
+
+        if not feature_vector:
+            df.loc[last_idx, f"{tf}_nn_prob_up"] = np.nan
+            df.loc[last_idx, f"{tf}_nn_prob_neutral"] = np.nan
+            df.loc[last_idx, f"{tf}_nn_prob_down"] = np.nan
+            return
+
         # Run model
         features_array = np.array(feature_vector, dtype=np.float32)
         probs = self.models[tf_str].run(features_array)
-
-        # Write probabilities to last row
-        last_idx = len(df) - 1
         df.loc[last_idx, f"{tf}_nn_prob_up"] = probs[0]
         df.loc[last_idx, f"{tf}_nn_prob_neutral"] = probs[1]
         df.loc[last_idx, f"{tf}_nn_prob_down"] = probs[2]
@@ -198,8 +203,8 @@ class NNPredictor:
             # Create model
             model = NNModel(input_size=input_size)
 
-            # Try to load checkpoint
-            cm = CheckpointManager(checkpoint_dir)
+            # Try to load checkpoint — use same model_name convention as NNOrchestrator
+            cm = CheckpointManager(checkpoint_dir, model_name=f"model_{tf}")
             if not cm.load_best(model):
                 logger.warning(
                     f"NNPredictor.load: no best checkpoint for TF {tf}; skipping"

@@ -459,27 +459,21 @@ def test_compute_handles_multiple_tfs(mock_data_attributes, mock_data_point):
 
 
 def test_compute_with_no_matching_features(mock_data_attributes, mock_data_point):
-    """Test compute() when no feature_cols match the TF."""
+    """Test compute() when no feature_cols match the TF — should write NaN, not call model."""
     dp, dfs = mock_data_point
 
     model = MagicMock(spec=NNModel)
-    model.run = MagicMock()
-
-    def run_side_effect(features):
-        # Empty feature array
-        assert len(features) == 0
-        return np.array([0.5, 0.3, 0.2])
-
-    model.run.side_effect = run_side_effect
-
     models = {"15": model}
     # Only 60min features, but computing for 15min
     predictor = NNPredictor(models, mock_data_attributes, ["60_col1", "60_col2"])
 
     predictor.compute(dp, 15)
 
-    # Should still write NaN because model expects input_size=0 (edge case)
-    assert model.run.call_count == 1
+    # No features extracted → model should not be called, NaN written instead
+    assert model.run.call_count == 0
+    df_15 = dfs[15]
+    last_idx = len(df_15) - 1
+    assert pd.isna(df_15.loc[last_idx, "15_nn_prob_up"])
 
 
 def test_predictor_attributes(mock_data_attributes):

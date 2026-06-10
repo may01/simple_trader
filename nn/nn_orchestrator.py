@@ -51,6 +51,7 @@ class NNOrchestrator:
         df: pd.DataFrame,
         data_attributes: DataAttributes,
         tfs: list[int],
+        epochs: int = 100,
         epoch_callback: Optional[Callable[[str, int, dict], None]] = None,
     ) -> dict:
         """Train NN models for each timeframe.
@@ -90,13 +91,12 @@ class NNOrchestrator:
                 log_warning(f"No feature columns found for TF {tf}. Skipping.")
                 continue
 
-            # Start with all rows
-            df_work = df.copy()
-
             # Filter to closed-candle rows if is_closed column exists
             is_closed_col = f"{tf}_is_closed"
-            if is_closed_col in df_work.columns:
-                df_work = df_work[df_work[is_closed_col].astype(bool)]
+            if is_closed_col in df.columns:
+                df_work = df[df[is_closed_col].astype(bool)]
+            else:
+                df_work = df
 
             # Extract features: only rows where all feature cols are non-NaN
             df_work = df_work[feature_cols_for_tf + [target_col]].dropna()
@@ -117,12 +117,10 @@ class NNOrchestrator:
                 if epoch_callback is not None:
                     epoch_callback(tf_str, epoch, metrics)
 
-            metrics = model.train(X, y, epoch_callback=epoch_cb_wrapper)
+            metrics = model.train(X, y, epochs=epochs, epoch_callback=epoch_cb_wrapper)
 
             # Save via CheckpointManager
             cm = CheckpointManager(self.checkpoint_dir, model_name=f"model_{tf}")
-            # Use a reasonable default epoch count (model.train returns metrics from last epoch)
-            epochs = 100  # Default, could be parameterized
             cm.save(model, metrics, epoch=epochs)
 
             # Store model

@@ -56,6 +56,11 @@ class NNModel:
         n = len(X)
         split = int(n * 0.8)
 
+        if split == 0 or split == n:
+            raise ValueError(
+                f"Dataset too small for 80/20 split: {n} samples. Need at least 2."
+            )
+
         X_train, X_val = X[:split], X[split:]
         y_train, y_val = y[:split], y[split:]
 

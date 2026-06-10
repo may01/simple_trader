@@ -104,10 +104,12 @@ def sample_df_with_nans():
 def test_init_creates_empty_trained_models():
     """NNOrchestrator initializes with empty trained_models dict."""
     with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14"],
-        )
+        with patch.dict(os.environ, {}, clear=False) as env:
+            env.pop("NUM_WORKERS", None)
+            orch = NNOrchestrator(
+                checkpoint_dir=tmp_dir,
+                feature_cols=["15_rsi_14", "15_cci_14"],
+            )
         assert orch.checkpoint_dir == tmp_dir
         assert orch.feature_cols == ["15_rsi_14", "15_cci_14"]
         assert orch.trained_models == {}
