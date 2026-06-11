@@ -314,8 +314,8 @@ class TestATRFields:
         atr14 = ATR14Field()
         run_field(dp, df, atr14, tf)
 
-        atr_ma = ATR_MAField()
-        series = run_field(dp, df, atr_ma, tf)
+        atr_14_ma_20 = ATR_MAField()
+        series = run_field(dp, df, atr_14_ma_20, tf)
 
         valid = series.dropna()
         assert len(valid) > 0
@@ -394,8 +394,8 @@ class TestCCI14:
         cci14 = CCI14Field()
         run_field(dp, df, cci14, tf)
 
-        cci_ma = CCI_MAField()
-        series = run_field(dp, df, cci_ma, tf)
+        cci_14_ma_20 = CCI_MAField()
+        series = run_field(dp, df, cci_14_ma_20, tf)
         valid = series.dropna()
         assert len(valid) > 0
 
@@ -431,7 +431,7 @@ class TestVolumeFields:
         assert abs(series.iloc[-1] - expected_last) < 1e-10
 
     def test_vol_sell_ma_depends_on_vol_ma_and_buy_ma(self):
-        """VolSellMA = vol_ma - vol_buy_ma."""
+        """VolSellMA = vol_ma_20 - vol_buy_ma_20."""
         tf = 5
         dp, df = make_dp(tf=tf, n=120)
 
@@ -445,7 +445,7 @@ class TestVolumeFields:
         series = run_field(dp, df, vol_sell, tf)
 
         # spot-check: last valid value
-        expected_last = df[f"{tf}_vol_ma"].iloc[-1] - df[f"{tf}_vol_buy_ma"].iloc[-1]
+        expected_last = df[f"{tf}_vol_ma_20"].iloc[-1] - df[f"{tf}_vol_buy_ma_20"].iloc[-1]
         assert abs(series.iloc[-1] - expected_last) < 1e-10
 
 
@@ -493,7 +493,7 @@ class TestPriceDerivatives:
         for fld in [CloseDiffPrcField(), CloseDiffPrcRMField(), CloseDiffPrcRMMeanAboveField()]:
             run_field(dp, df, fld, tf)
 
-        series = df[f"{tf}_close_diff_prc_rm_mean_above"]
+        series = df[f"{tf}_close_diff_prc_rm_20_mean_above"]
         valid = series.dropna()
         assert len(valid) > 0
         assert (valid >= 0).all()
@@ -506,7 +506,7 @@ class TestPriceDerivatives:
         for fld in [CloseDiffPrcField(), CloseDiffPrcRMField(), CloseDiffPrcRMMeanBelowField()]:
             run_field(dp, df, fld, tf)
 
-        series = df[f"{tf}_close_diff_prc_rm_mean_below"]
+        series = df[f"{tf}_close_diff_prc_rm_20_mean_below"]
         valid = series.dropna()
         assert len(valid) > 0
         assert (valid <= 0).all()
@@ -555,8 +555,8 @@ class TestTrendFlags:
         ema50 = EMAField(length=50, name="ema_50")
         run_field(dp, df, ema50, tf)
 
-        trend_up = TrendUpField()
-        series = run_field(dp, df, trend_up, tf)
+        trend_up_50 = TrendUpField()
+        series = run_field(dp, df, trend_up_50, tf)
 
         assert isinstance(series, pd.Series)
         assert len(series) == len(df)
@@ -573,8 +573,8 @@ class TestTrendFlags:
         ema50 = EMAField(length=50, name="ema_50")
         run_field(dp, df, ema50, tf)
 
-        trend_down = TrendDownField()
-        series = run_field(dp, df, trend_down, tf)
+        trend_down_50 = TrendDownField()
+        series = run_field(dp, df, trend_down_50, tf)
 
         assert isinstance(series, pd.Series)
         valid = series.dropna()
@@ -639,12 +639,12 @@ class TestNNFeatureFields:
         tf = 5
         dp, df = make_dp(tf=tf, n=120)
 
-        # Need atr_14, atr_ma, close_diff_prc
+        # Need atr_14, atr_14_ma_20, close_diff_prc
         atr14 = ATR14Field()
         run_field(dp, df, atr14, tf)
 
-        atr_ma = ATR_MAField()
-        run_field(dp, df, atr_ma, tf)
+        atr_14_ma_20 = ATR_MAField()
+        run_field(dp, df, atr_14_ma_20, tf)
 
         cdp = CloseDiffPrcField()
         run_field(dp, df, cdp, tf)

@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import talib
 
 from ..framework import IndicatorField
 
+
 class EMAField(IndicatorField):
-    """Generic EMA on close price."""
+    """Generic EMA on close price; name carries the length (ema_50)."""
 
     group = "trend"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
 
-    def __init__(self, length: int, name: str) -> None:
+    def __init__(self, length: int = 25, name: str | None = None) -> None:
         self.length = length
-        self.name = name
+        self.params = {"length": length}
+        self.name = name if name is not None else f"ema_{length}"
+        self.dependencies: list[str] = []
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
@@ -28,92 +28,62 @@ class EMAField(IndicatorField):
         return pd.Series(result, index=df.index)
 
 
-class MACDField(IndicatorField):
-    """MACD line (fast=12, slow=26, signal=9)."""
+class _MACDBase(IndicatorField):
+    """Shared MACD machinery; subclasses pick the output and default periods."""
 
-    name = "macd"
     group = "trend"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+    _output: int  # 0 = macd line, 1 = signal, 2 = histogram
+    _stem: str    # name stem: "macd", "macd_signal", "macd_hist"
+
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9) -> None:
+        self.fast = fast
+        self.slow = slow
+        self.signal = signal
+        self.params = {"fast": fast, "slow": slow, "signal": signal}
+        self.name = f"{self._stem}_{fast}_{slow}_{signal}"
+        self.dependencies: list[str] = []
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         close = df[f"{tf}_close"].values.astype(float)
-        macd, _signal, _hist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
-        return pd.Series(macd, index=df.index)
+        outputs = talib.MACD(
+            close, fastperiod=self.fast, slowperiod=self.slow, signalperiod=self.signal
+        )
+        return pd.Series(outputs[self._output], index=df.index)
 
 
-class MACDSignalField(IndicatorField):
-    """MACD signal line (fast=12, slow=26, signal=9)."""
+class MACDField(_MACDBase):
+    """MACD line; name carries the periods (macd_12_26_9)."""
 
-    name = "macd_signal"
-    group = "trend"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        _macd, signal, _hist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
-        return pd.Series(signal, index=df.index)
+    _output = 0
+    _stem = "macd"
 
 
-class MACDHistField(IndicatorField):
-    """MACD histogram (fast=12, slow=26, signal=9)."""
+class MACDSignalField(_MACDBase):
+    """MACD signal line (macd_signal_12_26_9)."""
 
-    name = "macd_hist"
-    group = "trend"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        _macd, _signal, hist = talib.MACD(close, fastperiod=12, slowperiod=26, signalperiod=9)
-        return pd.Series(hist, index=df.index)
+    _output = 1
+    _stem = "macd_signal"
 
 
-class MACDFastField(IndicatorField):
-    """Fast MACD line (fast=5, slow=13, signal=9)."""
+class MACDHistField(_MACDBase):
+    """MACD histogram (macd_hist_12_26_9)."""
 
-    name = "macd_fast"
-    group = "trend"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        macd, _signal, _hist = talib.MACD(close, fastperiod=5, slowperiod=13, signalperiod=9)
-        return pd.Series(macd, index=df.index)
+    _output = 2
+    _stem = "macd_hist"
 
 
-class MACDFastSignalField(IndicatorField):
-    """Fast MACD signal line (fast=5, slow=13, signal=9)."""
+class MACDFastField(MACDField):
+    """MACD line with fast defaults (macd_5_13_9)."""
 
-    name = "macd_fast_signal"
-    group = "trend"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        _macd, signal, _hist = talib.MACD(close, fastperiod=5, slowperiod=13, signalperiod=9)
-        return pd.Series(signal, index=df.index)
+    def __init__(self, fast: int = 5, slow: int = 13, signal: int = 9) -> None:
+        super().__init__(fast=fast, slow=slow, signal=signal)
 
 
-# ---------------------------------------------------------------------------
-# Oscillators Group
-# ---------------------------------------------------------------------------
+class MACDFastSignalField(MACDSignalField):
+    """MACD signal line with fast defaults (macd_signal_5_13_9)."""
 
+    def __init__(self, fast: int = 5, slow: int = 13, signal: int = 9) -> None:
+        super().__init__(fast=fast, slow=slow, signal=signal)

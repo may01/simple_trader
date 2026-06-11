@@ -2,44 +2,50 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
-import talib
 
 from ..framework import IndicatorField
 
-class NNRSINormField(IndicatorField):
-    """Normalized rsi_ma8: (rsi - rolling_mean) / rolling_std."""
 
-    name = "nn_rsi_ma8_norm_mean"
+class NNRSINormField(IndicatorField):
+    """Normalized RSI MA: (x - rolling_mean) / rolling_std over a window."""
+
     group = "nn_features"
-    dependencies: list[str] = ["rsi_ma8"]
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+
+    def __init__(self, source: str = "rsi_ma8", window: int = 20) -> None:
+        self.source = source
+        self.window = window
+        self.params = {"source": source, "window": window}
+        self.name = f"nn_{source}_norm_mean_{window}"
+        self.dependencies = [source]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        rsi = df[f"{tf}_rsi_ma8"]
-        roll_mean = rsi.rolling(20).mean()
-        roll_std = rsi.rolling(20).std().clip(lower=1e-8)
-        return (rsi - roll_mean) / roll_std
+        series = df[f"{tf}_{self.source}"]
+        roll_mean = series.rolling(self.window).mean()
+        roll_std = series.rolling(self.window).std().clip(lower=1e-8)
+        return (series - roll_mean) / roll_std
 
 
 class NNCloseDiffATRField(IndicatorField):
-    """close_diff_prc divided by atr_ma (clipped to avoid division by zero)."""
+    """close_diff_prc divided by an ATR MA column (clipped against zero)."""
 
-    name = "nn_close_diff_atr_ma"
     group = "nn_features"
-    dependencies: list[str] = ["close_diff_prc", "atr_ma"]
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+
+    def __init__(self, atr_period: int = 14, atr_ma_length: int = 20) -> None:
+        self.atr_period = atr_period
+        self.atr_ma_length = atr_ma_length
+        self.params = {"atr_period": atr_period, "atr_ma_length": atr_ma_length}
+        self._atr_ma_col = f"atr_{atr_period}_ma_{atr_ma_length}"
+        self.name = f"nn_close_diff_{self._atr_ma_col}"
+        self.dependencies = ["close_diff_prc", self._atr_ma_col]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         cdp = df[f"{tf}_close_diff_prc"]
-        atr_ma = df[f"{tf}_atr_ma"].clip(lower=1e-8)
+        atr_ma = df[f"{tf}_{self._atr_ma_col}"].clip(lower=1e-8)
         return cdp / atr_ma
-
-

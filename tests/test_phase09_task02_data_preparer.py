@@ -64,19 +64,19 @@ class TestRunIndicatorPass:
     def test_writes_columns_into_wide_df(self, preparer, wide_df):
         preparer._run_indicator_pass(wide_df, groups=["volume"], tfs=[1])
 
-        assert "1_vol_ma" in wide_df.columns, "indicator results must land in the wide df"
-        assert "1_vol_sell_ma" in wide_df.columns, "dependent fields must see prior results"
+        assert "1_vol_ma_20" in wide_df.columns, "indicator results must land in the wide df"
+        assert "1_vol_sell_ma_20" in wide_df.columns, "dependent fields must see prior results"
 
     def test_values_match_rolling_window_per_row(self, preparer, wide_df):
         preparer._run_indicator_pass(wide_df, groups=["volume"], tfs=[1])
 
         # tf=1: every row closed; value at last row = mean of last 20 volumes
         expected_last = wide_df["1_volume"].iloc[-20:].mean()
-        assert wide_df["1_vol_ma"].iloc[-1] == pytest.approx(expected_last)
+        assert wide_df["1_vol_ma_20"].iloc[-1] == pytest.approx(expected_last)
 
         # dependent field consistent with its inputs at the same row
-        assert wide_df["1_vol_sell_ma"].iloc[-1] == pytest.approx(
-            wide_df["1_vol_ma"].iloc[-1] - wide_df["1_vol_buy_ma"].iloc[-1]
+        assert wide_df["1_vol_sell_ma_20"].iloc[-1] == pytest.approx(
+            wide_df["1_vol_ma_20"].iloc[-1] - wide_df["1_vol_buy_ma_20"].iloc[-1]
         )
 
     def test_partial_candle_rows_use_closed_candles_plus_partial(self, preparer):
@@ -110,7 +110,7 @@ class TestRunIndicatorPass:
         partial = wide_df["5_volume"].iloc[pos]
         expected = (last_19_closed.sum() + partial) / 20
 
-        assert wide_df["5_vol_ma"].iloc[pos] == pytest.approx(expected)
+        assert wide_df["5_vol_ma_20"].iloc[pos] == pytest.approx(expected)
 
 
 class TestConfigClassDependencySync:
@@ -133,3 +133,24 @@ class TestConfigClassDependencySync:
                     f"class={sorted(field.dependencies)}"
                 )
         assert not mismatches, "yaml/class dependency drift:\n" + "\n".join(mismatches)
+
+
+class TestRegistryNameInvariant:
+    """Registry key must equal the instantiated field's derived name — the
+    produced column is {tf}_{name}, and Indicators looks fields up by yaml
+    name, so any drift silently swaps a real field for a placeholder."""
+
+    def test_registry_keys_match_field_names(self):
+        from config_loader import load_indicators_config
+        from indicators import _FIELD_REGISTRY
+
+        cfg_by_name = {cfg.name: cfg for cfg in load_indicators_config()}
+        mismatches = []
+        for key, factory in _FIELD_REGISTRY.items():
+            cfg = cfg_by_name.get(key)
+            if cfg is None:
+                continue  # registry entry not enabled in yaml
+            field = factory(cfg)
+            if field.name != key:
+                mismatches.append(f"{key} → field.name={field.name!r}")
+        assert not mismatches, "registry key / field name drift:\n" + "\n".join(mismatches)

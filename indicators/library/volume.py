@@ -2,59 +2,60 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
-import talib
 
 from ..framework import IndicatorField
 
 
 class VolMAField(IndicatorField):
-    """20-period rolling mean of volume."""
+    """Rolling mean of volume."""
 
-    name = "vol_ma"
     group = "volume"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+
+    def __init__(self, period: int = 20) -> None:
+        self.period = period
+        self.params = {"period": period}
+        self.name = f"vol_ma_{period}"
+        self.dependencies: list[str] = []
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        return df[f"{tf}_volume"].rolling(20).mean()
+        return df[f"{tf}_volume"].rolling(self.period).mean()
 
 
 class VolBuyMAField(IndicatorField):
-    """20-period rolling mean of buy_volume."""
+    """Rolling mean of buy_volume."""
 
-    name = "vol_buy_ma"
     group = "volume"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+
+    def __init__(self, period: int = 20) -> None:
+        self.period = period
+        self.params = {"period": period}
+        self.name = f"vol_buy_ma_{period}"
+        self.dependencies: list[str] = []
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        return df[f"{tf}_buy_volume"].rolling(20).mean()
+        return df[f"{tf}_buy_volume"].rolling(self.period).mean()
 
 
 class VolSellMAField(IndicatorField):
-    """vol_ma minus vol_buy_ma."""
+    """vol_ma minus vol_buy_ma at the same period."""
 
-    name = "vol_sell_ma"
     group = "volume"
-    dependencies: list[str] = ["vol_ma", "vol_buy_ma"]
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+
+    def __init__(self, period: int = 20) -> None:
+        self.period = period
+        self.params = {"period": period}
+        self.name = f"vol_sell_ma_{period}"
+        self.dependencies = [f"vol_ma_{period}", f"vol_buy_ma_{period}"]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        return df[f"{tf}_vol_ma"] - df[f"{tf}_vol_buy_ma"]
-
-
-# ---------------------------------------------------------------------------
-# Price Derivatives Group
-# ---------------------------------------------------------------------------
-
+        return df[f"{tf}_vol_ma_{self.period}"] - df[f"{tf}_vol_buy_ma_{self.period}"]

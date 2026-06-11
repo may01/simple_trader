@@ -1,4 +1,10 @@
-"""indicators.registry — name → field-factory mapping loaded by Indicators."""
+"""indicators.registry — name → field-factory mapping loaded by Indicators.
+
+Registry keys equal the field's derived name (which carries its parameters),
+so the produced column is always ``{tf}_{key}``. Every factory forwards
+``cfg.params`` from indicators_config.yaml — an empty params dict yields the
+defaults encoded in each field class.
+"""
 
 from __future__ import annotations
 
@@ -13,68 +19,65 @@ from .library.targets import *  # noqa: F401,F403
 from .library.trend_flags import *  # noqa: F401,F403
 from .library.nn_features import *  # noqa: F401,F403
 
-# ===========================================================================
-# Factory registry — maps field names → factory callables
-# ===========================================================================
-
 _FIELD_REGISTRY: dict[str, object] = {
     # Momentum
-    "rsi_14": lambda cfg: RSI14Field(),
-    "rsi_ma8": lambda cfg: RSI_MAField("rsi_14", 8, "rsi_ma8"),
-    "rsi_ma12": lambda cfg: RSI_MAField("rsi_14", 12, "rsi_ma12"),
-    "rsi_ma24": lambda cfg: RSI_MAField("rsi_14", 24, "rsi_ma24"),
-    "rsi_ma8_diff": lambda cfg: RSI_MA_DiffField("rsi_ma8", "rsi_ma8_diff"),
-    "rsi_ma12_diff": lambda cfg: RSI_MA_DiffField("rsi_ma12", "rsi_ma12_diff"),
-    "rsi_ma24_diff": lambda cfg: RSI_MA_DiffField("rsi_ma24", "rsi_ma24_diff"),
+    "rsi_14": lambda cfg: RSI14Field(**cfg.params),
+    "rsi_ma8": lambda cfg: RSI_MAField(**{"length": 8, **cfg.params}),
+    "rsi_ma12": lambda cfg: RSI_MAField(**{"length": 12, **cfg.params}),
+    "rsi_ma24": lambda cfg: RSI_MAField(**{"length": 24, **cfg.params}),
+    "rsi_ma8_diff": lambda cfg: RSI_MA_DiffField(**{"source_ma": "rsi_ma8", **cfg.params}),
+    "rsi_ma12_diff": lambda cfg: RSI_MA_DiffField(**{"source_ma": "rsi_ma12", **cfg.params}),
+    "rsi_ma24_diff": lambda cfg: RSI_MA_DiffField(**{"source_ma": "rsi_ma24", **cfg.params}),
     # Trend
-    "ema_7": lambda cfg: EMAField(7, "ema_7"),
-    "ema_14": lambda cfg: EMAField(14, "ema_14"),
-    "ema_25": lambda cfg: EMAField(25, "ema_25"),
-    "ema_50": lambda cfg: EMAField(50, "ema_50"),
-    "ema_100": lambda cfg: EMAField(100, "ema_100"),
-    "macd": lambda cfg: MACDField(),
-    "macd_signal": lambda cfg: MACDSignalField(),
-    "macd_hist": lambda cfg: MACDHistField(),
-    "macd_fast": lambda cfg: MACDFastField(),
-    "macd_fast_signal": lambda cfg: MACDFastSignalField(),
+    "ema_7": lambda cfg: EMAField(**{"length": 7, **cfg.params}),
+    "ema_14": lambda cfg: EMAField(**{"length": 14, **cfg.params}),
+    "ema_25": lambda cfg: EMAField(**{"length": 25, **cfg.params}),
+    "ema_50": lambda cfg: EMAField(**{"length": 50, **cfg.params}),
+    "ema_100": lambda cfg: EMAField(**{"length": 100, **cfg.params}),
+    "macd_12_26_9": lambda cfg: MACDField(**cfg.params),
+    "macd_signal_12_26_9": lambda cfg: MACDSignalField(**cfg.params),
+    "macd_hist_12_26_9": lambda cfg: MACDHistField(**cfg.params),
+    "macd_5_13_9": lambda cfg: MACDFastField(**cfg.params),
+    "macd_signal_5_13_9": lambda cfg: MACDFastSignalField(**cfg.params),
     # Oscillators
-    "sar": lambda cfg: SARField(),
-    "cci_14": lambda cfg: CCI14Field(),
-    "cci_ma": lambda cfg: CCI_MAField(),
+    "sar_002_02": lambda cfg: SARField(**cfg.params),
+    "cci_14": lambda cfg: CCI14Field(**cfg.params),
+    "cci_14_ma_20": lambda cfg: CCI_MAField(**cfg.params),
     # Volatility
-    "atr_14": lambda cfg: ATR14Field(),
-    "natr_14": lambda cfg: NATR14Field(),
-    "atr_ma": lambda cfg: ATR_MAField(),
-    "bb_upper": lambda cfg: BollingerUpperField(),
-    "bb_middle": lambda cfg: BollingerMiddleField(),
-    "bb_lower": lambda cfg: BollingerLowerField(),
-    "bb_fast_upper": lambda cfg: BollingerFastUpperField(),
-    "bb_fast_lower": lambda cfg: BollingerFastLowerField(),
-    "bb_wide_upper": lambda cfg: BollingerWideUpperField(),
-    "bb_wide_lower": lambda cfg: BollingerWideLowerField(),
+    "atr_14": lambda cfg: ATR14Field(**cfg.params),
+    "natr_14": lambda cfg: NATR14Field(**cfg.params),
+    "atr_14_ma_20": lambda cfg: ATR_MAField(**cfg.params),
+    "natr_14_ma_5": lambda cfg: NATR_MAField(**cfg.params),
+    "bb_upper_20_2": lambda cfg: BollingerUpperField(**cfg.params),
+    "bb_middle_20_2": lambda cfg: BollingerMiddleField(**cfg.params),
+    "bb_lower_20_2": lambda cfg: BollingerLowerField(**cfg.params),
+    "bb_upper_10_15": lambda cfg: BollingerFastUpperField(**cfg.params),
+    "bb_lower_10_15": lambda cfg: BollingerFastLowerField(**cfg.params),
+    "bb_upper_20_3": lambda cfg: BollingerWideUpperField(**cfg.params),
+    "bb_lower_20_3": lambda cfg: BollingerWideLowerField(**cfg.params),
     # Volume
-    "vol_ma": lambda cfg: VolMAField(),
-    "vol_buy_ma": lambda cfg: VolBuyMAField(),
-    "vol_sell_ma": lambda cfg: VolSellMAField(),
+    "vol_ma_20": lambda cfg: VolMAField(**cfg.params),
+    "vol_buy_ma_20": lambda cfg: VolBuyMAField(**cfg.params),
+    "vol_sell_ma_20": lambda cfg: VolSellMAField(**cfg.params),
     # Price derivatives
-    "close_diff_prc": lambda cfg: CloseDiffPrcField(),
-    "close_diff_prc_rm": lambda cfg: CloseDiffPrcRMField(),
-    "close_diff_prc_rm_mean_above": lambda cfg: CloseDiffPrcRMMeanAboveField(),
-    "close_diff_prc_rm_mean_below": lambda cfg: CloseDiffPrcRMMeanBelowField(),
-    "high_diff_prc": lambda cfg: HighDiffPrcField(),
-    "high_diff_prc_rm": lambda cfg: HighDiffPrcRMField(),
-    "high_diff_prc_rm_mean_above": lambda cfg: HighDiffPrcRMMeanAboveField(),
-    "high_diff_prc_rm_mean_below": lambda cfg: HighDiffPrcRMMeanBelowField(),
-    "low_diff_prc": lambda cfg: LowDiffPrcField(),
-    "low_diff_prc_rm": lambda cfg: LowDiffPrcRMField(),
-    "low_diff_prc_rm_mean_above": lambda cfg: LowDiffPrcRMMeanAboveField(),
-    "low_diff_prc_rm_mean_below": lambda cfg: LowDiffPrcRMMeanBelowField(),
-    # Classification
+    "close_diff_prc": lambda cfg: CloseDiffPrcField(**cfg.params),
+    "close_diff_prc_rm_20": lambda cfg: CloseDiffPrcRMField(**cfg.params),
+    "close_diff_prc_rm_20_mean_above": lambda cfg: CloseDiffPrcRMMeanAboveField(**cfg.params),
+    "close_diff_prc_rm_20_mean_below": lambda cfg: CloseDiffPrcRMMeanBelowField(**cfg.params),
+    "high_diff_prc": lambda cfg: HighDiffPrcField(**cfg.params),
+    "high_diff_prc_rm_20": lambda cfg: HighDiffPrcRMField(**cfg.params),
+    "high_diff_prc_rm_20_mean_above": lambda cfg: HighDiffPrcRMMeanAboveField(**cfg.params),
+    "high_diff_prc_rm_20_mean_below": lambda cfg: HighDiffPrcRMMeanBelowField(**cfg.params),
+    "low_diff_prc": lambda cfg: LowDiffPrcField(**cfg.params),
+    "low_diff_prc_rm_20": lambda cfg: LowDiffPrcRMField(**cfg.params),
+    "low_diff_prc_rm_20_mean_above": lambda cfg: LowDiffPrcRMMeanAboveField(**cfg.params),
+    "low_diff_prc_rm_20_mean_below": lambda cfg: LowDiffPrcRMMeanBelowField(**cfg.params),
+    # Classification (stats-driven; no numeric params)
     "move_class": lambda cfg: MoveClassField(),
     "zone_class": lambda cfg: ZoneClassField(),
     "over_low": lambda cfg: OverLowField(),
     "over_high": lambda cfg: OverHighField(),
-    # Targets
+    # Targets (stats-driven; no numeric params)
     "tgt_long": lambda cfg: TgtLongField(),
     "sl_long": lambda cfg: SLLongField(),
     "tgt_short": lambda cfg: TgtShortField(),
@@ -82,9 +85,9 @@ _FIELD_REGISTRY: dict[str, object] = {
     "ZB": lambda cfg: ZBField(),
     "ZS": lambda cfg: ZSField(),
     # Trend flags
-    "trend_up": lambda cfg: TrendUpField(),
-    "trend_down": lambda cfg: TrendDownField(),
+    "trend_up_50": lambda cfg: TrendUpField(**cfg.params),
+    "trend_down_50": lambda cfg: TrendDownField(**cfg.params),
     # NN features
-    "nn_rsi_ma8_norm_mean": lambda cfg: NNRSINormField(),
-    "nn_close_diff_atr_ma": lambda cfg: NNCloseDiffATRField(),
+    "nn_rsi_ma8_norm_mean_20": lambda cfg: NNRSINormField(**cfg.params),
+    "nn_close_diff_atr_14_ma_20": lambda cfg: NNCloseDiffATRField(**cfg.params),
 }

@@ -2,184 +2,172 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import talib
 
 from ..framework import IndicatorField
+from .oscillators import _fmt
+
 
 class ATR14Field(IndicatorField):
-    """ATR with period 14."""
+    """ATR; name carries the period (atr_14)."""
 
-    name = "atr_14"
     group = "volatility"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+
+    def __init__(self, period: int = 14) -> None:
+        self.period = period
+        self.params = {"period": period}
+        self.name = f"atr_{period}"
+        self.dependencies: list[str] = []
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         high = df[f"{tf}_high"].values.astype(float)
         low = df[f"{tf}_low"].values.astype(float)
         close = df[f"{tf}_close"].values.astype(float)
-        result = talib.ATR(high, low, close, timeperiod=14)
+        result = talib.ATR(high, low, close, timeperiod=self.period)
         return pd.Series(result, index=df.index)
 
 
 class NATR14Field(IndicatorField):
-    """Normalized ATR with period 14."""
+    """Normalized ATR; name carries the period (natr_14)."""
 
-    name = "natr_14"
     group = "volatility"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+
+    def __init__(self, period: int = 14) -> None:
+        self.period = period
+        self.params = {"period": period}
+        self.name = f"natr_{period}"
+        self.dependencies: list[str] = []
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         high = df[f"{tf}_high"].values.astype(float)
         low = df[f"{tf}_low"].values.astype(float)
         close = df[f"{tf}_close"].values.astype(float)
-        result = talib.NATR(high, low, close, timeperiod=14)
+        result = talib.NATR(high, low, close, timeperiod=self.period)
         return pd.Series(result, index=df.index)
 
 
 class ATR_MAField(IndicatorField):
-    """20-period rolling SMA of atr_14."""
+    """Rolling SMA of an ATR column (atr_14_ma_20)."""
 
-    name = "atr_ma"
     group = "volatility"
-    dependencies: list[str] = ["atr_14"]
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+
+    def __init__(self, period: int = 14, ma_length: int = 20) -> None:
+        self.period = period
+        self.ma_length = ma_length
+        self.params = {"period": period, "ma_length": ma_length}
+        self.name = f"atr_{period}_ma_{ma_length}"
+        self.dependencies = [f"atr_{period}"]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        return df[f"{tf}_atr_14"].rolling(20).mean()
+        return df[f"{tf}_atr_{self.period}"].rolling(self.ma_length).mean()
 
 
-class BollingerUpperField(IndicatorField):
-    """Bollinger Band upper (20, 2.0)."""
+class NATR_MAField(IndicatorField):
+    """EMA of a NATR column (natr_14_ma_5).
 
-    name = "bb_upper"
+    Consumed by the BigCandle signal (signals_lib/candle.py), which documents
+    natr_ma as "EMA-5 of natr_14" — no field produced it until now, so the
+    signal NaN-guarded to False on every tick.
+    """
+
     group = "volatility"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+
+    def __init__(self, period: int = 14, ma_length: int = 5) -> None:
+        self.period = period
+        self.ma_length = ma_length
+        self.params = {"period": period, "ma_length": ma_length}
+        self.name = f"natr_{period}_ma_{ma_length}"
+        self.dependencies = [f"natr_{period}"]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        upper, _middle, _lower = talib.BBANDS(close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0, matype=0)
-        return pd.Series(upper, index=df.index)
+        series = df[f"{tf}_natr_{self.period}"].values.astype(float)
+        result = talib.EMA(series, timeperiod=self.ma_length)
+        return pd.Series(result, index=df.index)
 
 
-class BollingerMiddleField(IndicatorField):
-    """Bollinger Band middle (20, 2.0)."""
+class _BollingerBase(IndicatorField):
+    """Shared Bollinger machinery; subclasses pick band and defaults.
 
-    name = "bb_middle"
+    Name pattern: bb_{band}_{period}_{nbdev formatted} — bb_upper_20_2,
+    bb_upper_10_15 (nbdev 1.5), bb_upper_20_3.
+    """
+
     group = "volatility"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+    _band: int  # 0 = upper, 1 = middle, 2 = lower
 
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        _upper, middle, _lower = talib.BBANDS(close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0, matype=0)
-        return pd.Series(middle, index=df.index)
-
-
-class BollingerLowerField(IndicatorField):
-    """Bollinger Band lower (20, 2.0)."""
-
-    name = "bb_lower"
-    group = "volatility"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        _upper, _middle, lower = talib.BBANDS(close, timeperiod=20, nbdevup=2.0, nbdevdn=2.0, matype=0)
-        return pd.Series(lower, index=df.index)
-
-
-class BollingerFastUpperField(IndicatorField):
-    """Fast Bollinger Band upper (10, 1.5)."""
-
-    name = "bb_fast_upper"
-    group = "volatility"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
+    def __init__(self, period: int = 20, nbdev: float = 2.0) -> None:
+        self.period = period
+        self.nbdev = nbdev
+        self.params = {"period": period, "nbdev": nbdev}
+        band_name = ("upper", "middle", "lower")[self._band]
+        self.name = f"bb_{band_name}_{period}_{_fmt(nbdev)}"
+        self.dependencies: list[str] = []
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         close = df[f"{tf}_close"].values.astype(float)
-        upper, _middle, _lower = talib.BBANDS(close, timeperiod=10, nbdevup=1.5, nbdevdn=1.5, matype=0)
-        return pd.Series(upper, index=df.index)
+        bands = talib.BBANDS(
+            close, timeperiod=self.period, nbdevup=self.nbdev, nbdevdn=self.nbdev, matype=0
+        )
+        return pd.Series(bands[self._band], index=df.index)
 
 
-class BollingerFastLowerField(IndicatorField):
-    """Fast Bollinger Band lower (10, 1.5)."""
+class BollingerUpperField(_BollingerBase):
+    """Bollinger upper band (bb_upper_20_2)."""
 
-    name = "bb_fast_lower"
-    group = "volatility"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        _upper, _middle, lower = talib.BBANDS(close, timeperiod=10, nbdevup=1.5, nbdevdn=1.5, matype=0)
-        return pd.Series(lower, index=df.index)
+    _band = 0
 
 
-class BollingerWideUpperField(IndicatorField):
-    """Wide Bollinger Band upper (20, 3.0)."""
+class BollingerMiddleField(_BollingerBase):
+    """Bollinger middle band (bb_middle_20_2)."""
 
-    name = "bb_wide_upper"
-    group = "volatility"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        upper, _middle, _lower = talib.BBANDS(close, timeperiod=20, nbdevup=3.0, nbdevdn=3.0, matype=0)
-        return pd.Series(upper, index=df.index)
+    _band = 1
 
 
-class BollingerWideLowerField(IndicatorField):
-    """Wide Bollinger Band lower (20, 3.0)."""
+class BollingerLowerField(_BollingerBase):
+    """Bollinger lower band (bb_lower_20_2)."""
 
-    name = "bb_wide_lower"
-    group = "volatility"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        close = df[f"{tf}_close"].values.astype(float)
-        _upper, _middle, lower = talib.BBANDS(close, timeperiod=20, nbdevup=3.0, nbdevdn=3.0, matype=0)
-        return pd.Series(lower, index=df.index)
+    _band = 2
 
 
-# ---------------------------------------------------------------------------
-# Volume Group
-# ---------------------------------------------------------------------------
+class BollingerFastUpperField(BollingerUpperField):
+    """Fast Bollinger upper band (bb_upper_10_15)."""
+
+    def __init__(self, period: int = 10, nbdev: float = 1.5) -> None:
+        super().__init__(period=period, nbdev=nbdev)
+
+
+class BollingerFastLowerField(BollingerLowerField):
+    """Fast Bollinger lower band (bb_lower_10_15)."""
+
+    def __init__(self, period: int = 10, nbdev: float = 1.5) -> None:
+        super().__init__(period=period, nbdev=nbdev)
+
+
+class BollingerWideUpperField(BollingerUpperField):
+    """Wide Bollinger upper band (bb_upper_20_3)."""
+
+    def __init__(self, period: int = 20, nbdev: float = 3.0) -> None:
+        super().__init__(period=period, nbdev=nbdev)
+
+
+class BollingerWideLowerField(BollingerLowerField):
+    """Wide Bollinger lower band (bb_lower_20_3)."""
+
+    def __init__(self, period: int = 20, nbdev: float = 3.0) -> None:
+        super().__init__(period=period, nbdev=nbdev)

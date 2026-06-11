@@ -2,30 +2,29 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import talib
 
 from ..framework import IndicatorField
 
-# ---------------------------------------------------------------------------
-# Momentum Group
-# ---------------------------------------------------------------------------
 
 class RSI14Field(IndicatorField):
-    """RSI with period 14."""
+    """RSI; name carries the period (rsi_14)."""
 
-    name = "rsi_14"
     group = "momentum"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []  # all timeframes
-    params: dict = {}
+
+    def __init__(self, period: int = 14) -> None:
+        self.period = period
+        self.params = {"period": period}
+        self.name = f"rsi_{period}"
+        self.dependencies: list[str] = []
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         close = df[f"{tf}_close"].values.astype(float)
-        result = talib.RSI(close, timeperiod=14)
+        result = talib.RSI(close, timeperiod=self.period)
         return pd.Series(result, index=df.index)
 
 
@@ -35,13 +34,12 @@ class RSI_MAField(IndicatorField):
     group = "momentum"
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
-    dependencies: list[str]
 
-    def __init__(self, source: str, length: int, name: str) -> None:
-        self.name = name
+    def __init__(self, source: str = "rsi_14", length: int = 8, name: str | None = None) -> None:
         self.source = source
         self.length = length
+        self.params = {"source": source, "length": length}
+        self.name = name if name is not None else f"rsi_ma{length}"
         self.dependencies = [source]
 
     def compute(self, data_point, tf: int) -> pd.Series:
@@ -57,21 +55,14 @@ class RSI_MA_DiffField(IndicatorField):
     group = "momentum"
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
-    dependencies: list[str]
 
-    def __init__(self, source_ma: str, name: str) -> None:
-        self.name = name
+    def __init__(self, source_ma: str = "rsi_ma8", name: str | None = None) -> None:
         self.source_ma = source_ma
+        self.params = {"source_ma": source_ma}
+        self.name = name if name is not None else f"{source_ma}_diff"
         self.dependencies = [source_ma]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         series = df[f"{tf}_{self.source_ma}"]
         return series - series.shift(1)
-
-
-# ---------------------------------------------------------------------------
-# Trend Group
-# ---------------------------------------------------------------------------
-

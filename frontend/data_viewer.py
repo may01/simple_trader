@@ -23,7 +23,7 @@ _PRICE_AXIS_PREFIXES = ("ema", "sma", "bb", "vwap")
 _INDICATOR_SUBPLOT = {
     "rsi": "rsi",
     "cci": "cci",
-    "macd": "macd",
+    "macd_12_26_9": "macd_12_26_9",
     "stoch": "stoch",
 }
 

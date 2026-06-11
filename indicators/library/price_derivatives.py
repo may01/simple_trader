@@ -1,220 +1,134 @@
-"""indicators.library.price_derivatives — Close/high/low percentage-diff family."""
+"""indicators.library.price_derivatives — close/high/low percentage-diff family.
+
+Three layers per source column (close, high, low):
+  {src}_diff_prc            — 1-step percentage change
+  {src}_diff_prc_rm_{w}     — rolling mean over w
+  {src}_diff_prc_rm_{w}_mean_above / _mean_below
+                            — rolling mean of positive/negative values over w
+"""
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
-import talib
 
 from ..framework import IndicatorField
 
-class CloseDiffPrcField(IndicatorField):
-    """Percentage change of close: (close - close.shift(1)) / close.shift(1) * 100."""
 
-    name = "close_diff_prc"
+class _DiffPrcBase(IndicatorField):
+    """1-step percentage change of a price column."""
+
     group = "price_derivatives"
-    dependencies: list[str] = []
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+    _source: str  # "close" | "high" | "low"
+
+    def __init__(self) -> None:
+        self.params: dict = {}
+        self.name = f"{self._source}_diff_prc"
+        self.dependencies: list[str] = []
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        close = df[f"{tf}_close"]
-        return (close - close.shift(1)) / close.shift(1) * 100
+        series = df[f"{tf}_{self._source}"]
+        return (series - series.shift(1)) / series.shift(1) * 100
 
 
-class CloseDiffPrcRMField(IndicatorField):
-    """20-period rolling mean of close_diff_prc."""
+class _DiffPrcRMBase(IndicatorField):
+    """Rolling mean of a diff_prc column over a window."""
 
-    name = "close_diff_prc_rm"
     group = "price_derivatives"
-    dependencies: list[str] = ["close_diff_prc"]
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+    _source: str
+
+    def __init__(self, window: int = 20) -> None:
+        self.window = window
+        self.params = {"window": window}
+        self.name = f"{self._source}_diff_prc_rm_{window}"
+        self.dependencies = [f"{self._source}_diff_prc"]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        return df[f"{tf}_close_diff_prc"].rolling(20).mean()
+        return df[f"{tf}_{self._source}_diff_prc"].rolling(self.window).mean()
 
 
-class CloseDiffPrcRMMeanAboveField(IndicatorField):
-    """Rolling mean of positive values in a 20-window of close_diff_prc_rm."""
+class _DiffPrcRMMeanSideBase(IndicatorField):
+    """Rolling mean of one-signed values of a diff_prc_rm column."""
 
-    name = "close_diff_prc_rm_mean_above"
     group = "price_derivatives"
-    dependencies: list[str] = ["close_diff_prc_rm"]
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
-    params: dict = {}
+    _source: str
+    _above: bool
+
+    def __init__(self, window: int = 20) -> None:
+        self.window = window
+        self.params = {"window": window}
+        side = "above" if self._above else "below"
+        self.name = f"{self._source}_diff_prc_rm_{window}_mean_{side}"
+        self.dependencies = [f"{self._source}_diff_prc_rm_{window}"]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        series = df[f"{tf}_close_diff_prc_rm"]
-        return series.rolling(20).apply(
-            lambda x: x[x > 0].mean() if (x > 0).any() else 0.0,
-            raw=True,
+        series = df[f"{tf}_{self._source}_diff_prc_rm_{self.window}"]
+        if self._above:
+            return series.rolling(self.window).apply(
+                lambda x: x[x > 0].mean() if (x > 0).any() else 0.0, raw=True
+            )
+        return series.rolling(self.window).apply(
+            lambda x: x[x < 0].mean() if (x < 0).any() else 0.0, raw=True
         )
 
 
-class CloseDiffPrcRMMeanBelowField(IndicatorField):
-    """Rolling mean of negative values in a 20-window of close_diff_prc_rm."""
-
-    name = "close_diff_prc_rm_mean_below"
-    group = "price_derivatives"
-    dependencies: list[str] = ["close_diff_prc_rm"]
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        series = df[f"{tf}_close_diff_prc_rm"]
-        return series.rolling(20).apply(
-            lambda x: x[x < 0].mean() if (x < 0).any() else 0.0,
-            raw=True,
-        )
+class CloseDiffPrcField(_DiffPrcBase):
+    _source = "close"
 
 
-class HighDiffPrcField(IndicatorField):
-    """Percentage change of high."""
-
-    name = "high_diff_prc"
-    group = "price_derivatives"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        high = df[f"{tf}_high"]
-        return (high - high.shift(1)) / high.shift(1) * 100
+class CloseDiffPrcRMField(_DiffPrcRMBase):
+    _source = "close"
 
 
-class HighDiffPrcRMField(IndicatorField):
-    """20-period rolling mean of high_diff_prc."""
-
-    name = "high_diff_prc_rm"
-    group = "price_derivatives"
-    dependencies: list[str] = ["high_diff_prc"]
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        return df[f"{tf}_high_diff_prc"].rolling(20).mean()
+class CloseDiffPrcRMMeanAboveField(_DiffPrcRMMeanSideBase):
+    _source = "close"
+    _above = True
 
 
-class HighDiffPrcRMMeanAboveField(IndicatorField):
-    """Rolling mean of positive values in 20-window of high_diff_prc_rm."""
-
-    name = "high_diff_prc_rm_mean_above"
-    group = "price_derivatives"
-    dependencies: list[str] = ["high_diff_prc_rm"]
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        series = df[f"{tf}_high_diff_prc_rm"]
-        return series.rolling(20).apply(
-            lambda x: x[x > 0].mean() if (x > 0).any() else 0.0,
-            raw=True,
-        )
+class CloseDiffPrcRMMeanBelowField(_DiffPrcRMMeanSideBase):
+    _source = "close"
+    _above = False
 
 
-class HighDiffPrcRMMeanBelowField(IndicatorField):
-    """Rolling mean of negative values in 20-window of high_diff_prc_rm."""
-
-    name = "high_diff_prc_rm_mean_below"
-    group = "price_derivatives"
-    dependencies: list[str] = ["high_diff_prc_rm"]
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        series = df[f"{tf}_high_diff_prc_rm"]
-        return series.rolling(20).apply(
-            lambda x: x[x < 0].mean() if (x < 0).any() else 0.0,
-            raw=True,
-        )
+class HighDiffPrcField(_DiffPrcBase):
+    _source = "high"
 
 
-class LowDiffPrcField(IndicatorField):
-    """Percentage change of low."""
-
-    name = "low_diff_prc"
-    group = "price_derivatives"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        low = df[f"{tf}_low"]
-        return (low - low.shift(1)) / low.shift(1) * 100
+class HighDiffPrcRMField(_DiffPrcRMBase):
+    _source = "high"
 
 
-class LowDiffPrcRMField(IndicatorField):
-    """20-period rolling mean of low_diff_prc."""
-
-    name = "low_diff_prc_rm"
-    group = "price_derivatives"
-    dependencies: list[str] = ["low_diff_prc"]
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        return df[f"{tf}_low_diff_prc"].rolling(20).mean()
+class HighDiffPrcRMMeanAboveField(_DiffPrcRMMeanSideBase):
+    _source = "high"
+    _above = True
 
 
-class LowDiffPrcRMMeanAboveField(IndicatorField):
-    """Rolling mean of positive values in 20-window of low_diff_prc_rm."""
-
-    name = "low_diff_prc_rm_mean_above"
-    group = "price_derivatives"
-    dependencies: list[str] = ["low_diff_prc_rm"]
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        series = df[f"{tf}_low_diff_prc_rm"]
-        return series.rolling(20).apply(
-            lambda x: x[x > 0].mean() if (x > 0).any() else 0.0,
-            raw=True,
-        )
+class HighDiffPrcRMMeanBelowField(_DiffPrcRMMeanSideBase):
+    _source = "high"
+    _above = False
 
 
-class LowDiffPrcRMMeanBelowField(IndicatorField):
-    """Rolling mean of negative values in 20-window of low_diff_prc_rm."""
-
-    name = "low_diff_prc_rm_mean_below"
-    group = "price_derivatives"
-    dependencies: list[str] = ["low_diff_prc_rm"]
-    resource_dependencies: list[str] = []
-    applies_to: list[int] = []
-    params: dict = {}
-
-    def compute(self, data_point, tf: int) -> pd.Series:
-        df = data_point.get_df(tf)
-        series = df[f"{tf}_low_diff_prc_rm"]
-        return series.rolling(20).apply(
-            lambda x: x[x < 0].mean() if (x < 0).any() else 0.0,
-            raw=True,
-        )
+class LowDiffPrcField(_DiffPrcBase):
+    _source = "low"
 
 
-# ---------------------------------------------------------------------------
-# Cached resource loaders
-# ---------------------------------------------------------------------------
+class LowDiffPrcRMField(_DiffPrcRMBase):
+    _source = "low"
+
+
+class LowDiffPrcRMMeanAboveField(_DiffPrcRMMeanSideBase):
+    _source = "low"
+    _above = True
+
+
+class LowDiffPrcRMMeanBelowField(_DiffPrcRMMeanSideBase):
+    _source = "low"
+    _above = False
