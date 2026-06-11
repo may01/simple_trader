@@ -1,0 +1,220 @@
+"""indicators.attributes — DataAttributes (NN normalisation stats persistence)."""
+
+from __future__ import annotations
+
+import json
+import os
+import pickle
+
+import numpy as np
+import pandas as pd
+
+class DataAttributes:
+    """Compute and persist dataset statistics for classification and normalisation.
+
+    Two types of stats are managed:
+    - ``rsi_classification.json``: RSI mean/std per TF, used by classification fields.
+    - ``diff_stats.pkl``: Price diff mean/std per TF, used by target fields.
+    - ``column_stats``: per-column mean/std for NN feature normalisation (in-memory).
+    """
+
+    _STAT_TFS: list[int] = [15, 60, 240, 1440]
+
+    def __init__(self) -> None:
+        self.column_stats: dict[str, dict] = {}
+
+    # ------------------------------------------------------------------
+    # Public compute entry-point
+    # ------------------------------------------------------------------
+
+    def compute(self, df: pd.DataFrame) -> None:
+        """Compute and save all stats files if absent. Idempotent.
+
+        Calls ``_compute_rsi_classification`` if ``rsi_classification.json``
+        is absent.  Calls ``_compute_diff_stats`` if ``diff_stats.pkl`` is
+        absent.
+
+        Args:
+            df: Wide DataFrame with ``{tf}_rsi_ma8`` and ``{tf}_is_closed``
+                columns.
+        """
+        from helpers import stats_folder  # local import: reads env at call time
+        base = stats_folder()
+        os.makedirs(base, exist_ok=True)
+
+        rsi_path = base + "rsi_classification.json"
+        if not os.path.exists(rsi_path):
+            self._compute_rsi_classification(df)
+
+        diff_path = base + "diff_stats.pkl"
+        if not os.path.exists(diff_path):
+            self._compute_diff_stats(df)
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _compute_rsi_classification(self, df: pd.DataFrame) -> None:
+        """Compute mean/std of ``{tf}_rsi_ma8`` for closed-candle rows per TF.
+
+        Saves to ``stats_folder() + 'rsi_classification.json'``.
+        """
+        from helpers import stats_folder
+        base = stats_folder()
+        os.makedirs(base, exist_ok=True)
+
+        result: dict = {}
+        for tf in self._STAT_TFS:
+            closed_col = f"{tf}_is_closed"
+            rsi_col = f"{tf}_rsi_ma8"
+            if closed_col not in df.columns or rsi_col not in df.columns:
+                continue
+            closed_rows = df[df[closed_col] == True][rsi_col].dropna()  # noqa: E712
+            result[str(tf)] = {
+                "mean": float(closed_rows.mean()),
+                "std": float(closed_rows.std()),
+            }
+
+        out_path = base + "rsi_classification.json"
+        tmp_path = out_path + ".tmp"
+        with open(tmp_path, "w") as fh:
+            json.dump(result, fh)
+        os.rename(tmp_path, out_path)
+
+    def _compute_diff_stats(self, df: pd.DataFrame) -> None:
+        """Compute price differential stats per TF.
+
+        For each TF in ``_STAT_TFS``, computes mean and std of the percentage
+        close change over closed-candle rows.  Saves to
+        ``stats_folder() + 'diff_stats.pkl'``.
+        """
+        from helpers import stats_folder
+        base = stats_folder()
+        os.makedirs(base, exist_ok=True)
+
+        result: dict = {}
+        for tf in self._STAT_TFS:
+            closed_col = f"{tf}_is_closed"
+            close_col = f"{tf}_close"
+            if closed_col not in df.columns or close_col not in df.columns:
+                continue
+            closed_close = df[df[closed_col] == True][close_col].dropna()  # noqa: E712
+            pct_changes = closed_close.pct_change().dropna()
+            result[str(tf)] = {
+                "mean_diff": float(pct_changes.mean()),
+                "std_diff": float(pct_changes.std()),
+            }
+
+        out_path = base + "diff_stats.pkl"
+        tmp_path = out_path + ".tmp"
+        with open(tmp_path, "wb") as fh:
+            pickle.dump(result, fh)
+        os.rename(tmp_path, out_path)
+
+    # ------------------------------------------------------------------
+    # Class-level loaders
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def load_rsi_classification(cls) -> dict:
+        """Load ``rsi_classification.json`` from ``stats_folder()``.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+        """
+        from helpers import stats_folder
+        path = stats_folder() + "rsi_classification.json"
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"rsi_classification.json not found at: {path}"
+            )
+        with open(path, "r") as fh:
+            return json.load(fh)
+
+    @classmethod
+    def load_diff_stats(cls) -> dict:
+        """Load ``diff_stats.pkl`` from ``stats_folder()``.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+        """
+        from helpers import stats_folder
+        path = stats_folder() + "diff_stats.pkl"
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"diff_stats.pkl not found at: {path}"
+            )
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
+
+    # ------------------------------------------------------------------
+    # NN column stats
+    # ------------------------------------------------------------------
+
+    def compute_nn_stats(self, df: pd.DataFrame, feature_cols: list) -> None:
+        """Compute mean/std for each feature column using only closed-candle rows.
+
+        The TF is parsed from the column name prefix (e.g. ``"15_nn_rsi_ma8"``
+        → tf=15).  Only rows where ``{tf}_is_closed == True`` are used.
+
+        Args:
+            df:           Wide DataFrame.
+            feature_cols: List of column names to compute stats for.
+        """
+        for col in feature_cols:
+            # Parse TF from column prefix: "15_something" → tf=15
+            parts = col.split("_", 1)
+            try:
+                tf = int(parts[0])
+            except (ValueError, IndexError):
+                # Cannot parse TF — fall back to all rows
+                series = df[col].dropna()
+            else:
+                closed_col = f"{tf}_is_closed"
+                if closed_col in df.columns:
+                    series = df[df[closed_col] == True][col].dropna()  # noqa: E712
+                else:
+                    series = df[col].dropna()
+
+            self.column_stats[col] = {
+                "mean": float(series.mean()),
+                "std": float(series.std()),
+            }
+
+    def get_stats(self, col: str) -> tuple:
+        """Return ``(mean, std)`` for *col*.
+
+        Raises:
+            KeyError: If *col* is not in ``column_stats``.
+        """
+        if col not in self.column_stats:
+            raise KeyError(f"Column '{col}' not found in column_stats")
+        entry = self.column_stats[col]
+        return float(entry["mean"]), float(entry["std"])
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save(self, path: str) -> None:
+        """Pickle self to *path* using an atomic write (write .tmp then rename).
+
+        Args:
+            path: Destination file path.
+        """
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as fh:
+            pickle.dump(self, fh)
+        os.rename(tmp, path)
+
+    @classmethod
+    def load(cls, path: str) -> "DataAttributes":
+        """Unpickle and return a :class:`DataAttributes` instance from *path*.
+
+        Args:
+            path: Source file path.
+        """
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
+
+

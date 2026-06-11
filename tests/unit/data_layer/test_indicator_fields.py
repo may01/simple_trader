@@ -672,11 +672,11 @@ class TestClassificationFields:
 
     def test_move_class_with_stats(self, monkeypatch):
         """MoveClassField computes correctly with monkeypatched loader."""
-        import indicators
+        import indicators.library.classification
         stats = {"15": {"mean": 50.0, "std": 14.0}}
         monkeypatch.setenv("DATA_ROOT", "dataset")
         monkeypatch.setenv("PAIR", "link_usdt")
-        monkeypatch.setattr(indicators, "_load_rsi_classification", lambda path: stats)
+        monkeypatch.setattr(indicators.library.classification, "_load_rsi_classification", lambda path: stats)
         field = MoveClassField()
         dp, df = self._make_rsi_df(tf=15)
         result = field.compute(dp, 15)
@@ -686,11 +686,12 @@ class TestClassificationFields:
 
     def test_zone_class_with_stats(self, monkeypatch):
         """ZoneClassField computes correctly with monkeypatched loader."""
-        import indicators
+        import indicators.library.classification
+        import indicators.library.targets
         stats = {"15": {"mean": 50.0, "std": 14.0}}
         monkeypatch.setenv("DATA_ROOT", "dataset")
         monkeypatch.setenv("PAIR", "link_usdt")
-        monkeypatch.setattr(indicators, "_load_rsi_classification", lambda path: stats)
+        monkeypatch.setattr(indicators.library.classification, "_load_rsi_classification", lambda path: stats)
         field = ZoneClassField()
         dp, df = self._make_rsi_df(tf=15)
         result = field.compute(dp, 15)
@@ -700,11 +701,12 @@ class TestClassificationFields:
 
     def test_over_low_with_stats(self, monkeypatch):
         """OverLowField computes correctly with monkeypatched loader."""
-        import indicators
+        import indicators.library.classification
+        import indicators.library.targets
         stats = {"15": {"mean": 50.0, "std": 14.0}}
         monkeypatch.setenv("DATA_ROOT", "dataset")
         monkeypatch.setenv("PAIR", "link_usdt")
-        monkeypatch.setattr(indicators, "_load_rsi_classification", lambda path: stats)
+        monkeypatch.setattr(indicators.library.classification, "_load_rsi_classification", lambda path: stats)
         field = OverLowField()
         dp, df = self._make_rsi_df(tf=15)
         result = field.compute(dp, 15)
@@ -715,11 +717,12 @@ class TestClassificationFields:
 
     def test_over_high_with_stats(self, monkeypatch):
         """OverHighField computes correctly with monkeypatched loader."""
-        import indicators
+        import indicators.library.classification
+        import indicators.library.targets
         stats = {"15": {"mean": 50.0, "std": 14.0}}
         monkeypatch.setenv("DATA_ROOT", "dataset")
         monkeypatch.setenv("PAIR", "link_usdt")
-        monkeypatch.setattr(indicators, "_load_rsi_classification", lambda path: stats)
+        monkeypatch.setattr(indicators.library.classification, "_load_rsi_classification", lambda path: stats)
         field = OverHighField()
         dp, df = self._make_rsi_df(tf=15)
         result = field.compute(dp, 15)
@@ -740,7 +743,8 @@ class TestTargetsFields:
         return dp, df
 
     def _patch_diff_stats(self, monkeypatch, tf: int = 15):
-        import indicators
+        import indicators.library.classification
+        import indicators.library.targets
         diff_stats = {str(tf): {
             "mean_long": 0.02,
             "mean_long_sl": 0.01,
@@ -751,7 +755,7 @@ class TestTargetsFields:
         }}
         monkeypatch.setenv("DATA_ROOT", "dataset")
         monkeypatch.setenv("PAIR", "link_usdt")
-        monkeypatch.setattr(indicators, "_load_diff_stats", lambda path: diff_stats)
+        monkeypatch.setattr(indicators.library.targets, "_load_diff_stats", lambda path: diff_stats)
 
     def test_tgt_long_with_stats(self, monkeypatch):
         """TgtLongField computes close * (1 + mean_long)."""
