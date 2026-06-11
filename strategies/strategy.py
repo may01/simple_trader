@@ -261,9 +261,9 @@ class Strategy(ABC):
         """Return stop-loss price.
 
         Default:
-            - OPEN_LONG: sar(tf) - 0.3 × atr_14(tf)
-            - OPEN_SHORT: sar(tf) + 0.3 × atr_14(tf)
-            - other: sar(tf) - 0.3 × atr_14(tf)
+            - OPEN_LONG: sar_002_02(tf) - 0.3 × atr_14(tf)
+            - OPEN_SHORT: sar_002_02(tf) + 0.3 × atr_14(tf)
+            - other: sar_002_02(tf) - 0.3 × atr_14(tf)
 
         Falls back to tf=1 when tf is 0.
 
@@ -276,8 +276,8 @@ class Strategy(ABC):
             Stop-loss price as float.
         """
         effective_tf = tf if tf > 0 else 1
-        sar = data_point.get("sar", effective_tf, 0)
+        sar_002_02 = data_point.get("sar_002_02", effective_tf, 0)
         atr = data_point.get("atr_14", effective_tf, 0)
         if action == STRATEGY_ACTION_OPEN_SHORT:
-            return float(sar + 0.3 * atr)
-        return float(sar - 0.3 * atr)
+            return float(sar_002_02 + 0.3 * atr)
+        return float(sar_002_02 - 0.3 * atr)

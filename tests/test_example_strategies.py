@@ -29,7 +29,7 @@ def make_dp_with_cci(cci_15_val: float = 0.0, cci_15_prev: float = -150.0) -> Li
     df_15 = pd.DataFrame({
         "15_close": [100.0, 100.0],
         "15_cci_14": [cci_15_val, cci_15_prev],
-        "15_sar": [95.0, 95.0],
+        "15_sar_002_02": [95.0, 95.0],
         "15_atr_14": [2.0, 2.0],
         "15_is_closed": [True, True],
     })
@@ -40,7 +40,7 @@ def make_dp_with_cci(cci_15_val: float = 0.0, cci_15_prev: float = -150.0) -> Li
     # Also add minimal tf=1 data for base class methods that need it
     df_1 = pd.DataFrame({
         "1_close": [100.0],
-        "1_sar": [95.0],
+        "1_sar_002_02": [95.0],
         "1_atr_14": [2.0],
         "1_is_closed": [True],
     })

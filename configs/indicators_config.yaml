@@ -7,7 +7,7 @@ fields:
     depends_on: []
     library: talib
     params:
-      length: 14
+      period: 14
 
   - name: rsi_ma8
     group: momentum
@@ -86,35 +86,35 @@ fields:
     params:
       length: 100
 
-  - name: macd
+  - name: macd_12_26_9
     group: trend
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: macd_signal
+  - name: macd_signal_12_26_9
     group: trend
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: macd_hist
+  - name: macd_hist_12_26_9
     group: trend
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: macd_fast
+  - name: macd_5_13_9
     group: trend
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: macd_fast_signal
+  - name: macd_signal_5_13_9
     group: trend
     applies_to: all
     depends_on: []
@@ -128,7 +128,7 @@ fields:
     depends_on: []
     library: talib
     params:
-      length: 14
+      period: 14
 
   - name: natr_14
     group: volatility
@@ -136,57 +136,64 @@ fields:
     depends_on: []
     library: talib
     params:
-      length: 14
+      period: 14
 
-  - name: atr_ma
+  - name: natr_14_ma_5
+    group: volatility
+    applies_to: all
+    depends_on: [natr_14]
+    library: talib
+    params: {}
+
+  - name: atr_14_ma_20
     group: volatility
     applies_to: all
     depends_on: [atr_14]
     params: {}
 
-  - name: bb_upper
+  - name: bb_upper_20_2
     group: volatility
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: bb_middle
+  - name: bb_middle_20_2
     group: volatility
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: bb_lower
+  - name: bb_lower_20_2
     group: volatility
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: bb_fast_upper
+  - name: bb_upper_10_15
     group: volatility
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: bb_fast_lower
+  - name: bb_lower_10_15
     group: volatility
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: bb_wide_upper
+  - name: bb_upper_20_3
     group: volatility
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: bb_wide_lower
+  - name: bb_lower_20_3
     group: volatility
     applies_to: all
     depends_on: []
@@ -200,15 +207,15 @@ fields:
     depends_on: []
     library: talib
     params:
-      length: 14
+      period: 14
 
-  - name: cci_ma
+  - name: cci_14_ma_20
     group: oscillators
     applies_to: all
     depends_on: [cci_14]
     params: {}
 
-  - name: sar
+  - name: sar_002_02
     group: oscillators
     applies_to: all
     depends_on: []
@@ -216,24 +223,24 @@ fields:
     params: {}
 
   # --- volume ---
-  - name: vol_ma
+  - name: vol_ma_20
     group: volume
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: vol_buy_ma
+  - name: vol_buy_ma_20
     group: volume
     applies_to: all
     depends_on: []
     library: talib
     params: {}
 
-  - name: vol_sell_ma
+  - name: vol_sell_ma_20
     group: volume
     applies_to: all
-    depends_on: [vol_ma, vol_buy_ma]
+    depends_on: [vol_ma_20, vol_buy_ma_20]
     library: talib
     params: {}
 
@@ -245,22 +252,22 @@ fields:
     library: talib
     params: {}
 
-  - name: close_diff_prc_rm
+  - name: close_diff_prc_rm_20
     group: price_derivatives
     applies_to: all
     depends_on: [close_diff_prc]
     params: {}
 
-  - name: close_diff_prc_rm_mean_above
+  - name: close_diff_prc_rm_20_mean_above
     group: price_derivatives
     applies_to: all
-    depends_on: [close_diff_prc_rm]
+    depends_on: [close_diff_prc_rm_20]
     params: {}
 
-  - name: close_diff_prc_rm_mean_below
+  - name: close_diff_prc_rm_20_mean_below
     group: price_derivatives
     applies_to: all
-    depends_on: [close_diff_prc_rm]
+    depends_on: [close_diff_prc_rm_20]
     params: {}
 
   - name: high_diff_prc
@@ -270,22 +277,22 @@ fields:
     library: talib
     params: {}
 
-  - name: high_diff_prc_rm
+  - name: high_diff_prc_rm_20
     group: price_derivatives
     applies_to: all
     depends_on: [high_diff_prc]
     params: {}
 
-  - name: high_diff_prc_rm_mean_above
+  - name: high_diff_prc_rm_20_mean_above
     group: price_derivatives
     applies_to: all
-    depends_on: [high_diff_prc_rm]
+    depends_on: [high_diff_prc_rm_20]
     params: {}
 
-  - name: high_diff_prc_rm_mean_below
+  - name: high_diff_prc_rm_20_mean_below
     group: price_derivatives
     applies_to: all
-    depends_on: [high_diff_prc_rm]
+    depends_on: [high_diff_prc_rm_20]
     params: {}
 
   - name: low_diff_prc
@@ -295,22 +302,22 @@ fields:
     library: talib
     params: {}
 
-  - name: low_diff_prc_rm
+  - name: low_diff_prc_rm_20
     group: price_derivatives
     applies_to: all
     depends_on: [low_diff_prc]
     params: {}
 
-  - name: low_diff_prc_rm_mean_above
+  - name: low_diff_prc_rm_20_mean_above
     group: price_derivatives
     applies_to: all
-    depends_on: [low_diff_prc_rm]
+    depends_on: [low_diff_prc_rm_20]
     params: {}
 
-  - name: low_diff_prc_rm_mean_below
+  - name: low_diff_prc_rm_20_mean_below
     group: price_derivatives
     applies_to: all
-    depends_on: [low_diff_prc_rm]
+    depends_on: [low_diff_prc_rm_20]
     params: {}
 
   # --- classification (applies_to: [15, 60, 240, 1440] only) ---
@@ -386,14 +393,14 @@ fields:
     params: {}
 
   # --- trend_flags ---
-  - name: trend_up
+  - name: trend_up_50
     group: trend_flags
     applies_to: all
     depends_on: [ema_50]
     library: talib
     params: {}
 
-  - name: trend_down
+  - name: trend_down_50
     group: trend_flags
     applies_to: all
     depends_on: [ema_50]
@@ -401,23 +408,23 @@ fields:
     params: {}
 
   # --- nn_features ---
-  - name: nn_rsi_ma8_norm_mean
+  - name: nn_rsi_ma8_norm_mean_20
     group: nn_features
     applies_to: all
     depends_on: [rsi_ma8]
     params: {}
 
-  - name: nn_close_diff_atr_ma
+  - name: nn_close_diff_atr_14_ma_20
     group: nn_features
     applies_to: all
-    depends_on: [close_diff_prc, atr_ma]
+    depends_on: [close_diff_prc, atr_14_ma_20]
     params: {}
 
 nn:
   feature_cols:
-    - "15_nn_rsi_ma8_norm_mean"
-    - "15_nn_close_diff_atr_ma"
-    - "60_nn_rsi_ma8_norm_mean"
-    - "60_nn_close_diff_atr_ma"
-    - "240_nn_rsi_ma8_norm_mean"
+    - "15_nn_rsi_ma8_norm_mean_20"
+    - "15_nn_close_diff_atr_14_ma_20"
+    - "60_nn_rsi_ma8_norm_mean_20"
+    - "60_nn_close_diff_atr_14_ma_20"
+    - "240_nn_rsi_ma8_norm_mean_20"
   checkpoint_dir: "checkpoints/"

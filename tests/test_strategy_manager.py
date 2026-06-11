@@ -29,11 +29,11 @@ from constants import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def make_dp(close_val: float = 100.0, sar: float = 95.0, atr: float = 2.0) -> LiveDataPoint:
+def make_dp(close_val: float = 100.0, sar_002_02: float = 95.0, atr: float = 2.0) -> LiveDataPoint:
     """Create a minimal LiveDataPoint with tf=1 data."""
     df = pd.DataFrame({
         "1_close": [close_val],
-        "1_sar": [sar],
+        "1_sar_002_02": [sar_002_02],
         "1_atr_14": [atr],
         "1_is_closed": [True],
     })

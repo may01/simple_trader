@@ -42,34 +42,34 @@ class MockDataPoint(DataPoint):
 
 
 class TestBigCandleSignal:
-    """Test BigCandle_Signal: natr_14 > coef * natr_ma."""
+    """Test BigCandle_Signal: natr_14 > coef * natr_14_ma_5."""
 
     def test_big_candle_true(self):
-        """BigCandle_Signal returns True when natr_14 > coef * natr_ma."""
+        """BigCandle_Signal returns True when natr_14 > coef * natr_14_ma_5."""
         sig = BigCandle_Signal(15, 2.0)
         data = {
             ("natr_14", 15, 0): 2.5,  # 2.5 > 2.0 * 1.0 = True
-            ("natr_ma", 15, 0): 1.0,
+            ("natr_14_ma_5", 15, 0): 1.0,
         }
         pt = MockDataPoint(data)
         assert sig.check(pt, {}, None) is True
 
     def test_big_candle_false(self):
-        """BigCandle_Signal returns False when natr_14 <= coef * natr_ma."""
+        """BigCandle_Signal returns False when natr_14 <= coef * natr_14_ma_5."""
         sig = BigCandle_Signal(15, 2.0)
         data = {
             ("natr_14", 15, 0): 1.5,  # 1.5 <= 2.0 * 1.0 = False
-            ("natr_ma", 15, 0): 1.0,
+            ("natr_14_ma_5", 15, 0): 1.0,
         }
         pt = MockDataPoint(data)
         assert sig.check(pt, {}, None) is False
 
     def test_big_candle_equal(self):
-        """BigCandle_Signal returns False when natr_14 == coef * natr_ma."""
+        """BigCandle_Signal returns False when natr_14 == coef * natr_14_ma_5."""
         sig = BigCandle_Signal(15, 2.0)
         data = {
             ("natr_14", 15, 0): 2.0,  # 2.0 = 2.0 * 1.0 = False (not greater)
-            ("natr_ma", 15, 0): 1.0,
+            ("natr_14_ma_5", 15, 0): 1.0,
         }
         pt = MockDataPoint(data)
         assert sig.check(pt, {}, None) is False
@@ -80,7 +80,7 @@ class TestBigCandleSignal:
         sig.set_shift(1)
         data = {
             ("natr_14", 15, 1): 3.0,
-            ("natr_ma", 15, 1): 1.0,
+            ("natr_14_ma_5", 15, 1): 1.0,
         }
         pt = MockDataPoint(data)
         assert sig.check(pt, {}, None) is True
@@ -89,13 +89,13 @@ class TestBigCandleSignal:
         """BigCandle_Signal returns False when natr_14 is NaN."""
         sig = BigCandle_Signal(15, 2.0)
         data = {
-            ("natr_ma", 15, 0): 1.0,
+            ("natr_14_ma_5", 15, 0): 1.0,
         }
         pt = MockDataPoint(data)
         assert sig.check(pt, {}, None) is False
 
     def test_big_candle_nan_natr_ma(self):
-        """BigCandle_Signal returns False when natr_ma is NaN."""
+        """BigCandle_Signal returns False when natr_14_ma_5 is NaN."""
         sig = BigCandle_Signal(15, 2.0)
         data = {
             ("natr_14", 15, 0): 2.5,

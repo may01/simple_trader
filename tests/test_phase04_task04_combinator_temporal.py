@@ -230,26 +230,26 @@ class TestBoolValueSignal:
 
     def test_nonzero_value_true(self):
         """BoolValue_Signal returns True for nonzero value."""
-        pt = MockDataPoint({("trend_up", 5, 0): 1.0})
-        sig = BoolValue_Signal("trend_up", 5)
+        pt = MockDataPoint({("trend_up_50", 5, 0): 1.0})
+        sig = BoolValue_Signal("trend_up_50", 5)
         assert sig.check(pt, {}, None) is True
 
     def test_zero_value_false(self):
         """BoolValue_Signal returns False for zero value."""
-        pt = MockDataPoint({("trend_up", 5, 0): 0.0})
-        sig = BoolValue_Signal("trend_up", 5)
+        pt = MockDataPoint({("trend_up_50", 5, 0): 0.0})
+        sig = BoolValue_Signal("trend_up_50", 5)
         assert sig.check(pt, {}, None) is False
 
     def test_nan_value_false(self):
         """BoolValue_Signal returns False for NaN value."""
         pt = MockDataPoint({})  # missing key → NaN
-        sig = BoolValue_Signal("trend_up", 5)
+        sig = BoolValue_Signal("trend_up_50", 5)
         assert sig.check(pt, {}, None) is False
 
     def test_negative_value_true(self):
         """BoolValue_Signal returns True for any nonzero value including negative."""
-        pt = MockDataPoint({("trend_up", 5, 0): -1.0})
-        sig = BoolValue_Signal("trend_up", 5)
+        pt = MockDataPoint({("trend_up_50", 5, 0): -1.0})
+        sig = BoolValue_Signal("trend_up_50", 5)
         assert sig.check(pt, {}, None) is True
 
     def test_respects_shift(self):
@@ -501,19 +501,19 @@ class TestCombinatorIntegration:
     def test_and_with_bool_value_signals(self):
         """And_Signal with BoolValue_Signal reads data correctly."""
         pt = MockDataPoint({
-            ("trend_up", 5, 0): 1.0,
+            ("trend_up_50", 5, 0): 1.0,
             ("trend_dn", 5, 0): 0.0,
         })
-        sig = And_Signal([BoolValue_Signal("trend_up", 5), BoolValue_Signal("trend_dn", 5)])
+        sig = And_Signal([BoolValue_Signal("trend_up_50", 5), BoolValue_Signal("trend_dn", 5)])
         assert sig.check(pt, {}, None) is False
 
     def test_or_with_bool_value_signals(self):
         """Or_Signal returns True when at least one BoolValue_Signal is True."""
         pt = MockDataPoint({
-            ("trend_up", 5, 0): 0.0,
+            ("trend_up_50", 5, 0): 0.0,
             ("trend_dn", 5, 0): 1.0,
         })
-        sig = Or_Signal([BoolValue_Signal("trend_up", 5), BoolValue_Signal("trend_dn", 5)])
+        sig = Or_Signal([BoolValue_Signal("trend_up_50", 5), BoolValue_Signal("trend_dn", 5)])
         assert sig.check(pt, {}, None) is True
 
     def test_not_wrapping_and(self):

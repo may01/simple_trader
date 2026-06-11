@@ -27,11 +27,11 @@ from constants import (
 # Helpers / Test doubles
 # ---------------------------------------------------------------------------
 
-def make_dp(close_val: float = 100.0, sar: float = 95.0, atr: float = 2.0) -> LiveDataPoint:
+def make_dp(close_val: float = 100.0, sar_002_02: float = 95.0, atr: float = 2.0) -> LiveDataPoint:
     """Create a minimal LiveDataPoint with tf=1 data."""
     df = pd.DataFrame({
         "1_close": [close_val],
-        "1_sar": [sar],
+        "1_sar_002_02": [sar_002_02],
         "1_atr_14": [atr],
         "1_is_closed": [True],
     })
@@ -43,13 +43,13 @@ def make_dp_multi_tf(close_1: float = 100.0, sar_5: float = 95.0, atr_5: float =
     """Create a LiveDataPoint with tf=1 and tf=5 data."""
     df_1 = pd.DataFrame({
         "1_close": [close_1],
-        "1_sar": [sar_5],
+        "1_sar_002_02": [sar_5],
         "1_atr_14": [atr_5],
         "1_is_closed": [True],
     })
     df_5 = pd.DataFrame({
         "5_close": [close_1],
-        "5_sar": [sar_5],
+        "5_sar_002_02": [sar_5],
         "5_atr_14": [atr_5],
         "5_is_closed": [True],
     })
@@ -339,17 +339,17 @@ class TestDefaultClosePrices:
 
 class TestDefaultStopLossPrice:
     def test_stop_loss_long_is_sar_minus_0_3_atr(self):
-        """Default stop_loss (long) = sar - 0.3 * atr_14."""
+        """Default stop_loss (long) = sar_002_02 - 0.3 * atr_14."""
         strategy = StrategyWithChain()(STRATEGY_ACTION_OPEN_LONG, tf=1)
-        dp = make_dp(close_val=100.0, sar=95.0, atr=2.0)
+        dp = make_dp(close_val=100.0, sar_002_02=95.0, atr=2.0)
         _, _, _, stop_price, _ = strategy.check(dp, POSITION_STATE_WAIT, 1000.0, None)
         expected = 95.0 - 0.3 * 2.0  # = 94.4
         assert stop_price == pytest.approx(expected)
 
     def test_stop_loss_short_is_sar_plus_0_3_atr(self):
-        """Default stop_loss (short) = sar + 0.3 * atr_14."""
+        """Default stop_loss (short) = sar_002_02 + 0.3 * atr_14."""
         strategy = StrategyWithChain()(STRATEGY_ACTION_OPEN_SHORT, tf=1)
-        dp = make_dp(close_val=100.0, sar=105.0, atr=2.0)
+        dp = make_dp(close_val=100.0, sar_002_02=105.0, atr=2.0)
         _, _, _, stop_price, _ = strategy.check(dp, POSITION_STATE_WAIT, 1000.0, None)
         expected = 105.0 + 0.3 * 2.0  # = 105.6
         assert stop_price == pytest.approx(expected)

@@ -20,23 +20,23 @@ def _any_nan(*values: float) -> bool:
 
 
 class BigCandle_Signal(BaseSignal):
-    """Signal: natr_14 > coef * natr_ma (big candle detection)."""
+    """Signal: natr_14 > coef * natr_14_ma_5 (big candle detection)."""
 
     def __init__(self, tf: int, coef: float) -> None:
         """Initialize BigCandle_Signal.
 
         Args:
             tf: Timeframe (in minutes).
-            coef: Coefficient to multiply natr_ma by for threshold.
+            coef: Coefficient to multiply natr_14_ma_5 by for threshold.
         """
         super().__init__()
         self.tf = tf
         self.coef = coef
 
     def check(self, data_point: DataPoint, levels: dict, action) -> bool:
-        """Check if natr_14 > coef * natr_ma.
+        """Check if natr_14 > coef * natr_14_ma_5.
 
-        Both are normalized ATR (%) — natr_14 vs natr_ma (EMA-5 of natr_14).
+        Both are normalized ATR (%) — natr_14 vs natr_14_ma_5 (EMA-5 of natr_14).
 
         Args:
             data_point: Current market data point.
@@ -44,16 +44,16 @@ class BigCandle_Signal(BaseSignal):
             action: The action being evaluated (unused).
 
         Returns:
-            bool: True if natr_14 > coef * natr_ma, False otherwise.
+            bool: True if natr_14 > coef * natr_14_ma_5, False otherwise.
                   Returns False if either value is NaN.
         """
         natr_14 = data_point.get("natr_14", self.tf, self.shift)
-        natr_ma = data_point.get("natr_ma", self.tf, self.shift)
+        natr_14_ma_5 = data_point.get("natr_14_ma_5", self.tf, self.shift)
 
-        if _any_nan(natr_14, natr_ma):
+        if _any_nan(natr_14, natr_14_ma_5):
             return False
 
-        return natr_14 > self.coef * natr_ma
+        return natr_14 > self.coef * natr_14_ma_5
 
 
 class LongTale_Signal(BaseSignal):

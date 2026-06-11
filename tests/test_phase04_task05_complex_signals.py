@@ -566,7 +566,7 @@ class TestBounceLongSignal:
         from signals_lib.complex import Bounce_Long_Signal
         from signals_lib.operations import And_Signal
 
-        sig = Bounce_Long_Signal(tf=5, indi="macd", indi_ma="macd_signal")
+        sig = Bounce_Long_Signal(tf=5, indi="macd_12_26_9", indi_ma="macd_signal_12_26_9")
         assert hasattr(sig, "_inner")
         assert isinstance(sig._inner, And_Signal)
 
@@ -641,7 +641,7 @@ class TestBounceShortSignal:
         from signals_lib.complex import Bounce_Short_Signal
         from signals_lib.operations import And_Signal
 
-        sig = Bounce_Short_Signal(tf=5, indi="macd", indi_ma="macd_signal")
+        sig = Bounce_Short_Signal(tf=5, indi="macd_12_26_9", indi_ma="macd_signal_12_26_9")
         assert hasattr(sig, "_inner")
         assert isinstance(sig._inner, And_Signal)
 
