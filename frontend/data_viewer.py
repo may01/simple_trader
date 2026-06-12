@@ -85,6 +85,27 @@ class DataViewer:
 
     _DEFAULT_INDICATORS = ["rsi_14", "cci_14"]
 
+    # Price-axis overlays drawn on every window figure (skip-if-absent).
+    # Bollinger variants share one colour per variant; EMAs get distinct
+    # colours; SAR renders as markers, never a connected line.
+    _PRICE_OVERLAYS = [
+        "bb_upper_20_2", "bb_middle_20_2", "bb_lower_20_2",
+        "bb_upper_10_15", "bb_lower_10_15",
+        "bb_upper_20_3", "bb_lower_20_3",
+        "ema_7", "ema_14", "ema_25", "ema_50", "ema_100",
+        "sar_002_02",
+    ]
+
+    _OVERLAY_COLORS = {
+        "bb_upper_20_2": "royalblue", "bb_middle_20_2": "royalblue",
+        "bb_lower_20_2": "royalblue",
+        "bb_upper_10_15": "darkorange", "bb_lower_10_15": "darkorange",
+        "bb_upper_20_3": "purple", "bb_lower_20_3": "purple",
+        "ema_7": "gold", "ema_14": "orange", "ema_25": "magenta",
+        "ema_50": "teal", "ema_100": "brown",
+        "sar_002_02": "black",
+    }
+
     def __init__(self, full_data: FullData, tf: int = 15) -> None:
         self.full_data = full_data
         self.tf = tf
@@ -219,7 +240,33 @@ class DataViewer:
         df_slice = self._dedup_tf_rows(df_slice, tf)
         if df_slice.empty:
             return empty_figure()
-        return self._build_figure(df_slice, indicators, tf=tf)
+        fig = self._build_figure(df_slice, indicators, tf=tf)
+        self._draw_price_overlays(fig, df_slice, tf)
+        return fig
+
+    def _draw_price_overlays(
+        self,
+        fig: go.Figure,
+        df_slice: pd.DataFrame,
+        tf: int,
+    ) -> None:
+        """Draw Bollinger/EMA/SAR overlays on the price subplot. Skip-if-absent."""
+        times = list(df_slice.index)
+        for name in self._PRICE_OVERLAYS:
+            col = f"{tf}_{name}"
+            if col not in df_slice.columns:
+                continue
+            values = list(df_slice[col])
+            color = self._OVERLAY_COLORS.get(name, "gray")
+            if name.startswith("sar"):
+                self.renderer.draw_marker(
+                    fig, times, values,
+                    marker_symbol="circle", color=color, label=name,
+                )
+            else:
+                self.renderer.draw_line(
+                    fig, "price", times, values, label=name, color=color,
+                )
 
     def view_full(
         self,
