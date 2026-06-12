@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional, Any
 
 import pandas as pd
@@ -102,6 +103,22 @@ class DataViewer:
             return list(self._DEFAULT_INDICATORS)
         return list(indicators)
 
+    def _dedup_tf_rows(self, df_slice: pd.DataFrame, tf: int) -> pd.DataFrame:
+        """Keep one row per *tf*-minute period (the last — completed candle state).
+
+        Higher TFs repeat values on every base-frequency row of the wide df;
+        without dedup their candles would render once per base row.
+        Warm-up rows with NaN close for this TF are dropped too.
+        """
+        if df_slice.empty:
+            return df_slice
+        floored = df_slice.index.floor(f"{tf}min")
+        df_slice = df_slice[~floored.duplicated(keep="last")]
+        close_col = f"{tf}_close"
+        if close_col in df_slice.columns:
+            df_slice = df_slice[df_slice[close_col].notna()]
+        return df_slice
+
     def _subplot_list(self, indicators: list[str]) -> list[str]:
         """Build the ordered subplot name list for create_figure."""
         subplots = ["price", "volume"]
@@ -118,11 +135,13 @@ class DataViewer:
         fig: go.Figure,
         df_slice: pd.DataFrame,
         indicators: list[str],
+        tf: int | None = None,
     ) -> None:
         """Draw each indicator as a line on the appropriate subplot."""
+        tf = self.tf if tf is None else tf
         times = list(df_slice.index)
         for ind in indicators:
-            col = f"{self.tf}_{ind}"
+            col = f"{tf}_{ind}"
             if col not in df_slice.columns:
                 continue
             values = list(df_slice[col])
@@ -134,26 +153,28 @@ class DataViewer:
         self,
         df_slice: pd.DataFrame,
         indicators: list[str],
+        tf: int | None = None,
     ) -> go.Figure:
         """Create and populate a figure (candles + indicators). Does not show/save."""
+        tf = self.tf if tf is None else tf
         subplots = self._subplot_list(indicators)
         fig = self.renderer.create_figure(subplots)
 
         times = list(df_slice.index)
-        opens = list(df_slice[f"{self.tf}_open"])
-        highs = list(df_slice[f"{self.tf}_high"])
-        lows = list(df_slice[f"{self.tf}_low"])
-        closes = list(df_slice[f"{self.tf}_close"])
+        opens = list(df_slice[f"{tf}_open"])
+        highs = list(df_slice[f"{tf}_high"])
+        lows = list(df_slice[f"{tf}_low"])
+        closes = list(df_slice[f"{tf}_close"])
 
         self.renderer.draw_candles(fig, times, opens, highs, lows, closes)
 
         # Draw volume if column exists
-        vol_col = f"{self.tf}_volume"
+        vol_col = f"{tf}_volume"
         if vol_col in df_slice.columns:
             vol_vals = list(df_slice[vol_col])
             self.renderer.draw_line(fig, "volume", times, vol_vals, label="volume")
 
-        self._draw_indicators(fig, df_slice, indicators)
+        self._draw_indicators(fig, df_slice, indicators, tf=tf)
 
         return fig
 
@@ -161,11 +182,21 @@ class DataViewer:
     # Public API
     # ------------------------------------------------------------------
 
+    def available_tfs(self) -> list[int]:
+        """Timeframes present in the wide df — every ``{tf}_close`` column, ascending."""
+        tfs = []
+        for col in self.full_data.df.columns:
+            m = re.match(r"^(\d+)_close$", str(col))
+            if m:
+                tfs.append(int(m.group(1)))
+        return sorted(tfs)
+
     def build_window_figure(
         self,
         start: pd.Timestamp,
         days: int,
         indicators: list[str] | None = None,
+        tf: int | None = None,
     ) -> go.Figure:
         """Build a figure for a date window of the wide DataFrame.
 
@@ -177,15 +208,18 @@ class DataViewer:
             start: Window start (inclusive).
             days: Window length in days from *start*.
             indicators: Same contract as ``view_full()``.
+            tf: Timeframe override for this figure; ``None`` uses ``self.tf``.
         """
+        tf = self.tf if tf is None else int(tf)
         indicators = self._resolve_indicators(indicators)
         start = pd.Timestamp(start)
         end = start + pd.Timedelta(days=days)
         df = self.full_data.df
         df_slice = df[(df.index >= start) & (df.index < end)]
+        df_slice = self._dedup_tf_rows(df_slice, tf)
         if df_slice.empty:
             return empty_figure()
-        return self._build_figure(df_slice, indicators)
+        return self._build_figure(df_slice, indicators, tf=tf)
 
     def view_full(
         self,

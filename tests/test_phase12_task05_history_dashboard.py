@@ -84,12 +84,10 @@ class TestBuildWindowFigure:
         viewer.build_window_figure(pd.Timestamp("2024-01-02"), 1)
         args = mock_renderer.draw_candles.call_args[0]
         _fig, times, opens, highs, lows, closes = args
-        expected = df[
-            (df.index >= "2024-01-02") & (df.index < "2024-01-03")
-        ]
-        assert len(opens) == len(expected)
-        assert times[0] == expected.index[0]
-        assert times[-1] == expected.index[-1]
+        # One deduped candle per 15-min period over 1 day
+        assert len(opens) == 96
+        assert min(times) >= pd.Timestamp("2024-01-02")
+        assert max(times) < pd.Timestamp("2024-01-03")
 
     def test_end_is_exclusive(self, viewer, mock_renderer):
         viewer.build_window_figure(pd.Timestamp("2024-01-01"), 1)
@@ -167,7 +165,7 @@ class TestHistoryDashboardLayout:
         ids = _layout_ids(d._app.layout)
         assert "start-date" in ids
         assert "days" in ids
-        assert "history-chart" in ids
+        assert "chart-groups" in ids
 
     def test_date_picker_bounded_by_index(self, full_data, df):
         d = HistoryDashboard(full_data)
@@ -198,39 +196,37 @@ def _find_component(layout, target_id):
     raise AssertionError(f"component {target_id!r} not found")
 
 
-class TestRenderWindow:
+class TestRenderGroups:
     def test_delegates_to_viewer(self, full_data):
         d = HistoryDashboard(full_data)
         d.viewer = MagicMock()
         sentinel = go.Figure()
         d.viewer.build_window_figure.return_value = sentinel
-        fig = d._render_window("2024-01-01", 2)
-        assert fig is sentinel
+        graphs = d._render_groups("2024-01-01", 2, [15])
+        assert len(graphs) == 1
+        assert graphs[0].figure is sentinel
         d.viewer.build_window_figure.assert_called_once_with(
-            pd.Timestamp("2024-01-01"), 2
+            pd.Timestamp("2024-01-01"), 2, tf=15
         )
 
-    def test_none_start_date_returns_empty(self, full_data):
+    def test_none_start_date_returns_no_groups(self, full_data):
         d = HistoryDashboard(full_data)
-        fig = d._render_window(None, 5)
-        assert fig.layout.annotations[0].text == "no data in range"
+        assert d._render_groups(None, 5, [15]) == []
 
-    def test_none_days_returns_empty(self, full_data):
+    def test_none_days_returns_no_groups(self, full_data):
         d = HistoryDashboard(full_data)
-        fig = d._render_window("2024-01-01", None)
-        assert fig.layout.annotations[0].text == "no data in range"
+        assert d._render_groups("2024-01-01", None, [15]) == []
 
-    def test_days_below_one_returns_empty(self, full_data):
+    def test_days_below_one_returns_no_groups(self, full_data):
         d = HistoryDashboard(full_data)
-        fig = d._render_window("2024-01-01", 0)
-        assert fig.layout.annotations[0].text == "no data in range"
+        assert d._render_groups("2024-01-01", 0, [15]) == []
 
     def test_viewer_exception_never_propagates(self, full_data):
         d = HistoryDashboard(full_data)
         d.viewer = MagicMock()
         d.viewer.build_window_figure.side_effect = RuntimeError("boom")
-        fig = d._render_window("2024-01-01", 2)
-        assert isinstance(fig, go.Figure)
+        result = d._render_groups("2024-01-01", 2, [15])
+        assert isinstance(result, list)
 
 
 class TestEntryWiring:

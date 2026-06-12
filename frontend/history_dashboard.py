@@ -16,6 +16,19 @@ from dash.dependencies import Input, Output
 
 from frontend.data_viewer import DataViewer, FullData, empty_figure
 
+_TF_LABELS = {1: "1m", 5: "5m", 15: "15m", 60: "1h", 240: "4h", 1440: "1d"}
+
+
+def _tf_label(tf: int) -> str:
+    """Human-readable label for a timeframe in minutes."""
+    if tf in _TF_LABELS:
+        return _TF_LABELS[tf]
+    if tf % 1440 == 0:
+        return f"{tf // 1440}d"
+    if tf % 60 == 0:
+        return f"{tf // 60}h"
+    return f"{tf}m"
+
 
 class HistoryDashboard:
     """Interactive dataset viewer: start-date + days-count window controls."""
@@ -50,17 +63,28 @@ class HistoryDashboard:
         idx = self.full_data.df.index
         return idx.min(), idx.max()
 
-    def _render_window(self, start_date: str | None, days: int | None) -> go.Figure:
-        """Return the figure for the selected window. Never raises."""
+    def _render_groups(
+        self,
+        start_date: str | None,
+        days: int | None,
+        tfs: list | None,
+    ) -> list:
+        """Return one dcc.Graph per selected TF, ascending TF order. Never raises."""
         try:
-            if start_date is None or days is None or int(days) < 1:
-                return empty_figure()
-            return self.viewer.build_window_figure(
-                pd.Timestamp(start_date), int(days)
-            )
+            if start_date is None or days is None or int(days) < 1 or not tfs:
+                return []
+            graphs = []
+            for tf in sorted(int(t) for t in tfs):
+                fig = self.viewer.build_window_figure(
+                    pd.Timestamp(start_date), int(days), tf=tf
+                )
+                graphs.append(
+                    dcc.Graph(id={"type": "tf-chart", "tf": tf}, figure=fig)
+                )
+            return graphs
         except Exception as e:
-            print(f"[HistoryDashboard] _render_window error: {e}")
-            return empty_figure()
+            print(f"[HistoryDashboard] _render_groups error: {e}")
+            return [dcc.Graph(figure=empty_figure())]
 
     # ------------------------------------------------------------------
     # Dash app construction
@@ -69,6 +93,8 @@ class HistoryDashboard:
     def _build_app(self) -> dash.Dash:
         app = dash.Dash(__name__)
         dmin, dmax = self._date_bounds()
+        tfs = self.viewer.available_tfs()
+        initial = [self.tf] if self.tf in tfs else tfs[:1]
 
         app.layout = html.Div(
             [
@@ -82,17 +108,29 @@ class HistoryDashboard:
                             max_date_allowed=dmax.date(),
                         ),
                         dcc.Input(id="days", type="number", min=1, value=7),
+                        dcc.Checklist(
+                            id="timeframes",
+                            options=[
+                                {"label": _tf_label(tf), "value": tf} for tf in tfs
+                            ],
+                            value=initial,
+                            inline=True,
+                        ),
                     ]
                 ),
-                dcc.Graph(id="history-chart"),
+                html.Div(id="chart-groups"),
             ]
         )
 
         @app.callback(
-            Output("history-chart", "figure"),
-            [Input("start-date", "date"), Input("days", "value")],
+            Output("chart-groups", "children"),
+            [
+                Input("start-date", "date"),
+                Input("days", "value"),
+                Input("timeframes", "value"),
+            ],
         )
-        def update(start_date, days):  # type: ignore[return]
-            return self._render_window(start_date, days)
+        def update(start_date, days, tfs_selected):  # type: ignore[return]
+            return self._render_groups(start_date, days, tfs_selected)
 
         return app
