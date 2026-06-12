@@ -55,6 +55,87 @@ _RENAME_MAP: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Parallel indicator-pass helpers
+# ---------------------------------------------------------------------------
+
+# Wide df shared with fork()ed pool workers via copy-on-write — set right
+# before the pool is created, cleared after. Read-only in workers; passing it
+# through task args would pickle gigabytes per task instead.
+_PARALLEL_DF: "pd.DataFrame | None" = None
+
+
+class _SliceDataPoint:
+    """Holds ONE indicator-input slice so successive fields share it.
+
+    WideDataPoint.get_df builds a fresh slice per call, so writes from
+    earlier fields would be lost to later (dependent) fields and never
+    reach the wide df. This wrapper pins the slice for the (ts, tf)
+    computation; the slice's last row is then copied back.
+    """
+
+    def __init__(self, slice_df: pd.DataFrame, ts: pd.Timestamp) -> None:
+        self._df = slice_df
+        self._ts = ts
+
+    def get_df(self, tf: int) -> pd.DataFrame:
+        return self._df
+
+    @property
+    def timestamp(self) -> pd.Timestamp:
+        return self._ts
+
+
+def _split_index_chunks(index: pd.Index, n_chunks: int) -> list[pd.Index]:
+    """Split *index* into at most *n_chunks* contiguous, order-preserving parts."""
+    if len(index) == 0:
+        return [index]
+    n_chunks = max(1, min(n_chunks, len(index)))
+    size = -(-len(index) // n_chunks)  # ceil division
+    return [index[i:i + size] for i in range(0, len(index), size)]
+
+
+def _compute_tf_rows(
+    df: pd.DataFrame,
+    tf: int,
+    rows: pd.Index,
+    groups: list[str],
+) -> dict[str, list[float]]:
+    """Compute indicator values of *groups* for one tf over *rows* of *df*.
+
+    Pure with respect to df row order: each (ts, tf) computation reads only
+    the lookback slice ending at ts, never another row's computed values —
+    which is what makes chunked parallel execution safe.
+    """
+    from indicators import Indicators, build_indicator_input  # lazy import
+
+    fields = Indicators._sorted_fields(tf, groups=groups)
+    out_cols = [f"{tf}_{field.name}" for field in fields]
+
+    # Collect per-row results in plain lists; bulk-assign once per tf
+    # (per-cell .loc writes on a 20k×100+ frame are prohibitively slow).
+    # Fragmentation of the throwaway slices is intentional — sequential
+    # inserts beat pre-allocation there (see Indicators._run_fields) —
+    # so silence pandas' PerformanceWarning for the loop.
+    results: dict[str, list[float]] = {col: [] for col in out_cols}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=pd.errors.PerformanceWarning)
+        for ts in rows:
+            slice_df = build_indicator_input(df, ts, tf)
+            data_point = _SliceDataPoint(slice_df, ts)
+            Indicators.compute_group(data_point, tf, groups=groups)
+            last = slice_df.iloc[-1]
+            for col in out_cols:
+                results[col].append(last[col] if col in slice_df.columns else float("nan"))
+    return results
+
+
+def _pool_compute_chunk(args: tuple[int, pd.Index, list[str]]) -> dict[str, list[float]]:
+    """Pool worker: compute one (tf, row-chunk) against the fork-shared df."""
+    tf, rows, groups = args
+    return _compute_tf_rows(_PARALLEL_DF, tf, rows, groups)
+
+
+# ---------------------------------------------------------------------------
 # DataPreparer
 # ---------------------------------------------------------------------------
 
@@ -79,7 +160,9 @@ class DataPreparer:
         self.output_path = output_path
         self.attributes_output_path = attributes_output_path
         self.nn_output_path = nn_output_path
-        self.num_workers: int = int(os.environ.get("NUM_WORKERS", "4"))
+        self.num_workers: int = int(
+            os.environ.get("NUM_WORKERS", os.environ.get("AVAIABLE_THREADS", "4"))
+        )
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -308,21 +391,15 @@ class DataPreparer:
         tfs: list[int],
         start_ts: "pd.Timestamp | None" = None,
     ) -> None:
-        """Iterate every (tf, timestamp) pair and call Indicators.compute_group.
+        """Compute *groups* for every (tf, timestamp) pair via _compute_tf_rows.
 
-        For each timestamp in df.index (from start_ts onward) and each tf in tfs:
-          - Wraps df at ts into a WideDataPoint
-          - Calls Indicators.compute_group(data_point, tf, groups=groups)
-
-        The WideDataPoint.get_df(tf) call returns a per-tf slice that
-        Indicators.compute_group mutates in place (via field.compute writing
-        to df[f"{tf}_{field.name}"]).
-
-        Because WideDataPoint.get_df delegates to build_indicator_input which
-        returns a *view/copy* for indicator computation but writes results back
-        via the WideDataPoint.get_df mechanism, we use a direct approach:
-        for each ts we build a WideDataPoint and let Indicators.compute_group
-        write directly into the slice.  The wide df is mutated row-by-row.
+        Each (ts, tf) computation reads only the lookback slice ending at ts
+        (build_indicator_input) and never another row's computed values — the
+        per-row results are bulk-assigned only after all rows are computed.
+        That independence allows splitting compute_index into contiguous
+        chunks and computing them in fork()ed worker processes when
+        self.num_workers > 1; workers read the wide df through the
+        copy-on-write _PARALLEL_DF module global.
 
         Args:
             df:       Wide DataFrame (mutated in place column-by-column).
@@ -330,58 +407,68 @@ class DataPreparer:
             tfs:      Timeframes to compute indicators for.
             start_ts: First timestamp to compute for. Earlier rows still feed
                       build_indicator_input lookback slices but get no values
-                      of their own (NaN after the bulk assign). Safe because
-                      per-row results are written back only after the loop, so
-                      no row ever reads another row's computed values.
+                      of their own (NaN after the bulk assign).
                       None = compute every row.
         """
-        from indicators import Indicators, build_indicator_input  # lazy import
-
-        class _SliceDataPoint:
-            """Holds ONE indicator-input slice so successive fields share it.
-
-            WideDataPoint.get_df builds a fresh slice per call, so writes from
-            earlier fields would be lost to later (dependent) fields and never
-            reach the wide df. This wrapper pins the slice for the (ts, tf)
-            computation; the slice's last row is then copied back.
-            """
-
-            def __init__(self, slice_df: pd.DataFrame, ts: pd.Timestamp) -> None:
-                self._df = slice_df
-                self._ts = ts
-
-            def get_df(self, tf: int) -> pd.DataFrame:
-                return self._df
-
-            @property
-            def timestamp(self) -> pd.Timestamp:
-                return self._ts
+        from indicators import Indicators  # lazy import
 
         compute_index = df.index if start_ts is None else df.index[df.index >= start_ts]
 
+        tf_cols: dict[int, list[str]] = {}
         for tf in tfs:
             fields = Indicators._sorted_fields(tf, groups=groups)
-            if not fields:
-                continue
-            out_cols = [f"{tf}_{field.name}" for field in fields]
+            if fields:
+                tf_cols[tf] = [f"{tf}_{field.name}" for field in fields]
+        if not tf_cols:
+            return
 
-            # Collect per-row results in plain lists; bulk-assign once per tf
-            # (per-cell .loc writes on a 20k×100+ frame are prohibitively slow).
-            # Fragmentation of the throwaway slices is intentional — sequential
-            # inserts beat pre-allocation there (see Indicators._run_fields) —
-            # so silence pandas' PerformanceWarning for the loop.
-            results: dict[str, list[float]] = {col: [] for col in out_cols}
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", category=pd.errors.PerformanceWarning)
-                for ts in compute_index:
-                    slice_df = build_indicator_input(df, ts, tf)
-                    data_point = _SliceDataPoint(slice_df, ts)
-                    Indicators.compute_group(data_point, tf, groups=groups)
-                    last = slice_df.iloc[-1]
-                    for col in out_cols:
-                        results[col].append(last[col] if col in slice_df.columns else float("nan"))
+        n_workers = min(self.num_workers, len(compute_index))
+        if n_workers > 1:
+            tf_results = self._compute_parallel(df, tf_cols, compute_index, groups, n_workers)
+        else:
+            tf_results = {
+                tf: _compute_tf_rows(df, tf, compute_index, groups) for tf in tf_cols
+            }
 
+        for tf, out_cols in tf_cols.items():
             # Single multi-column setitem — per-column inserts fragment the
             # frame (one block each) and trigger PerformanceWarning spam.
             # Index alignment leaves NaN in rows before start_ts.
-            df[out_cols] = pd.DataFrame(results, index=compute_index)
+            df[out_cols] = pd.DataFrame(tf_results[tf], index=compute_index)
+
+    @staticmethod
+    def _compute_parallel(
+        df: pd.DataFrame,
+        tf_cols: dict[int, list[str]],
+        compute_index: pd.Index,
+        groups: list[str],
+        n_workers: int,
+    ) -> dict[int, dict[str, list[float]]]:
+        """Fan (tf, row-chunk) tasks out to a fork pool; return results per tf.
+
+        Requires the fork start method: workers inherit the wide df through
+        _PARALLEL_DF without pickling it (copy-on-write).
+        """
+        import multiprocessing
+
+        global _PARALLEL_DF
+
+        chunks = _split_index_chunks(compute_index, n_workers)
+        tasks = [(tf, chunk, groups) for tf in tf_cols for chunk in chunks]
+
+        ctx = multiprocessing.get_context("fork")
+        _PARALLEL_DF = df
+        try:
+            with ctx.Pool(processes=n_workers) as pool:
+                chunk_results = pool.map(_pool_compute_chunk, tasks)
+        finally:
+            _PARALLEL_DF = None
+
+        # Reassemble: tasks are ordered tf-major, chunk-minor; concatenating
+        # chunk lists in submission order restores compute_index order.
+        tf_results: dict[int, dict[str, list[float]]] = {}
+        for (tf, _, _), result in zip(tasks, chunk_results):
+            merged = tf_results.setdefault(tf, {col: [] for col in tf_cols[tf]})
+            for col in tf_cols[tf]:
+                merged[col].extend(result[col])
+        return tf_results
