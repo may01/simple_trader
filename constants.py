@@ -58,3 +58,9 @@ STATUS_FAIL = "STATUS_FAIL"
 # --- Candle wick types ---
 CANDLE_HIGH = 1  # upper wick analysis
 CANDLE_LOW = 2   # lower wick analysis
+
+# --- Indicator computation window ---
+# Max closed candles fed to one indicator computation (build_indicator_input)
+# and therefore the warmup history required per TF for NaN-free indicators.
+# Must stay >= the slowest indicator lookback (ema_100 needs 100).
+INDICATOR_WINDOW_ROWS = 105

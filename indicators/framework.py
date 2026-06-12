@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from config_loader import CANDLES, load_indicators_config
+from constants import INDICATOR_WINDOW_ROWS
 from logs import log_warning
 
 # Module-level set to track which missing resource deps have already been warned about.
@@ -111,11 +112,11 @@ class _PlaceholderField(IndicatorField):
 # ---------------------------------------------------------------------------
 
 def build_indicator_input(df: pd.DataFrame, ts: pd.Timestamp, tf: int) -> pd.DataFrame:
-    """Return indicator input slice at ts for tf (up to 105 rows).
+    """Return indicator input slice at ts for tf (up to INDICATOR_WINDOW_ROWS rows).
 
     Selects all rows up to and including ts, keeps only closed-candle rows for
     the given tf, then appends the partial current candle if ts is not closed.
-    Returns at most 105 rows (the tail).
+    Returns at most INDICATOR_WINDOW_ROWS rows (the tail).
 
     Args:
         df: Wide DataFrame with columns ``{tf}_is_closed`` and a DatetimeIndex.
@@ -123,7 +124,8 @@ def build_indicator_input(df: pd.DataFrame, ts: pd.Timestamp, tf: int) -> pd.Dat
         tf: Timeframe in minutes.
 
     Returns:
-        DataFrame of at most 105 rows suitable for indicator computation.
+        DataFrame of at most INDICATOR_WINDOW_ROWS rows suitable for indicator
+        computation.
     """
     closed_col = f"{tf}_is_closed"
 
@@ -144,12 +146,12 @@ def build_indicator_input(df: pd.DataFrame, ts: pd.Timestamp, tf: int) -> pd.Dat
     closed_pos = pos[:k]
 
     if len(closed_pos) > 0 and closed_pos[-1] == i:
-        # Current row is a closed candle — window is the last 105 closed rows.
-        sel = closed_pos[-105:]
+        # Current row is a closed candle — window is the last N closed rows.
+        sel = closed_pos[-INDICATOR_WINDOW_ROWS:]
     else:
-        # Append the current row as a partial candle (104 closed + partial,
-        # matching the previous tail(105)-after-append behavior).
-        sel = np.append(closed_pos[-104:], i)
+        # Append the current row as a partial candle (N-1 closed + partial,
+        # matching the previous tail(N)-after-append behavior).
+        sel = np.append(closed_pos[-(INDICATOR_WINDOW_ROWS - 1):], i)
 
     return df.iloc[sel]
 

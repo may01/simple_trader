@@ -36,8 +36,9 @@ class Graber:
 
         - If file is present and already covers the range: no-op.
         - If file is missing: fetch full range, save.
-        - If file exists but is partial (last timestamp < end_ms): fetch the
-          missing tail, merge, save.
+        - If file exists but is partial: fetch the missing head (first
+          timestamp > start_ms) and/or missing tail (last timestamp < end_ms),
+          merge, save.
 
         Raises
         ------
@@ -48,20 +49,35 @@ class Graber:
         existing = load_existing(self.output_path)
 
         if existing is not None and not existing.empty:
+            existing_start_ms = int(existing.index[0].timestamp() * 1000)
             existing_end_ms = int(existing.index[-1].timestamp() * 1000)
-            if existing_end_ms >= end_ms:
-                # Data is already current — nothing to do.
-                return
 
-            # Fetch only the missing tail.
-            fetch_start = existing_end_ms + 60_000
-            new_data = self.stock.get_candles_range(symbol, fetch_start, end_ms)
-            if new_data is None or new_data.empty:
-                raise ValueError(
-                    f"stock.get_candles_range() returned empty result for "
-                    f"symbol={symbol!r}, start_ms={fetch_start}, end_ms={end_ms}"
-                )
-            merged = merge_incremental(existing, new_data)
+            merged = existing
+
+            if start_ms < existing_start_ms:
+                # Fetch the missing head: [start_ms, existing_start).
+                head = self.stock.get_candles_range(symbol, start_ms, existing_start_ms)
+                if head is None or head.empty:
+                    raise ValueError(
+                        f"stock.get_candles_range() returned empty result for "
+                        f"symbol={symbol!r}, start_ms={start_ms}, end_ms={existing_start_ms}"
+                    )
+                merged = merge_incremental(head, merged)
+
+            if existing_end_ms < end_ms:
+                # Fetch the missing tail, skipping the already-saved last candle.
+                fetch_start = existing_end_ms + 60_000
+                tail = self.stock.get_candles_range(symbol, fetch_start, end_ms)
+                if tail is None or tail.empty:
+                    raise ValueError(
+                        f"stock.get_candles_range() returned empty result for "
+                        f"symbol={symbol!r}, start_ms={fetch_start}, end_ms={end_ms}"
+                    )
+                merged = merge_incremental(merged, tail)
+
+            if merged is existing:
+                # Range already covered — nothing to do.
+                return
             save_atomic(merged, self.output_path)
         else:
             # No file present — fetch the full range.

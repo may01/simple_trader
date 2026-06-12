@@ -190,7 +190,11 @@ class TestRunGrabData:
         mock_graber_cls.assert_called_once_with(mock_stock, output_path="/data/graber_data.pkl")
 
     def test_ensure_data_called_with_symbol_and_times(self, monkeypatch):
-        """ensure_data called with converted symbol and DATA_START/DATA_END as ints."""
+        """ensure_data called with symbol, warmup-extended DATA_START, and DATA_END.
+
+        Grab start is DATA_START minus the indicator warmup margin
+        (105 rows × max(CANDLES)=1440 min = 105 days = 9_072_000_000 ms).
+        """
         _set_env(monkeypatch, {
             "RUN_TYPE": "grab_data",
             "PAIR": "link_usdt",
@@ -211,9 +215,9 @@ class TestRunGrabData:
             t = mod.Trainer()
             t._run_grab_data()
 
-        # PAIR "link_usdt" → "LINKUSDT"
+        # PAIR "link_usdt" → "LINKUSDT"; start extended back by 105 days warmup
         mock_graber_instance.ensure_data.assert_called_once_with(
-            "LINKUSDT", 1700000000000, 1700100000000
+            "LINKUSDT", 1690928000000, 1700100000000
         )
 
     def test_pair_conversion_btc_usdt(self, monkeypatch):
@@ -450,6 +454,57 @@ class TestRunSimulate:
 
         mock_orch_instance.run.assert_called_once_with(mock_sim_data)
         mock_analyzer_instance.analyze.assert_called_once()
+
+    def test_simulation_window_not_warmup_extended(self, monkeypatch, tmp_path):
+        """_run_simulate keeps begin_ts = DATA_START // 1000 — warmup margin
+        applies only to the grab range, never to the simulation window."""
+        import sys
+        _set_env(monkeypatch, {"RUN_TYPE": "simulate"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        mock_sim_data = MagicMock()
+        mock_sim_data_cls = MagicMock(return_value=mock_sim_data)
+        mock_orch_instance = MagicMock()
+        mock_orch_instance.run.return_value = []
+        mock_orch_cls = MagicMock(return_value=mock_orch_instance)
+        mock_analyzer_instance = MagicMock()
+        mock_analyzer_instance.analyze.return_value = {"total_trades": 0}
+        mock_analyzer_cls = MagicMock(return_value=mock_analyzer_instance)
+
+        mock_data_module = MagicMock()
+        mock_data_module.SimulationData = mock_sim_data_cls
+        mock_backtesting_sim = MagicMock()
+        mock_backtesting_sim.SimulationOrchestrator = mock_orch_cls
+        mock_backtesting_perf = MagicMock()
+        mock_backtesting_perf.PerformanceAnalyzer = mock_analyzer_cls
+        mock_robots = MagicMock()
+
+        _keys_to_mock = ["data", "backtesting.simulation_orchestrator",
+                         "backtesting.performance_analyzer", "robots.train_robot"]
+        _saved = {k: sys.modules.get(k) for k in _keys_to_mock}
+        sys.modules["data"] = mock_data_module
+        sys.modules["backtesting.simulation_orchestrator"] = mock_backtesting_sim
+        sys.modules["backtesting.performance_analyzer"] = mock_backtesting_perf
+        sys.modules["robots.train_robot"] = mock_robots
+
+        try:
+            with patch("helpers.wide_df_path", return_value="/data/wide.pkl"), \
+                 patch("helpers.shared_folder", return_value=str(tmp_path) + "/"):
+                t = mod.Trainer()
+                t._run_simulate()
+        finally:
+            for key, original in _saved.items():
+                if original is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = original
+
+        # DATA_START=1700000000000, DATA_END=1700100000000 (from _set_env)
+        mock_sim_data_cls.assert_called_once_with(
+            "link_usdt", 1700000000, 1700100000, 1
+        )
 
 
 class TestRunSimulateNN:

@@ -102,3 +102,19 @@ def load_nn_config(path: str = "configs/indicators_config.yaml") -> dict:
 
 # Module-level constant — loaded at import from default path
 CANDLES: list = load_candles_config()
+
+
+def warmup_minutes() -> int:
+    """Minutes of leading history needed for NaN-free indicators on all TFs:
+    INDICATOR_WINDOW_ROWS closed candles of the largest timeframe."""
+    from constants import INDICATOR_WINDOW_ROWS
+    return INDICATOR_WINDOW_ROWS * max(CANDLES)
+
+
+def warmup_start_ms(data_start_ms: int) -> int:
+    """Grab-range start: data_start_ms moved back by the warmup margin.
+
+    Clamped at 0 — live.env uses DATA_START=0 as a placeholder.
+    The simulation window itself must keep using the raw DATA_START.
+    """
+    return max(data_start_ms - warmup_minutes() * 60_000, 0)

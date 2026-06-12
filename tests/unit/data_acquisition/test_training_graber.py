@@ -163,6 +163,80 @@ def test_ensure_data_raises_on_empty_fetch(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# ensure_data — missing head (warmup range before existing data)
+# ---------------------------------------------------------------------------
+
+def test_ensure_data_fetches_missing_head(tmp_path):
+    """If requested start is before existing data, the missing head is fetched."""
+    existing_df = _make_df(10, "2024-01-08")  # 00:00–00:09
+    path = str(tmp_path / "graber_data.pkl")
+    existing_df.to_pickle(path)
+
+    head_df = _make_df(10, "2024-01-07 23:50")
+    stock = _make_mock_stock(head_df)
+
+    start_ms = _ts_ms("2024-01-07 23:50")
+    end_ms = _ts_ms("2024-01-08 00:09")  # tail already covered
+
+    graber = Graber(stock, path)
+    graber.ensure_data("LINKUSDT", start_ms, end_ms)
+
+    # Head fetched as [start_ms, existing_start)
+    stock.get_candles_range.assert_called_once_with(
+        "LINKUSDT", start_ms, _ts_ms("2024-01-08")
+    )
+
+    loaded = pd.read_pickle(path)
+    assert loaded.index[0] == pd.Timestamp("2024-01-07 23:50", tz="UTC")
+    assert len(loaded) == 20
+
+
+def test_ensure_data_fetches_head_and_tail(tmp_path):
+    """Both missing head and missing tail are fetched in one call."""
+    existing_df = _make_df(10, "2024-01-08")  # 00:00–00:09
+    path = str(tmp_path / "graber_data.pkl")
+    existing_df.to_pickle(path)
+
+    head_df = _make_df(10, "2024-01-07 23:50")
+    tail_df = _make_df(11, "2024-01-08 00:10")
+    stock = MagicMock()
+    stock.get_candles_range.side_effect = [head_df, tail_df]
+
+    start_ms = _ts_ms("2024-01-07 23:50")
+    end_ms = _ts_ms("2024-01-08 00:20")
+
+    graber = Graber(stock, path)
+    graber.ensure_data("LINKUSDT", start_ms, end_ms)
+
+    existing_end_ms = int(existing_df.index[-1].timestamp() * 1000)
+    calls = stock.get_candles_range.call_args_list
+    assert len(calls) == 2
+    assert calls[0][0] == ("LINKUSDT", start_ms, _ts_ms("2024-01-08"))
+    assert calls[1][0] == ("LINKUSDT", existing_end_ms + 60_000, end_ms)
+
+    loaded = pd.read_pickle(path)
+    assert loaded.index[0] == pd.Timestamp("2024-01-07 23:50", tz="UTC")
+    assert loaded.index[-1] == pd.Timestamp("2024-01-08 00:20", tz="UTC")
+    assert len(loaded) == 31
+
+
+def test_ensure_data_raises_on_empty_head_fetch(tmp_path):
+    """Empty result for a non-empty head range raises ValueError."""
+    existing_df = _make_df(10, "2024-01-08")
+    path = str(tmp_path / "graber_data.pkl")
+    existing_df.to_pickle(path)
+
+    stock = _make_mock_stock(pd.DataFrame())  # empty result
+
+    start_ms = _ts_ms("2024-01-07 23:50")
+    end_ms = _ts_ms("2024-01-08 00:09")
+
+    graber = Graber(stock, path)
+    with pytest.raises(ValueError, match="empty"):
+        graber.ensure_data("LINKUSDT", start_ms, end_ms)
+
+
+# ---------------------------------------------------------------------------
 # load()
 # ---------------------------------------------------------------------------
 

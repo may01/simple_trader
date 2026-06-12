@@ -131,14 +131,17 @@ def validate_1min_spacing(df: pd.DataFrame) -> None:
 # Script entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def main() -> None:
     from helpers import graber_data_path
     from grabers.init_folders import init_dataset_folders
+    from config_loader import warmup_start_ms
 
     api_key = os.environ["BINANCE_API_KEY"]
     api_secret = os.environ["BINANCE_API_SECRET"]
     pair = os.environ["PAIR"]
-    data_start = int(os.environ["DATA_START"])
+    # Grab starts earlier than DATA_START so indicators have full warmup
+    # history at the simulation start date.
+    data_start = warmup_start_ms(int(os.environ["DATA_START"]))
     data_end = int(os.environ["DATA_END"])
 
     # Ensure folders exist
@@ -171,3 +174,7 @@ if __name__ == "__main__":
         validate_1min_spacing(new_data)
         save_atomic(new_data, output_path)
         print(f"Saved {len(new_data)} rows to {output_path}")
+
+
+if __name__ == "__main__":
+    main()

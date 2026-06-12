@@ -100,6 +100,7 @@ class Trainer:
         Reads PAIR, DATA_START, DATA_END from environment.
         Converts PAIR "link_usdt" → symbol "LINKUSDT".
         """
+        from config_loader import warmup_start_ms  # lazy
         from helpers import graber_data_path  # lazy
         from stocks_holder import do_stock_init, stock_holder  # lazy
         from training.graber import Graber  # lazy
@@ -112,7 +113,9 @@ class Trainer:
 
         pair = os.environ["PAIR"]
         symbol = pair.replace("_", "").upper()
-        start_ms = int(os.environ["DATA_START"])
+        # Grab starts earlier than DATA_START so indicators have full warmup
+        # history at the simulation start date (sim window stays DATA_START).
+        start_ms = warmup_start_ms(int(os.environ["DATA_START"]))
         end_ms = int(os.environ["DATA_END"])
 
         graber.ensure_data(symbol, start_ms, end_ms)
