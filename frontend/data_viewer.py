@@ -28,6 +28,17 @@ _INDICATOR_SUBPLOT = {
     "stoch": "stoch",
 }
 
+# Full-name routing checked before the base-name split. The split would send
+# every macd_* field to one "macd" subplot; the two configured MACD variants
+# need their own subplots, with signal/hist joining their line.
+_INDICATOR_SUBPLOT_EXACT = {
+    "macd_12_26_9": "macd_12_26_9",
+    "macd_signal_12_26_9": "macd_12_26_9",
+    "macd_hist_12_26_9": "macd_12_26_9",
+    "macd_5_13_9": "macd_5_13_9",
+    "macd_signal_5_13_9": "macd_5_13_9",
+}
+
 
 def _indicator_subplot(indicator: str) -> str | None:
     """Return the subplot name for an indicator, or None for price-axis indicators.
@@ -43,6 +54,9 @@ def _indicator_subplot(indicator: str) -> str | None:
     for prefix in _PRICE_AXIS_PREFIXES:
         if lower.startswith(prefix):
             return None
+    # Exact-name routing (MACD variants)
+    if lower in _INDICATOR_SUBPLOT_EXACT:
+        return _INDICATOR_SUBPLOT_EXACT[lower]
     # Oscillator indicators: use the part before the first underscore
     base = lower.split("_")[0]
     return _INDICATOR_SUBPLOT.get(base, base)
@@ -104,6 +118,25 @@ class DataViewer:
         "ema_7": "gold", "ema_14": "orange", "ema_25": "magenta",
         "ema_50": "teal", "ema_100": "brown",
         "sar_002_02": "black",
+    }
+
+    # Oscillator set for window figures (skip-if-absent). Each oscillator's
+    # MA lines share the subplot of their source series; macd_hist_* renders
+    # as bars. Order drives subplot order under price/volume.
+    _OSCILLATORS = [
+        "rsi_14", "rsi_ma8", "rsi_ma12", "rsi_ma24",
+        "cci_14", "cci_14_ma_20",
+        "macd_12_26_9", "macd_signal_12_26_9", "macd_hist_12_26_9",
+        "macd_5_13_9", "macd_signal_5_13_9",
+    ]
+
+    _OSC_COLORS = {
+        "rsi_14": "blue", "rsi_ma8": "orange", "rsi_ma12": "green",
+        "rsi_ma24": "red",
+        "cci_14": "blue", "cci_14_ma_20": "orange",
+        "macd_12_26_9": "blue", "macd_signal_12_26_9": "orange",
+        "macd_hist_12_26_9": "gray",
+        "macd_5_13_9": "blue", "macd_signal_5_13_9": "orange",
     }
 
     def __init__(self, full_data: FullData, tf: int = 15) -> None:
@@ -168,7 +201,15 @@ class DataViewer:
             values = list(df_slice[col])
             sp = _indicator_subplot(ind)
             subplot = sp if sp is not None else "price"
-            self.renderer.draw_line(fig, subplot, times, values, label=ind)
+            color = self._OSC_COLORS.get(ind, "blue")
+            if ind.lower().startswith("macd_hist"):
+                self.renderer.draw_bar(
+                    fig, subplot, times, values, label=ind, color=color
+                )
+            else:
+                self.renderer.draw_line(
+                    fig, subplot, times, values, label=ind, color=color
+                )
 
     def _build_figure(
         self,
@@ -228,11 +269,12 @@ class DataViewer:
         Args:
             start: Window start (inclusive).
             days: Window length in days from *start*.
-            indicators: Same contract as ``view_full()``.
+            indicators: Same contract as ``view_full()``, except ``None``
+                defaults to the full oscillator set (``_OSCILLATORS``) filtered
+                to columns present for this TF.
             tf: Timeframe override for this figure; ``None`` uses ``self.tf``.
         """
         tf = self.tf if tf is None else int(tf)
-        indicators = self._resolve_indicators(indicators)
         start = pd.Timestamp(start)
         end = start + pd.Timedelta(days=days)
         df = self.full_data.df
@@ -240,6 +282,13 @@ class DataViewer:
         df_slice = self._dedup_tf_rows(df_slice, tf)
         if df_slice.empty:
             return empty_figure()
+        if indicators is None:
+            indicators = [
+                i for i in self._OSCILLATORS
+                if f"{tf}_{i}" in df_slice.columns
+            ]
+        else:
+            indicators = list(indicators)
         fig = self._build_figure(df_slice, indicators, tf=tf)
         self._draw_price_overlays(fig, df_slice, tf)
         return fig

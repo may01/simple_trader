@@ -95,6 +95,28 @@ class ChartRenderer:
             col=1,
         )
 
+    def draw_bar(
+        self,
+        fig: go.Figure,
+        subplot: str,
+        times: list,
+        values: list,
+        label: str,
+        color: str = "gray",
+    ) -> None:
+        """Add a bar trace to the specified subplot."""
+        row = fig._subplot_rows[subplot]
+        fig.add_trace(
+            go.Bar(
+                x=times,
+                y=values,
+                name=label,
+                marker_color=color,
+            ),
+            row=row,
+            col=1,
+        )
+
     def draw_marker(
         self,
         fig: go.Figure,
