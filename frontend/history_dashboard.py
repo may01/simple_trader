@@ -68,15 +68,20 @@ class HistoryDashboard:
         start_date: str | None,
         days: int | None,
         tfs: list | None,
+        subplots: list | None = None,
     ) -> list:
-        """Return one dcc.Graph per selected TF, ascending TF order. Never raises."""
+        """Return one dcc.Graph per selected TF, ascending TF order. Never raises.
+
+        *subplots* is the shared oscillator-subplot selection applied to every
+        TF's figure. ``None`` keeps all subplots; ``[]`` hides them all.
+        """
         try:
             if start_date is None or days is None or int(days) < 1 or not tfs:
                 return []
             graphs = []
             for tf in sorted(int(t) for t in tfs):
                 fig = self.viewer.build_window_figure(
-                    pd.Timestamp(start_date), int(days), tf=tf
+                    pd.Timestamp(start_date), int(days), tf=tf, subplots=subplots
                 )
                 graphs.append(
                     dcc.Graph(id={"type": "tf-chart", "tf": tf}, figure=fig)
@@ -95,6 +100,7 @@ class HistoryDashboard:
         dmin, dmax = self._date_bounds()
         tfs = self.viewer.available_tfs()
         initial = [self.tf] if self.tf in tfs else tfs[:1]
+        subplot_names = self.viewer.available_subplots()
 
         app.layout = html.Div(
             [
@@ -116,6 +122,14 @@ class HistoryDashboard:
                             value=initial,
                             inline=True,
                         ),
+                        dcc.Checklist(
+                            id="subplots",
+                            options=[
+                                {"label": sp, "value": sp} for sp in subplot_names
+                            ],
+                            value=list(subplot_names),
+                            inline=True,
+                        ),
                     ]
                 ),
                 html.Div(id="chart-groups"),
@@ -128,9 +142,12 @@ class HistoryDashboard:
                 Input("start-date", "date"),
                 Input("days", "value"),
                 Input("timeframes", "value"),
+                Input("subplots", "value"),
             ],
         )
-        def update(start_date, days, tfs_selected):  # type: ignore[return]
-            return self._render_groups(start_date, days, tfs_selected)
+        def update(start_date, days, tfs_selected, subplots_selected):  # type: ignore[return]
+            return self._render_groups(
+                start_date, days, tfs_selected, subplots_selected
+            )
 
         return app
