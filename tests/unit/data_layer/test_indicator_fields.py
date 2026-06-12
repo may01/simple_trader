@@ -831,50 +831,57 @@ class TestClassificationFields:
 # ---------------------------------------------------------------------------
 
 class TestTargetsFields:
-    _RM_HIGH = 0.02
-    _STD_HIGH = 0.005
-    _RM_LOW = -0.01
-    _STD_LOW = 0.004
-
     def _make_target_dp(self, tf: int = 15, n: int = 50) -> tuple:
+        # Varying stat columns: shifted (i-1) stats differ from same-row
+        # stats so the tests pin the shift, not just the formula shape.
         df = make_indicator_df(tf=tf, n=n)
-        df[f"{tf}_high_diff_prc_rm_20"] = self._RM_HIGH
-        df[f"{tf}_high_diff_prc_rm_20_std_above"] = self._STD_HIGH
-        df[f"{tf}_low_diff_prc_rm_20"] = self._RM_LOW
-        df[f"{tf}_low_diff_prc_rm_20_std_below"] = self._STD_LOW
+        df[f"{tf}_high_diff_prc_rm_20"] = np.linspace(0.5, 5.0, n)
+        df[f"{tf}_high_diff_prc_rm_20_std_above"] = np.linspace(0.2, 2.0, n)
+        df[f"{tf}_high_diff_prc_rm_20_std_below"] = np.linspace(0.3, 2.4, n)
+        df[f"{tf}_low_diff_prc_rm_20"] = np.linspace(-4.0, -0.5, n)
+        df[f"{tf}_low_diff_prc_rm_20_std_above"] = np.linspace(0.4, 2.8, n)
+        df[f"{tf}_low_diff_prc_rm_20_std_below"] = np.linspace(0.5, 3.2, n)
         dp = LiveDataPoint({tf: df})
         return dp, df
 
-    def test_tgt_long_prev_high_times_rm_minus_std(self):
-        """tgt_long = prev high * (1 + (high_diff_prc_rm_20 - std_above)/100) — diff_prc is percent."""
+    def test_tgt_long_prev_candle_rm_minus_std_below(self):
+        """tgt_long = high[i-1] * (1 + (rm_20_high[i-1] - std_below_high[i-1])/100); diff_prc is percent."""
         field = TgtLongField()
         dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
-        expected = df["15_high"].shift(1) * (1 + (self._RM_HIGH - self._STD_HIGH) / 100)
+        rm = df["15_high_diff_prc_rm_20"].shift(1)
+        std = df["15_high_diff_prc_rm_20_std_below"].shift(1)
+        expected = df["15_high"].shift(1) * (1 + (rm - std) / 100)
         pd.testing.assert_series_equal(result, expected, check_names=False)
 
-    def test_sl_long_prev_low_times_rm_minus_std(self):
-        """sl_long = prev low * (1 + low_diff_prc_rm_20 - std_below)."""
+    def test_sl_long_prev_candle_rm_minus_std_below(self):
+        """sl_long = low[i-1] * (1 + (rm_20_low[i-1] - std_below_low[i-1])/100)."""
         field = SLLongField()
         dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
-        expected = df["15_low"].shift(1) * (1 + (self._RM_LOW - self._STD_LOW) / 100)
+        rm = df["15_low_diff_prc_rm_20"].shift(1)
+        std = df["15_low_diff_prc_rm_20_std_below"].shift(1)
+        expected = df["15_low"].shift(1) * (1 + (rm - std) / 100)
         pd.testing.assert_series_equal(result, expected, check_names=False)
 
-    def test_tgt_short_prev_low_times_rm_plus_std(self):
-        """tgt_short = prev low * (1 + low_diff_prc_rm_20 + std_below)."""
+    def test_tgt_short_prev_candle_rm_plus_std_above(self):
+        """tgt_short = low[i-1] * (1 + (rm_20_low[i-1] + std_above_low[i-1])/100)."""
         field = TgtShortField()
         dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
-        expected = df["15_low"].shift(1) * (1 + (self._RM_LOW + self._STD_LOW) / 100)
+        rm = df["15_low_diff_prc_rm_20"].shift(1)
+        std = df["15_low_diff_prc_rm_20_std_above"].shift(1)
+        expected = df["15_low"].shift(1) * (1 + (rm + std) / 100)
         pd.testing.assert_series_equal(result, expected, check_names=False)
 
-    def test_sl_short_prev_high_times_rm_plus_std(self):
-        """sl_short = prev high * (1 + high_diff_prc_rm_20 + std_above)."""
+    def test_sl_short_prev_candle_rm_plus_std_above(self):
+        """sl_short = high[i-1] * (1 + (rm_20_high[i-1] + std_above_high[i-1])/100)."""
         field = SLShortField()
         dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
-        expected = df["15_high"].shift(1) * (1 + (self._RM_HIGH + self._STD_HIGH) / 100)
+        rm = df["15_high_diff_prc_rm_20"].shift(1)
+        std = df["15_high_diff_prc_rm_20_std_above"].shift(1)
+        expected = df["15_high"].shift(1) * (1 + (rm + std) / 100)
         pd.testing.assert_series_equal(result, expected, check_names=False)
 
     def test_first_row_is_nan_no_previous_candle(self):
@@ -884,11 +891,11 @@ class TestTargetsFields:
 
     def test_dependencies_declare_stat_fields_no_resources(self):
         assert TgtLongField().dependencies == [
-            "high_diff_prc_rm_20", "high_diff_prc_rm_20_std_above"]
+            "high_diff_prc_rm_20", "high_diff_prc_rm_20_std_below"]
         assert SLLongField().dependencies == [
             "low_diff_prc_rm_20", "low_diff_prc_rm_20_std_below"]
         assert TgtShortField().dependencies == [
-            "low_diff_prc_rm_20", "low_diff_prc_rm_20_std_below"]
+            "low_diff_prc_rm_20", "low_diff_prc_rm_20_std_above"]
         assert SLShortField().dependencies == [
             "high_diff_prc_rm_20", "high_diff_prc_rm_20_std_above"]
         for field in (TgtLongField(), SLLongField(), TgtShortField(), SLShortField()):

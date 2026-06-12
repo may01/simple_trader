@@ -20,11 +20,11 @@ def _get_tf_diff_stats(tf: int) -> dict:
 
 
 class TgtLongField(IndicatorField):
-    """Long target: prev high * (1 + high_diff_prc_rm_20 - high_diff_prc_rm_20_std_above)/100; diff_prc is percent."""
+    """Long target: high[i-1] * (1 + (high_diff_prc_rm_20[i-1] - std_below[i-1])/100); diff_prc is percent."""
 
     name = "tgt_long"
     group = "targets"
-    dependencies: list[str] = ["high_diff_prc_rm_20", "high_diff_prc_rm_20_std_above"]
+    dependencies: list[str] = ["high_diff_prc_rm_20", "high_diff_prc_rm_20_std_below"]
     resource_dependencies: list[str] = []
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
@@ -32,13 +32,13 @@ class TgtLongField(IndicatorField):
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         prev_high = df[f"{tf}_high"].shift(1)
-        rm = df[f"{tf}_high_diff_prc_rm_20"]
-        std = df[f"{tf}_high_diff_prc_rm_20_std_above"]
+        rm = df[f"{tf}_high_diff_prc_rm_20"].shift(1)
+        std = df[f"{tf}_high_diff_prc_rm_20_std_below"].shift(1)
         return prev_high * (1.0 + (rm - std) / 100.0)
 
 
 class SLLongField(IndicatorField):
-    """Long stop-loss: prev low * (1 + low_diff_prc_rm_20 - low_diff_prc_rm_20_std_below)/100; diff_prc is percent."""
+    """Long stop-loss: low[i-1] * (1 + (low_diff_prc_rm_20[i-1] - std_below[i-1])/100); diff_prc is percent."""
 
     name = "sl_long"
     group = "targets"
@@ -50,17 +50,17 @@ class SLLongField(IndicatorField):
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         prev_low = df[f"{tf}_low"].shift(1)
-        rm = df[f"{tf}_low_diff_prc_rm_20"]
-        std = df[f"{tf}_low_diff_prc_rm_20_std_below"]
+        rm = df[f"{tf}_low_diff_prc_rm_20"].shift(1)
+        std = df[f"{tf}_low_diff_prc_rm_20_std_below"].shift(1)
         return prev_low * (1.0 + (rm - std) / 100.0)
 
 
 class TgtShortField(IndicatorField):
-    """Short target: prev low * (1 + low_diff_prc_rm_20 + low_diff_prc_rm_20_std_below)/100; diff_prc is percent."""
+    """Short target: low[i-1] * (1 + (low_diff_prc_rm_20[i-1] + std_above[i-1])/100); diff_prc is percent."""
 
     name = "tgt_short"
     group = "targets"
-    dependencies: list[str] = ["low_diff_prc_rm_20", "low_diff_prc_rm_20_std_below"]
+    dependencies: list[str] = ["low_diff_prc_rm_20", "low_diff_prc_rm_20_std_above"]
     resource_dependencies: list[str] = []
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
@@ -68,13 +68,13 @@ class TgtShortField(IndicatorField):
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         prev_low = df[f"{tf}_low"].shift(1)
-        rm = df[f"{tf}_low_diff_prc_rm_20"]
-        std = df[f"{tf}_low_diff_prc_rm_20_std_below"]
+        rm = df[f"{tf}_low_diff_prc_rm_20"].shift(1)
+        std = df[f"{tf}_low_diff_prc_rm_20_std_above"].shift(1)
         return prev_low * (1.0 + (rm + std) / 100.0)
 
 
 class SLShortField(IndicatorField):
-    """Short stop-loss: prev high * (1 + high_diff_prc_rm_20 + high_diff_prc_rm_20_std_above)/100; diff_prc is percent."""
+    """Short stop-loss: high[i-1] * (1 + (high_diff_prc_rm_20[i-1] + std_above[i-1])/100); diff_prc is percent."""
 
     name = "sl_short"
     group = "targets"
@@ -86,8 +86,8 @@ class SLShortField(IndicatorField):
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         prev_high = df[f"{tf}_high"].shift(1)
-        rm = df[f"{tf}_high_diff_prc_rm_20"]
-        std = df[f"{tf}_high_diff_prc_rm_20_std_above"]
+        rm = df[f"{tf}_high_diff_prc_rm_20"].shift(1)
+        std = df[f"{tf}_high_diff_prc_rm_20_std_above"].shift(1)
         return prev_high * (1.0 + (rm + std) / 100.0)
 
 
