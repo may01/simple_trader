@@ -42,7 +42,7 @@ def test_base_indicators_non_nan_at_start_after_warmup():
 
     from training.data_preparer import DataPreparer
     preparer = DataPreparer("configs/indicators_config.yaml", "unused.pkl", "unused.pkl")
-    preparer._run_indicator_pass(df, ["momentum", "trend"], [TF])
+    preparer._run_indicator_pass(df, ["momentum", "trend"], [TF], start_ts=data_start)
 
     from indicators import Indicators
     fields = Indicators._sorted_fields(TF, groups=["momentum", "trend"])
@@ -53,3 +53,7 @@ def test_base_indicators_non_nan_at_start_after_warmup():
     row = df.loc[data_start]
     nan_cols = [c for c in cols if pd.isna(row[c])]
     assert not nan_cols, f"NaN at simulation start for: {nan_cols}"
+
+    # Warmup rows are input only — no indicators computed before data_start
+    before = df.loc[df.index < data_start, cols]
+    assert before.isna().all().all(), "Indicators must not be computed before DATA_START"

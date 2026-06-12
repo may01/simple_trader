@@ -85,7 +85,7 @@ class DataPreparer:
     # Public entry point
     # ------------------------------------------------------------------
 
-    def prepare(self, raw_data_path: str) -> None:
+    def prepare(self, raw_data_path: str, data_start_ms: int | None = None) -> None:
         """Execute the full pipeline end-to-end.
 
         Steps (in order):
@@ -94,14 +94,27 @@ class DataPreparer:
           3. Compute base indicators (fills all non-stats-dependent columns)
           4. Compute base attributes (writes rsi_classification.json + diff_stats.pkl)
           5. Compute class indicators (classification + targets; only TFs [15,60,240,1440])
-          6. Merge df_with_nn.pkl columns (left-join on index; no-op if absent)
-          7. Compute NN normalisation stats → data_attributes
-          8. Save wide_df atomically to output_path
-          9. Save data_attributes to attributes_output_path
+          6. Trim warmup rows (drop everything before data_start_ms)
+          7. Merge df_with_nn.pkl columns (left-join on index; no-op if absent)
+          8. Compute NN normalisation stats → data_attributes
+          9. Save wide_df atomically to output_path
+         10. Save data_attributes to attributes_output_path
 
         Args:
-            raw_data_path: Path to graber_data.pkl.
+            raw_data_path:  Path to graber_data.pkl.
+            data_start_ms:  DATA_START as Unix milliseconds. Rows before this
+                            point are warmup history: they feed indicator
+                            lookback windows (steps 3+5 compute nothing for
+                            them) and are dropped in step 6 so the saved frame
+                            starts at DATA_START. None = compute and keep the
+                            full range (legacy behavior).
         """
+        start_ts = (
+            pd.Timestamp(data_start_ms, unit="ms", tz="UTC")
+            if data_start_ms is not None
+            else None
+        )
+
         # Step 1
         raw_df = self._load_raw_data(raw_data_path)
 
@@ -109,26 +122,31 @@ class DataPreparer:
         wide_df = self._build_base_dataframe(raw_df)
 
         # Step 3 — base indicators (no classification/target stats required)
-        self._compute_base_indicators(wide_df)
+        self._compute_base_indicators(wide_df, start_ts)
 
         # Step 4 — derive rsi_classification.json + diff_stats.pkl
         self._compute_base_attributes(wide_df)
 
         # Step 5 — classification + target columns (require stats from step 4)
-        self._compute_class_indicators(wide_df)
+        self._compute_class_indicators(wide_df, start_ts)
 
-        # Step 6 — optional NN output merge
+        # Step 6 — drop warmup rows: indicators are filled from start_ts on,
+        # so the leading history has served its purpose as lookback input.
+        if start_ts is not None:
+            wide_df = wide_df.loc[wide_df.index >= start_ts]
+
+        # Step 7 — optional NN output merge
         self._merge_nn_output(wide_df)
 
-        # Step 7 — NN normalisation stats
+        # Step 8 — NN normalisation stats
         data_attributes = self._compute_nn_attributes(wide_df)
 
-        # Step 8 — atomic save of wide_df
+        # Step 9 — atomic save of wide_df
         tmp_out = self.output_path + ".tmp"
         wide_df.to_pickle(tmp_out)
         os.rename(tmp_out, self.output_path)
 
-        # Step 9 — save DataAttributes
+        # Step 10 — save DataAttributes
         data_attributes.save(self.attributes_output_path)
 
     # ------------------------------------------------------------------
@@ -194,8 +212,10 @@ class DataPreparer:
         from data import _build_wide_df  # lazy: avoids circular dep / talib at module level
         return _build_wide_df(raw_df)
 
-    def _compute_base_indicators(self, df: pd.DataFrame) -> None:
-        """Compute base indicator groups for every TF and every row in df.
+    def _compute_base_indicators(
+        self, df: pd.DataFrame, start_ts: pd.Timestamp | None = None
+    ) -> None:
+        """Compute base indicator groups for every TF from start_ts onward.
 
         Groups computed: momentum, trend, volatility, oscillators, volume,
         price_derivatives, trend_flags, nn_features.
@@ -204,9 +224,11 @@ class DataPreparer:
         with a WideDataPoint wrapping the current row context.
 
         Args:
-            df: Wide DataFrame (mutated in place via WideDataPoint.get_df()).
+            df:       Wide DataFrame (mutated in place via WideDataPoint.get_df()).
+            start_ts: First timestamp to compute for; earlier rows are warmup
+                      input only. None = compute every row.
         """
-        self._run_indicator_pass(df, BASE_GROUPS, CANDLES)
+        self._run_indicator_pass(df, BASE_GROUPS, CANDLES, start_ts)
 
     def _compute_base_attributes(self, df: pd.DataFrame) -> None:
         """Derive rsi_classification.json and diff_stats.pkl from the DataFrame.
@@ -221,15 +243,19 @@ class DataPreparer:
         data_attributes = DataAttributes()
         data_attributes.compute(df)
 
-    def _compute_class_indicators(self, df: pd.DataFrame) -> None:
+    def _compute_class_indicators(
+        self, df: pd.DataFrame, start_ts: pd.Timestamp | None = None
+    ) -> None:
         """Compute classification and target columns for TFs [15, 60, 240, 1440].
 
         Skips tf=1 and tf=5 which do not carry classification/target features.
 
         Args:
-            df: Wide DataFrame (mutated in place).
+            df:       Wide DataFrame (mutated in place).
+            start_ts: First timestamp to compute for; earlier rows are warmup
+                      input only. None = compute every row.
         """
-        self._run_indicator_pass(df, CLASS_GROUPS, CLASS_TFS)
+        self._run_indicator_pass(df, CLASS_GROUPS, CLASS_TFS, start_ts)
 
     def _merge_nn_output(self, df: pd.DataFrame) -> None:
         """Left-join columns from df_with_nn.pkl onto df (in place).
@@ -280,10 +306,11 @@ class DataPreparer:
         df: pd.DataFrame,
         groups: list[str],
         tfs: list[int],
+        start_ts: "pd.Timestamp | None" = None,
     ) -> None:
         """Iterate every (tf, timestamp) pair and call Indicators.compute_group.
 
-        For each timestamp in df.index and each tf in tfs:
+        For each timestamp in df.index (from start_ts onward) and each tf in tfs:
           - Wraps df at ts into a WideDataPoint
           - Calls Indicators.compute_group(data_point, tf, groups=groups)
 
@@ -298,9 +325,15 @@ class DataPreparer:
         write directly into the slice.  The wide df is mutated row-by-row.
 
         Args:
-            df:     Wide DataFrame (mutated in place column-by-column).
-            groups: Indicator groups to compute.
-            tfs:    Timeframes to compute indicators for.
+            df:       Wide DataFrame (mutated in place column-by-column).
+            groups:   Indicator groups to compute.
+            tfs:      Timeframes to compute indicators for.
+            start_ts: First timestamp to compute for. Earlier rows still feed
+                      build_indicator_input lookback slices but get no values
+                      of their own (NaN after the bulk assign). Safe because
+                      per-row results are written back only after the loop, so
+                      no row ever reads another row's computed values.
+                      None = compute every row.
         """
         from indicators import Indicators, build_indicator_input  # lazy import
 
@@ -324,6 +357,8 @@ class DataPreparer:
             def timestamp(self) -> pd.Timestamp:
                 return self._ts
 
+        compute_index = df.index if start_ts is None else df.index[df.index >= start_ts]
+
         for tf in tfs:
             fields = Indicators._sorted_fields(tf, groups=groups)
             if not fields:
@@ -338,7 +373,7 @@ class DataPreparer:
             results: dict[str, list[float]] = {col: [] for col in out_cols}
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=pd.errors.PerformanceWarning)
-                for ts in df.index:
+                for ts in compute_index:
                     slice_df = build_indicator_input(df, ts, tf)
                     data_point = _SliceDataPoint(slice_df, ts)
                     Indicators.compute_group(data_point, tf, groups=groups)
@@ -348,4 +383,5 @@ class DataPreparer:
 
             # Single multi-column setitem — per-column inserts fragment the
             # frame (one block each) and trigger PerformanceWarning spam.
-            df[out_cols] = pd.DataFrame(results, index=df.index)
+            # Index alignment leaves NaN in rows before start_ts.
+            df[out_cols] = pd.DataFrame(results, index=compute_index)

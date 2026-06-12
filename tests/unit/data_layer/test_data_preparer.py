@@ -214,9 +214,9 @@ class TestPreparePipeline:
         # Patch instance methods to track order
         dp._load_raw_data = lambda path: (call_order.append("load_raw"), pd.DataFrame())[1]
         dp._build_base_dataframe = lambda raw: (call_order.append("build_base"), mock_wide_df)[1]
-        dp._compute_base_indicators = lambda df: call_order.append("base_indicators")
+        dp._compute_base_indicators = lambda df, start_ts=None: call_order.append("base_indicators")
         dp._compute_base_attributes = lambda df: call_order.append("base_attributes")
-        dp._compute_class_indicators = lambda df: call_order.append("class_indicators")
+        dp._compute_class_indicators = lambda df, start_ts=None: call_order.append("class_indicators")
         dp._merge_nn_output = lambda df: call_order.append("merge_nn")
         dp._compute_nn_attributes = lambda df: (call_order.append("nn_attributes"), mock_data_attrs)[1]
 
@@ -266,9 +266,9 @@ class TestAtomicSave:
         # Bypass heavy steps, keep only I/O logic
         dp._load_raw_data = lambda path: pd.DataFrame({"x": [1]})
         dp._build_base_dataframe = lambda raw: mock_wide_df
-        dp._compute_base_indicators = lambda df: None
+        dp._compute_base_indicators = lambda df, start_ts=None: None
         dp._compute_base_attributes = lambda df: None
-        dp._compute_class_indicators = lambda df: None
+        dp._compute_class_indicators = lambda df, start_ts=None: None
         dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: mock_data_attrs
 
@@ -384,3 +384,131 @@ class TestComputeClassIndicators:
         """CLASS_TFS exported constant should be [15, 60, 240, 1440]."""
         dp_mod = _import_data_preparer_with_mocks()
         assert dp_mod.CLASS_TFS == [15, 60, 240, 1440]
+
+
+# ===========================================================================
+# 6. Warmup rows are input only — no indicators before DATA_START, trimmed save
+# ===========================================================================
+
+class TestWarmupTrim:
+    """Indicator passes restricted to ts >= DATA_START; warmup rows dropped
+    before df_with_indicators.pkl is saved."""
+
+    def _make_preparer(self, tmp_path):
+        dp_mod = _import_data_preparer_with_mocks()
+        return dp_mod.DataPreparer(
+            config_path="configs/indicators_config.yaml",
+            output_path=str(tmp_path / "df_with_indicators.pkl"),
+            attributes_output_path=str(tmp_path / "data_attributes.pkl"),
+            nn_output_path=str(tmp_path / "nn_not_present.pkl"),
+        )
+
+    def test_run_indicator_pass_respects_start_ts(self, tmp_path):
+        """_run_indicator_pass(start_ts=...) computes only rows >= start_ts;
+        earlier rows keep NaN in the output columns."""
+        dp = self._make_preparer(tmp_path)
+        wide_df = _make_wide_df(5)  # 2024-01-01 00:00 .. 00:04
+        start_ts = wide_df.index[2]  # 00:02
+
+        mock_field = MagicMock()
+        mock_field.name = "f1"
+        mock_ind = MagicMock()
+        mock_ind._sorted_fields.return_value = [mock_field]
+        mock_bii = MagicMock(return_value=pd.DataFrame({"1_f1": [42.0]}))
+
+        mock_indicators_mod = MagicMock()
+        mock_indicators_mod.Indicators = mock_ind
+        mock_indicators_mod.build_indicator_input = mock_bii
+
+        saved = sys.modules.get("indicators")
+        sys.modules["indicators"] = mock_indicators_mod
+        try:
+            dp._run_indicator_pass(wide_df, ["momentum"], [1], start_ts=start_ts)
+        finally:
+            if saved is None:
+                sys.modules.pop("indicators", None)
+            else:
+                sys.modules["indicators"] = saved
+
+        # Only the 3 rows >= start_ts were iterated
+        assert mock_bii.call_count == 3
+        iterated = [c[0][1] for c in mock_bii.call_args_list]
+        assert min(iterated) == start_ts
+
+        # Rows before start_ts stay NaN, rows from start_ts get values
+        assert wide_df.loc[wide_df.index < start_ts, "1_f1"].isna().all()
+        assert (wide_df.loc[wide_df.index >= start_ts, "1_f1"] == 42.0).all()
+
+    def test_prepare_trims_rows_before_data_start(self, tmp_path):
+        """prepare(..., data_start_ms=...) drops rows before DATA_START
+        from the saved df_with_indicators.pkl."""
+        raw_pkl = str(tmp_path / "graber_data.pkl")
+        _make_raw_df().to_pickle(raw_pkl)
+
+        wide_df = _make_wide_df(5)  # 2024-01-01 00:00 .. 00:04
+        data_start = wide_df.index[2]  # 00:02
+        data_start_ms = int(data_start.timestamp() * 1000)
+
+        dp = self._make_preparer(tmp_path)
+        mock_data_attrs = MagicMock()
+        dp._load_raw_data = lambda path: pd.DataFrame({"x": [1]})
+        dp._build_base_dataframe = lambda raw: wide_df
+        dp._compute_base_indicators = lambda df, start_ts=None: None
+        dp._compute_base_attributes = lambda df: None
+        dp._compute_class_indicators = lambda df, start_ts=None: None
+        dp._merge_nn_output = lambda df: None
+        dp._compute_nn_attributes = lambda df: mock_data_attrs
+
+        dp.prepare(raw_pkl, data_start_ms=data_start_ms)
+
+        saved_df = pd.read_pickle(str(tmp_path / "df_with_indicators.pkl"))
+        assert saved_df.index[0] == data_start
+        assert len(saved_df) == 3
+
+    def test_prepare_passes_start_ts_to_indicator_passes(self, tmp_path):
+        """Both indicator passes receive start_ts derived from data_start_ms."""
+        raw_pkl = str(tmp_path / "graber_data.pkl")
+        _make_raw_df().to_pickle(raw_pkl)
+
+        wide_df = _make_wide_df(5)
+        data_start = wide_df.index[2]
+        data_start_ms = int(data_start.timestamp() * 1000)
+
+        received = {}
+        dp = self._make_preparer(tmp_path)
+        dp._load_raw_data = lambda path: pd.DataFrame({"x": [1]})
+        dp._build_base_dataframe = lambda raw: wide_df
+        dp._compute_base_indicators = (
+            lambda df, start_ts=None: received.setdefault("base", start_ts)
+        )
+        dp._compute_base_attributes = lambda df: None
+        dp._compute_class_indicators = (
+            lambda df, start_ts=None: received.setdefault("class", start_ts)
+        )
+        dp._merge_nn_output = lambda df: None
+        dp._compute_nn_attributes = lambda df: MagicMock()
+
+        dp.prepare(raw_pkl, data_start_ms=data_start_ms)
+
+        assert received["base"] == data_start
+        assert received["class"] == data_start
+
+    def test_prepare_without_data_start_keeps_all_rows(self, tmp_path):
+        """data_start_ms=None: old behavior — nothing trimmed."""
+        raw_pkl = str(tmp_path / "graber_data.pkl")
+        _make_raw_df().to_pickle(raw_pkl)
+
+        wide_df = _make_wide_df(5)
+        dp = self._make_preparer(tmp_path)
+        dp._load_raw_data = lambda path: pd.DataFrame({"x": [1]})
+        dp._build_base_dataframe = lambda raw: wide_df
+        dp._compute_base_indicators = lambda df, start_ts=None: None
+        dp._compute_base_attributes = lambda df: None
+        dp._compute_class_indicators = lambda df, start_ts=None: None
+        dp._merge_nn_output = lambda df: None
+        dp._compute_nn_attributes = lambda df: MagicMock()
+
+        dp.prepare(raw_pkl)
+
+        saved_df = pd.read_pickle(str(tmp_path / "df_with_indicators.pkl"))
+        assert len(saved_df) == 5

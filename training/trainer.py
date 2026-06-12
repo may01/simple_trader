@@ -143,7 +143,11 @@ class Trainer:
             data_attributes_path(),
             nn_output_path=_nn_output_path(),
         )
-        preparer.prepare(graber_data_path())
+        # Indicators are computed from DATA_START on; the warmup head grabbed
+        # by _run_grab_data is lookback input only and is trimmed before save.
+        preparer.prepare(
+            graber_data_path(), data_start_ms=int(os.environ["DATA_START"])
+        )
 
         self.metadata["prepare_data"] = {"status": "complete"}
 
