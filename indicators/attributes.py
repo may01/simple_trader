@@ -124,7 +124,7 @@ class DataAttributes:
         - ``cci_diff``:             mean/std of ``{tf}_cci_diff``
         - ``vol_minus_vol_ma_20``:  mean/std of ``{tf}_volume − {tf}_vol_ma_20``
         - ``diff_prc_std_{src}``:   mean/std of
-          ``{tf}_{src}_diff_prc − {tf}_{src}_diff_prc_rm_20``
+          ``{tf}_{src}_diff_prc − {tf}_{src}_diff_prc_rm_6``
           for src in close/high/low
 
         Groups whose source columns are missing for a TF are omitted.
@@ -152,7 +152,7 @@ class DataAttributes:
             for src in ["close", "high", "low"]:
                 specs[f"diff_prc_std_{src}"] = (
                     f"{tf}_{src}_diff_prc",
-                    f"{tf}_{src}_diff_prc_rm_20",
+                    f"{tf}_{src}_diff_prc_rm_6",
                 )
             for key, (col, minus_col) in specs.items():
                 if col not in df.columns:

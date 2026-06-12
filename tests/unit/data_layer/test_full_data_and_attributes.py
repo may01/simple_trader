@@ -274,7 +274,7 @@ def wide_df_with_stat_cols(wide_df_with_rsi):
         df[f"{tf}_vol_ma_20"] = np.random.uniform(10, 50, len(df))
         for src in ["close", "high", "low"]:
             df[f"{tf}_{src}_diff_prc"] = np.random.normal(0, 1, len(df))
-            df[f"{tf}_{src}_diff_prc_rm_20"] = np.random.normal(0, 0.3, len(df))
+            df[f"{tf}_{src}_diff_prc_rm_6"] = np.random.normal(0, 0.3, len(df))
     return df
 
 
@@ -355,7 +355,7 @@ class TestIndicatorStats:
     def test_indicator_stats_diff_prc_std(
         self, wide_df_with_stat_cols, patched_stats_folder
     ):
-        """diff_prc_std_{src} = stats of {src}_diff_prc − {src}_diff_prc_rm_20
+        """diff_prc_std_{src} = stats of {src}_diff_prc − {src}_diff_prc_rm_6
         over closed candles, per source close/high/low."""
         import json
 
@@ -372,7 +372,7 @@ class TestIndicatorStats:
             for src in ["close", "high", "low"]:
                 dev = (
                     closed[f"{tf}_{src}_diff_prc"]
-                    - closed[f"{tf}_{src}_diff_prc_rm_20"]
+                    - closed[f"{tf}_{src}_diff_prc_rm_6"]
                 ).dropna()
                 assert entry[f"diff_prc_std_{src}"]["mean"] == pytest.approx(dev.mean())
                 assert entry[f"diff_prc_std_{src}"]["std"] == pytest.approx(dev.std())

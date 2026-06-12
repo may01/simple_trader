@@ -45,16 +45,16 @@ _INDICATOR_SUBPLOT_EXACT = {
 # rolling mean, and the mean ± rolling-std band.
 _DERIVATIVE_SUBPLOTS = {
     "close_diff": [
-        "close_diff_prc", "close_diff_prc_rm_20",
-        "close_diff_prc_rm_20_std_above", "close_diff_prc_rm_20_std_below",
+        "close_diff_prc", "close_diff_prc_rm_6",
+        "close_diff_prc_rm_6_std_above", "close_diff_prc_rm_6_std_below",
     ],
     "high_diff": [
-        "high_diff_prc", "high_diff_prc_rm_20",
-        "high_diff_prc_rm_20_std_above", "high_diff_prc_rm_20_std_below",
+        "high_diff_prc", "high_diff_prc_rm_6",
+        "high_diff_prc_rm_6_std_above", "high_diff_prc_rm_6_std_below",
     ],
     "low_diff": [
-        "low_diff_prc", "low_diff_prc_rm_20",
-        "low_diff_prc_rm_20_std_above", "low_diff_prc_rm_20_std_below",
+        "low_diff_prc", "low_diff_prc_rm_6",
+        "low_diff_prc_rm_6_std_above", "low_diff_prc_rm_6_std_below",
     ],
     "rsi_diff": ["rsi_ma8_diff", "rsi_ma12_diff", "rsi_ma24_diff"],
 }
@@ -66,7 +66,7 @@ _INDICATOR_SUBPLOT_EXACT.update(
 # The one-signed mean bands are no longer drawn by default but stay routable
 # for explicit indicator lists.
 _INDICATOR_SUBPLOT_EXACT.update({
-    f"{src}_diff_prc_rm_20_mean_{side}": f"{src}_diff"
+    f"{src}_diff_prc_rm_6_mean_{side}": f"{src}_diff"
     for src in ("close", "high", "low")
     for side in ("above", "below")
 })
@@ -177,15 +177,15 @@ class DataViewer:
         "macd_5_13_9": "blue", "macd_signal_5_13_9": "orange",
         "adx_14": "purple",
         # Derivatives: raw diff and rm_20 stand out; std bands muted.
-        "close_diff_prc": "blue", "close_diff_prc_rm_20": "orange",
-        "close_diff_prc_rm_20_std_above": "lightgreen",
-        "close_diff_prc_rm_20_std_below": "lightcoral",
-        "high_diff_prc": "blue", "high_diff_prc_rm_20": "orange",
-        "high_diff_prc_rm_20_std_above": "lightgreen",
-        "high_diff_prc_rm_20_std_below": "lightcoral",
-        "low_diff_prc": "blue", "low_diff_prc_rm_20": "orange",
-        "low_diff_prc_rm_20_std_above": "lightgreen",
-        "low_diff_prc_rm_20_std_below": "lightcoral",
+        "close_diff_prc": "blue", "close_diff_prc_rm_6": "orange",
+        "close_diff_prc_rm_6_std_above": "lightgreen",
+        "close_diff_prc_rm_6_std_below": "lightcoral",
+        "high_diff_prc": "blue", "high_diff_prc_rm_6": "orange",
+        "high_diff_prc_rm_6_std_above": "lightgreen",
+        "high_diff_prc_rm_6_std_below": "lightcoral",
+        "low_diff_prc": "blue", "low_diff_prc_rm_6": "orange",
+        "low_diff_prc_rm_6_std_above": "lightgreen",
+        "low_diff_prc_rm_6_std_below": "lightcoral",
         "rsi_ma8_diff": "orange", "rsi_ma12_diff": "green",
         "rsi_ma24_diff": "red",
     }

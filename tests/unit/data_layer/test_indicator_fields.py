@@ -520,7 +520,7 @@ class TestPriceDerivatives:
         assert len(valid) > 0
 
     @staticmethod
-    def _sided_expectations(diff: pd.Series, window: int = 20):
+    def _sided_expectations(diff: pd.Series, window: int = 6):
         """Manual rolling sided stats: mean/std of window values above/below
         the window mean. Returns dict of four expected Series."""
         def f(stat, above):
@@ -550,11 +550,11 @@ class TestPriceDerivatives:
             run_field(dp, df, fld, tf)
 
         expected = self._sided_expectations(df[f"{tf}_close_diff_prc"])["mean_above"]
-        series = df[f"{tf}_close_diff_prc_rm_20_mean_above"]
+        series = df[f"{tf}_close_diff_prc_rm_6_mean_above"]
         pd.testing.assert_series_equal(series, expected, check_names=False)
 
         # Values above the window mean average strictly above it
-        rm = df[f"{tf}_close_diff_prc_rm_20"]
+        rm = df[f"{tf}_close_diff_prc_rm_6"]
         mask = series.notna() & rm.notna() & (series != 0.0)
         assert mask.any()
         assert (series[mask] > rm[mask]).all()
@@ -568,10 +568,10 @@ class TestPriceDerivatives:
             run_field(dp, df, fld, tf)
 
         expected = self._sided_expectations(df[f"{tf}_close_diff_prc"])["mean_below"]
-        series = df[f"{tf}_close_diff_prc_rm_20_mean_below"]
+        series = df[f"{tf}_close_diff_prc_rm_6_mean_below"]
         pd.testing.assert_series_equal(series, expected, check_names=False)
 
-        rm = df[f"{tf}_close_diff_prc_rm_20"]
+        rm = df[f"{tf}_close_diff_prc_rm_6"]
         mask = series.notna() & rm.notna() & (series != 0.0)
         assert mask.any()
         assert (series[mask] < rm[mask]).all()
@@ -594,16 +594,16 @@ class TestPriceDerivatives:
 
         expected = self._sided_expectations(df[f"{tf}_close_diff_prc"])
         pd.testing.assert_series_equal(
-            df[f"{tf}_close_diff_prc_rm_20_std_above"], expected["std_above"],
+            df[f"{tf}_close_diff_prc_rm_6_std_above"], expected["std_above"],
             check_names=False,
         )
         pd.testing.assert_series_equal(
-            df[f"{tf}_close_diff_prc_rm_20_std_below"], expected["std_below"],
+            df[f"{tf}_close_diff_prc_rm_6_std_below"], expected["std_below"],
             check_names=False,
         )
         # Stds are non-negative
-        assert (df[f"{tf}_close_diff_prc_rm_20_std_above"].dropna() >= 0).all()
-        assert (df[f"{tf}_close_diff_prc_rm_20_std_below"].dropna() >= 0).all()
+        assert (df[f"{tf}_close_diff_prc_rm_6_std_above"].dropna() >= 0).all()
+        assert (df[f"{tf}_close_diff_prc_rm_6_std_below"].dropna() >= 0).all()
 
     def test_high_diff_prc_fields(self):
         """High diff prc family produces valid Series."""
@@ -835,12 +835,12 @@ class TestTargetsFields:
         # Varying stat columns: shifted (i-1) stats differ from same-row
         # stats so the tests pin the shift, not just the formula shape.
         df = make_indicator_df(tf=tf, n=n)
-        df[f"{tf}_high_diff_prc_rm_20"] = np.linspace(0.5, 5.0, n)
-        df[f"{tf}_high_diff_prc_rm_20_std_above"] = np.linspace(0.2, 2.0, n)
-        df[f"{tf}_high_diff_prc_rm_20_std_below"] = np.linspace(0.3, 2.4, n)
-        df[f"{tf}_low_diff_prc_rm_20"] = np.linspace(-4.0, -0.5, n)
-        df[f"{tf}_low_diff_prc_rm_20_std_above"] = np.linspace(0.4, 2.8, n)
-        df[f"{tf}_low_diff_prc_rm_20_std_below"] = np.linspace(0.5, 3.2, n)
+        df[f"{tf}_high_diff_prc_rm_6"] = np.linspace(0.5, 5.0, n)
+        df[f"{tf}_high_diff_prc_rm_6_std_above"] = np.linspace(0.2, 2.0, n)
+        df[f"{tf}_high_diff_prc_rm_6_std_below"] = np.linspace(0.3, 2.4, n)
+        df[f"{tf}_low_diff_prc_rm_6"] = np.linspace(-4.0, -0.5, n)
+        df[f"{tf}_low_diff_prc_rm_6_std_above"] = np.linspace(0.4, 2.8, n)
+        df[f"{tf}_low_diff_prc_rm_6_std_below"] = np.linspace(0.5, 3.2, n)
         dp = LiveDataPoint({tf: df})
         return dp, df
 
@@ -849,8 +849,8 @@ class TestTargetsFields:
         field = TgtLongField()
         dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
-        rm = df["15_high_diff_prc_rm_20"].shift(1)
-        std = df["15_high_diff_prc_rm_20_std_below"].shift(1)
+        rm = df["15_high_diff_prc_rm_6"].shift(1)
+        std = df["15_high_diff_prc_rm_6_std_below"].shift(1)
         expected = df["15_high"].shift(1) * (1 + (rm - std) / 100)
         pd.testing.assert_series_equal(result, expected, check_names=False)
 
@@ -859,8 +859,8 @@ class TestTargetsFields:
         field = SLLongField()
         dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
-        rm = df["15_low_diff_prc_rm_20"].shift(1)
-        std = df["15_low_diff_prc_rm_20_std_below"].shift(1)
+        rm = df["15_low_diff_prc_rm_6"].shift(1)
+        std = df["15_low_diff_prc_rm_6_std_below"].shift(1)
         expected = df["15_low"].shift(1) * (1 + (rm - std) / 100)
         pd.testing.assert_series_equal(result, expected, check_names=False)
 
@@ -869,8 +869,8 @@ class TestTargetsFields:
         field = TgtShortField()
         dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
-        rm = df["15_low_diff_prc_rm_20"].shift(1)
-        std = df["15_low_diff_prc_rm_20_std_above"].shift(1)
+        rm = df["15_low_diff_prc_rm_6"].shift(1)
+        std = df["15_low_diff_prc_rm_6_std_above"].shift(1)
         expected = df["15_low"].shift(1) * (1 + (rm + std) / 100)
         pd.testing.assert_series_equal(result, expected, check_names=False)
 
@@ -879,8 +879,8 @@ class TestTargetsFields:
         field = SLShortField()
         dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
-        rm = df["15_high_diff_prc_rm_20"].shift(1)
-        std = df["15_high_diff_prc_rm_20_std_above"].shift(1)
+        rm = df["15_high_diff_prc_rm_6"].shift(1)
+        std = df["15_high_diff_prc_rm_6_std_above"].shift(1)
         expected = df["15_high"].shift(1) * (1 + (rm + std) / 100)
         pd.testing.assert_series_equal(result, expected, check_names=False)
 
@@ -891,13 +891,13 @@ class TestTargetsFields:
 
     def test_dependencies_declare_stat_fields_no_resources(self):
         assert TgtLongField().dependencies == [
-            "high_diff_prc_rm_20", "high_diff_prc_rm_20_std_below"]
+            "high_diff_prc_rm_6", "high_diff_prc_rm_6_std_below"]
         assert SLLongField().dependencies == [
-            "low_diff_prc_rm_20", "low_diff_prc_rm_20_std_below"]
+            "low_diff_prc_rm_6", "low_diff_prc_rm_6_std_below"]
         assert TgtShortField().dependencies == [
-            "low_diff_prc_rm_20", "low_diff_prc_rm_20_std_above"]
+            "low_diff_prc_rm_6", "low_diff_prc_rm_6_std_above"]
         assert SLShortField().dependencies == [
-            "high_diff_prc_rm_20", "high_diff_prc_rm_20_std_above"]
+            "high_diff_prc_rm_6", "high_diff_prc_rm_6_std_above"]
         for field in (TgtLongField(), SLLongField(), TgtShortField(), SLShortField()):
             assert field.resource_dependencies == []
 

@@ -77,24 +77,24 @@ class TestDiffStdBands:
         idx = pd.date_range("2024-01-01", periods=n, freq="15min")
         rng = np.random.default_rng(3)
         diff = pd.Series(rng.normal(0, 0.5, n), index=idx)
-        rm = diff.rolling(20).mean()
+        rm = diff.rolling(6).mean()
         return _DataPoint(pd.DataFrame({
             f"{tf}_close_diff_prc": diff,
-            f"{tf}_close_diff_prc_rm_20": rm,
+            f"{tf}_close_diff_prc_rm_6": rm,
             f"{tf}_high_diff_prc": diff,
-            f"{tf}_high_diff_prc_rm_20": rm,
+            f"{tf}_high_diff_prc_rm_6": rm,
             f"{tf}_low_diff_prc": diff,
-            f"{tf}_low_diff_prc_rm_20": rm,
+            f"{tf}_low_diff_prc_rm_6": rm,
         }, index=idx))
 
     def test_names(self):
-        assert CloseDiffPrcRMStdAboveField().name == "close_diff_prc_rm_20_std_above"
-        assert CloseDiffPrcRMStdBelowField().name == "close_diff_prc_rm_20_std_below"
-        assert HighDiffPrcRMStdAboveField().name == "high_diff_prc_rm_20_std_above"
-        assert LowDiffPrcRMStdBelowField().name == "low_diff_prc_rm_20_std_below"
+        assert CloseDiffPrcRMStdAboveField().name == "close_diff_prc_rm_6_std_above"
+        assert CloseDiffPrcRMStdBelowField().name == "close_diff_prc_rm_6_std_below"
+        assert HighDiffPrcRMStdAboveField().name == "high_diff_prc_rm_6_std_above"
+        assert LowDiffPrcRMStdBelowField().name == "low_diff_prc_rm_6_std_below"
 
     @staticmethod
-    def _sided_std(diff: pd.Series, above: bool, window: int = 20) -> pd.Series:
+    def _sided_std(diff: pd.Series, above: bool, window: int = 6) -> pd.Series:
         def inner(x):
             m = x.mean()
             sel = x[x > m] if above else x[x < m]
@@ -134,7 +134,7 @@ class TestDiffStdBands:
         from indicators.registry import _FIELD_REGISTRY
         for src in ("close", "high", "low"):
             for side in ("above", "below"):
-                assert f"{src}_diff_prc_rm_20_std_{side}" in _FIELD_REGISTRY
+                assert f"{src}_diff_prc_rm_6_std_{side}" in _FIELD_REGISTRY
 
     def test_config_declares_fields(self):
         import yaml
@@ -143,7 +143,7 @@ class TestDiffStdBands:
         assert "adx_14" in names
         for src in ("close", "high", "low"):
             for side in ("above", "below"):
-                assert f"{src}_diff_prc_rm_20_std_{side}" in names
+                assert f"{src}_diff_prc_rm_6_std_{side}" in names
 
 
 # ---------------------------------------------------------------------------
@@ -156,12 +156,12 @@ class TestRouting:
 
     @pytest.mark.parametrize("src", ["close", "high", "low"])
     def test_std_bands_route_to_diff_subplot(self, src):
-        assert _indicator_subplot(f"{src}_diff_prc_rm_20_std_above") == f"{src}_diff"
-        assert _indicator_subplot(f"{src}_diff_prc_rm_20_std_below") == f"{src}_diff"
+        assert _indicator_subplot(f"{src}_diff_prc_rm_6_std_above") == f"{src}_diff"
+        assert _indicator_subplot(f"{src}_diff_prc_rm_6_std_below") == f"{src}_diff"
 
     @pytest.mark.parametrize("src", ["close", "high", "low"])
     def test_mean_bands_still_routable(self, src):
-        assert _indicator_subplot(f"{src}_diff_prc_rm_20_mean_above") == f"{src}_diff"
+        assert _indicator_subplot(f"{src}_diff_prc_rm_6_mean_above") == f"{src}_diff"
 
 
 # ---------------------------------------------------------------------------
@@ -238,8 +238,8 @@ class TestWindowFigureContent:
     def test_adx_and_std_bands_drawn(self):
         idx = pd.date_range("2024-01-01", periods=60, freq="1min")
         cols = ["open", "high", "low", "close", "volume", "adx_14",
-                "close_diff_prc", "close_diff_prc_rm_20",
-                "close_diff_prc_rm_20_std_above", "close_diff_prc_rm_20_std_below"]
+                "close_diff_prc", "close_diff_prc_rm_6",
+                "close_diff_prc_rm_6_std_above", "close_diff_prc_rm_6_std_below"]
         df = pd.DataFrame(
             {f"15_{c}": np.linspace(1, 2, 60) for c in cols}, index=idx
         )
@@ -255,8 +255,8 @@ class TestWindowFigureContent:
             for c in r.draw_line.call_args_list
         ]
         assert ("adx", "adx_14") in pairs
-        assert ("close_diff", "close_diff_prc_rm_20_std_above") in pairs
-        assert ("close_diff", "close_diff_prc_rm_20_std_below") in pairs
+        assert ("close_diff", "close_diff_prc_rm_6_std_above") in pairs
+        assert ("close_diff", "close_diff_prc_rm_6_std_below") in pairs
         # mean bands no longer drawn by default
         labels = [l for _s, l in pairs]
-        assert "close_diff_prc_rm_20_mean_above" not in labels
+        assert "close_diff_prc_rm_6_mean_above" not in labels

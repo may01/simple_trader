@@ -61,7 +61,7 @@ class _DiffPrcRMBase(IndicatorField):
     applies_to: list[int] = []
     _source: str
 
-    def __init__(self, window: int = 20) -> None:
+    def __init__(self, window: int = 6) -> None:
         self.window = window
         self.params = {"window": window}
         self.name = f"{self._source}_diff_prc_rm_{window}"
@@ -81,7 +81,7 @@ class _DiffPrcRMMeanSideBase(IndicatorField):
     _source: str
     _above: bool
 
-    def __init__(self, window: int = 20) -> None:
+    def __init__(self, window: int = 6) -> None:
         self.window = window
         self.params = {"window": window}
         side = "above" if self._above else "below"
@@ -157,7 +157,7 @@ class _DiffPrcRMStdSideBase(IndicatorField):
     _source: str
     _above: bool
 
-    def __init__(self, window: int = 20) -> None:
+    def __init__(self, window: int = 6) -> None:
         self.window = window
         self.params = {"window": window}
         side = "above" if self._above else "below"

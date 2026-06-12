@@ -266,19 +266,19 @@ fields:
     library: talib
     params: {}
 
-  - name: close_diff_prc_rm_20
+  - name: close_diff_prc_rm_6
     group: price_derivatives
     applies_to: all
     depends_on: [close_diff_prc]
     params: {}
 
-  - name: close_diff_prc_rm_20_mean_above
+  - name: close_diff_prc_rm_6_mean_above
     group: price_derivatives
     applies_to: all
     depends_on: [close_diff_prc]
     params: {}
 
-  - name: close_diff_prc_rm_20_mean_below
+  - name: close_diff_prc_rm_6_mean_below
     group: price_derivatives
     applies_to: all
     depends_on: [close_diff_prc]
@@ -291,19 +291,19 @@ fields:
     library: talib
     params: {}
 
-  - name: high_diff_prc_rm_20
+  - name: high_diff_prc_rm_6
     group: price_derivatives
     applies_to: all
     depends_on: [high_diff_prc]
     params: {}
 
-  - name: high_diff_prc_rm_20_mean_above
+  - name: high_diff_prc_rm_6_mean_above
     group: price_derivatives
     applies_to: all
     depends_on: [high_diff_prc]
     params: {}
 
-  - name: high_diff_prc_rm_20_mean_below
+  - name: high_diff_prc_rm_6_mean_below
     group: price_derivatives
     applies_to: all
     depends_on: [high_diff_prc]
@@ -316,55 +316,55 @@ fields:
     library: talib
     params: {}
 
-  - name: low_diff_prc_rm_20
+  - name: low_diff_prc_rm_6
     group: price_derivatives
     applies_to: all
     depends_on: [low_diff_prc]
     params: {}
 
-  - name: low_diff_prc_rm_20_mean_above
+  - name: low_diff_prc_rm_6_mean_above
     group: price_derivatives
     applies_to: all
     depends_on: [low_diff_prc]
     params: {}
 
-  - name: low_diff_prc_rm_20_mean_below
+  - name: low_diff_prc_rm_6_mean_below
     group: price_derivatives
     applies_to: all
     depends_on: [low_diff_prc]
     params: {}
 
-  - name: close_diff_prc_rm_20_std_above
+  - name: close_diff_prc_rm_6_std_above
     group: price_derivatives
     applies_to: all
     depends_on: [close_diff_prc]
     params: {}
 
-  - name: close_diff_prc_rm_20_std_below
+  - name: close_diff_prc_rm_6_std_below
     group: price_derivatives
     applies_to: all
     depends_on: [close_diff_prc]
     params: {}
 
-  - name: high_diff_prc_rm_20_std_above
+  - name: high_diff_prc_rm_6_std_above
     group: price_derivatives
     applies_to: all
     depends_on: [high_diff_prc]
     params: {}
 
-  - name: high_diff_prc_rm_20_std_below
+  - name: high_diff_prc_rm_6_std_below
     group: price_derivatives
     applies_to: all
     depends_on: [high_diff_prc]
     params: {}
 
-  - name: low_diff_prc_rm_20_std_above
+  - name: low_diff_prc_rm_6_std_above
     group: price_derivatives
     applies_to: all
     depends_on: [low_diff_prc]
     params: {}
 
-  - name: low_diff_prc_rm_20_std_below
+  - name: low_diff_prc_rm_6_std_below
     group: price_derivatives
     applies_to: all
     depends_on: [low_diff_prc]
@@ -403,28 +403,28 @@ fields:
   - name: tgt_long
     group: targets
     applies_to: [15, 60, 240, 1440]
-    depends_on: [high_diff_prc_rm_20, high_diff_prc_rm_20_std_below]
+    depends_on: [high_diff_prc_rm_6, high_diff_prc_rm_6_std_below]
     library: talib
     params: {}
 
   - name: sl_long
     group: targets
     applies_to: [15, 60, 240, 1440]
-    depends_on: [low_diff_prc_rm_20, low_diff_prc_rm_20_std_below]
+    depends_on: [low_diff_prc_rm_6, low_diff_prc_rm_6_std_below]
     library: talib
     params: {}
 
   - name: tgt_short
     group: targets
     applies_to: [15, 60, 240, 1440]
-    depends_on: [low_diff_prc_rm_20, low_diff_prc_rm_20_std_above]
+    depends_on: [low_diff_prc_rm_6, low_diff_prc_rm_6_std_above]
     library: talib
     params: {}
 
   - name: sl_short
     group: targets
     applies_to: [15, 60, 240, 1440]
-    depends_on: [high_diff_prc_rm_20, high_diff_prc_rm_20_std_above]
+    depends_on: [high_diff_prc_rm_6, high_diff_prc_rm_6_std_above]
     library: talib
     params: {}
 
