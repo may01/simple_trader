@@ -274,11 +274,17 @@ class DataViewer:
         df_slice: pd.DataFrame,
         indicators: list[str],
         tf: int | None = None,
+        range_row: bool = False,
     ) -> go.Figure:
-        """Create and populate a figure (candles + indicators). Does not show/save."""
+        """Create and populate a figure (candles + indicators). Does not show/save.
+
+        ``range_row=True`` adds the navigator row holding a second OHLC
+        candlestick copy — the rangeslider preview then always shows price,
+        never an indicator.
+        """
         tf = self.tf if tf is None else tf
         subplots = self._subplot_list(indicators)
-        fig = self.renderer.create_figure(subplots)
+        fig = self.renderer.create_figure(subplots, range_row=range_row)
 
         times = list(df_slice.index)
         opens = list(df_slice[f"{tf}_open"])
@@ -287,12 +293,16 @@ class DataViewer:
         closes = list(df_slice[f"{tf}_close"])
 
         self.renderer.draw_candles(fig, times, opens, highs, lows, closes)
+        if range_row:
+            self.renderer.draw_candles(
+                fig, times, opens, highs, lows, closes, subplot="range"
+            )
 
         # Draw volume if column exists
         vol_col = f"{tf}_volume"
         if vol_col in df_slice.columns:
             vol_vals = list(df_slice[vol_col])
-            self.renderer.draw_line(fig, "volume", times, vol_vals, label="volume")
+            self.renderer.draw_bar(fig, "volume", times, vol_vals, label="volume")
 
         self._draw_indicators(fig, df_slice, indicators, tf=tf)
 
@@ -387,14 +397,70 @@ class DataViewer:
                 i for i in indicators
                 if _indicator_subplot(i) is None or _indicator_subplot(i) in allowed
             ]
-        fig = self._build_figure(df_slice, indicators, tf=tf)
+        fig = self._build_figure(df_slice, indicators, tf=tf, range_row=True)
         self._draw_price_overlays(fig, df_slice, tf)
+        self._draw_rsi_class_markers(fig, df_slice, tf)
         self._draw_zero_lines(fig)
         n_rows = len(getattr(fig, "_subplot_rows", {})) or 1
         # 264 = 220 * 1.2: total grows with the extra weight of the non-price
         # rows (their ratios went 1.5x) so the price row keeps its pixel size.
         fig.update_layout(height=max(600, 264 * n_rows))
         return fig
+
+    # Class markers on the rsi subplot: field → (marker symbol, size,
+    # class value → colour). Both fields classify rsi_ma8 against mean ± std
+    # (see indicators/library/classification.py); zone_class == move_class + 1,
+    # so the open diamond rings the move_class dot for the same bucket.
+    _RSI_CLASS_MARKERS = {
+        "move_class": ("circle", 6, {
+            -1: "red", 0: "orange", 1: "lightgreen", 2: "green",
+        }),
+        "zone_class": ("diamond-open", 11, {
+            0: "red", 1: "orange", 2: "lightgreen", 3: "green",
+        }),
+    }
+
+    # The rsi_ma line both class fields are computed from.
+    _RSI_CLASS_SOURCE = "rsi_ma8"
+
+    def _draw_rsi_class_markers(
+        self,
+        fig: go.Figure,
+        df_slice: pd.DataFrame,
+        tf: int,
+    ) -> None:
+        """Draw move_class/zone_class markers on the rsi_ma8 line. Skip-if-absent.
+
+        One marker trace per (field, class value): markers sit at the
+        rsi_ma8 y-value of each row, coloured by the class bucket. Skipped
+        when the rsi subplot is hidden or the source/class columns are absent.
+        """
+        rows = getattr(fig, "_subplot_rows", {})
+        if "rsi" not in rows:
+            return
+        src_col = f"{tf}_{self._RSI_CLASS_SOURCE}"
+        if src_col not in df_slice.columns:
+            return
+        src = df_slice[src_col]
+        for field, (symbol, size, colors) in self._RSI_CLASS_MARKERS.items():
+            col = f"{tf}_{field}"
+            if col not in df_slice.columns:
+                continue
+            cls = df_slice[col]
+            for value, color in colors.items():
+                mask = cls == value
+                if not mask.any():
+                    continue
+                self.renderer.draw_marker(
+                    fig,
+                    list(df_slice.index[mask]),
+                    list(src[mask]),
+                    marker_symbol=symbol,
+                    color=color,
+                    label=f"{field}={value}",
+                    subplot="rsi",
+                    size=size,
+                )
 
     def _draw_zero_lines(self, fig: go.Figure) -> None:
         """Add a zero reference line on every derivative subplot.
