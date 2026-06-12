@@ -400,6 +400,7 @@ class DataViewer:
         fig = self._build_figure(df_slice, indicators, tf=tf, range_row=True)
         self._draw_price_overlays(fig, df_slice, tf)
         self._draw_rsi_class_markers(fig, df_slice, tf)
+        self._draw_label_markers(fig, df_slice, tf)
         self._draw_zero_lines(fig)
         n_rows = len(getattr(fig, "_subplot_rows", {})) or 1
         # 264 = 220 * 1.2: total grows with the extra weight of the non-price
@@ -461,6 +462,64 @@ class DataViewer:
                     subplot="rsi",
                     size=size,
                 )
+
+    # Profit-label column prefixes → (side, marker colour). Strict variants
+    # darker than their plain counterpart. Matches the column names written
+    # by indicators/labels.py (add_profit_labels / add_profit_strict_labels).
+    _LABEL_PREFIXES = {
+        "plong": ("long", "limegreen"),
+        "pslong": ("long", "green"),
+        "pshort": ("short", "orange"),
+        "psshort": ("short", "red"),
+    }
+
+    # Marker offset from the candle extreme, as a fraction of price, stepped
+    # per variant so several label sets stack instead of overlapping.
+    _LABEL_OFFSET_STEP = 0.002
+
+    def _draw_label_markers(
+        self,
+        fig: go.Figure,
+        df_slice: pd.DataFrame,
+        tf: int,
+    ) -> None:
+        """Draw profit-label markers on the price subplot. Skip-if-absent.
+
+        Every ``{tf}_plong_* / pslong_* / pshort_* / psshort_*`` column gets
+        one trace with markers on rows where the label is 1: longs as
+        triangles-up below the candle low, shorts as triangles-down above
+        the high, each variant on its own offset step.
+        """
+        prefix_re = re.compile(
+            rf"^{tf}_(plong|pslong|pshort|psshort)_(.+)$"
+        )
+        side_counts = {"long": 0, "short": 0}
+        for col in df_slice.columns:
+            m = prefix_re.match(str(col))
+            if not m:
+                continue
+            prefix = m.group(1)
+            side, color = self._LABEL_PREFIXES[prefix]
+            mask = df_slice[col] == 1
+            step = self._LABEL_OFFSET_STEP * (side_counts[side] + 1)
+            side_counts[side] += 1
+            if not mask.any():
+                continue
+            if side == "long":
+                ys = df_slice.loc[mask, f"{tf}_low"] * (1.0 - step)
+                symbol = "triangle-up"
+            else:
+                ys = df_slice.loc[mask, f"{tf}_high"] * (1.0 + step)
+                symbol = "triangle-down"
+            self.renderer.draw_marker(
+                fig,
+                list(df_slice.index[mask]),
+                list(ys),
+                marker_symbol=symbol,
+                color=color,
+                label=f"{prefix}_{m.group(2)}",
+                subplot="price",
+            )
 
     def _draw_zero_lines(self, fig: go.Figure) -> None:
         """Add a zero reference line on every derivative subplot.
