@@ -16,7 +16,7 @@ from frontend.chart_renderer import ChartRenderer
 # ---------------------------------------------------------------------------
 
 # Indicators whose name starts with one of these prefixes go on the price axis.
-_PRICE_AXIS_PREFIXES = ("ema", "sma", "bb", "vwap")
+_PRICE_AXIS_PREFIXES = ("ema", "sma", "bb", "vwap", "tgt_", "sl_")
 
 # Maps indicator base name (without _NN suffix) → subplot name.
 # Indicators not found here AND not on the price axis get a subplot named
@@ -140,6 +140,7 @@ class DataViewer:
         "bb_upper_20_3", "bb_lower_20_3",
         "ema_7", "ema_14", "ema_25", "ema_50", "ema_100",
         "sar_002_02",
+        "tgt_long", "sl_long", "tgt_short", "sl_short",
     ]
 
     _OVERLAY_COLORS = {
@@ -150,6 +151,10 @@ class DataViewer:
         "ema_7": "gold", "ema_14": "orange", "ema_25": "magenta",
         "ema_50": "teal", "ema_100": "brown",
         "sar_002_02": "black",
+        # Targets profit-side greens, stop-losses loss-side reds; long darker,
+        # short lighter so direction reads at a glance.
+        "tgt_long": "darkgreen", "sl_long": "darkred",
+        "tgt_short": "mediumseagreen", "sl_short": "indianred",
     }
 
     # Oscillator set for window figures (skip-if-absent). Each oscillator's
