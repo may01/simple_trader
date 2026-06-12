@@ -47,6 +47,13 @@ def _indicator_subplot(indicator: str) -> str | None:
     return _INDICATOR_SUBPLOT.get(base, base)
 
 
+def empty_figure(message: str = "no data in range") -> go.Figure:
+    """Return an empty figure with a centered annotation instead of raising."""
+    fig = go.Figure()
+    fig.add_annotation(text=message, showarrow=False)
+    return fig
+
+
 # ---------------------------------------------------------------------------
 # FullData
 # ---------------------------------------------------------------------------
@@ -153,6 +160,32 @@ class DataViewer:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def build_window_figure(
+        self,
+        start: pd.Timestamp,
+        days: int,
+        indicators: list[str] | None = None,
+    ) -> go.Figure:
+        """Build a figure for a date window of the wide DataFrame.
+
+        Slices by DatetimeIndex — ``[start, start + days)`` — unlike the
+        iloc-based ``view_full()`` API. Returns the figure without showing it.
+        An empty window returns an annotated empty figure, never raises.
+
+        Args:
+            start: Window start (inclusive).
+            days: Window length in days from *start*.
+            indicators: Same contract as ``view_full()``.
+        """
+        indicators = self._resolve_indicators(indicators)
+        start = pd.Timestamp(start)
+        end = start + pd.Timedelta(days=days)
+        df = self.full_data.df
+        df_slice = df[(df.index >= start) & (df.index < end)]
+        if df_slice.empty:
+            return empty_figure()
+        return self._build_figure(df_slice, indicators)
 
     def view_full(
         self,
