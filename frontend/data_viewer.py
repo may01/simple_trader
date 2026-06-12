@@ -311,12 +311,36 @@ class DataViewer:
                 tfs.append(int(m.group(1)))
         return sorted(tfs)
 
+    def available_subplots(self) -> list[str]:
+        """Oscillator/derivative subplot names available in the wide df.
+
+        Order follows the default indicator set (``_OSCILLATORS`` then the
+        derivative groups), deduped — indicators sharing a subplot (e.g.
+        ``rsi_14``/``rsi_ma8``) yield one entry. Only subplots whose backing
+        column exists for at least one available TF are included, so the
+        list is TF-independent and usable as one control for all TFs.
+        """
+        defaults = self._OSCILLATORS + [
+            f for fields in self._DERIVATIVES.values() for f in fields
+        ]
+        tfs = self.available_tfs()
+        cols = set(self.full_data.df.columns)
+        subplots: list[str] = []
+        for ind in defaults:
+            sp = _indicator_subplot(ind)
+            if sp is None or sp in subplots:
+                continue
+            if any(f"{tf}_{ind}" in cols for tf in tfs):
+                subplots.append(sp)
+        return subplots
+
     def build_window_figure(
         self,
         start: pd.Timestamp,
         days: int,
         indicators: list[str] | None = None,
         tf: int | None = None,
+        subplots: list[str] | None = None,
     ) -> go.Figure:
         """Build a figure for a date window of the wide DataFrame.
 
@@ -331,6 +355,10 @@ class DataViewer:
                 defaults to the full oscillator set (``_OSCILLATORS``) filtered
                 to columns present for this TF.
             tf: Timeframe override for this figure; ``None`` uses ``self.tf``.
+            subplots: Subplot names (see ``available_subplots()``) to keep;
+                indicators routed to any other subplot are dropped. ``None``
+                keeps everything; ``[]`` leaves only price and volume.
+                Price-axis indicators and overlays are never filtered.
         """
         tf = self.tf if tf is None else int(tf)
         start = pd.Timestamp(start)
@@ -353,6 +381,12 @@ class DataViewer:
             ]
         else:
             indicators = list(indicators)
+        if subplots is not None:
+            allowed = set(subplots)
+            indicators = [
+                i for i in indicators
+                if _indicator_subplot(i) is None or _indicator_subplot(i) in allowed
+            ]
         fig = self._build_figure(df_slice, indicators, tf=tf)
         self._draw_price_overlays(fig, df_slice, tf)
         self._draw_zero_lines(fig)
