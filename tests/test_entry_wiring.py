@@ -123,23 +123,47 @@ class TestViewEntries:
         state_path = mock_dash.run.call_args.kwargs["state_path"]
         assert state_path.endswith("training_state.pkl")
 
-    def test_view_full_renders_data_viewer(self, monkeypatch, tmp_path):
+    def test_view_full_runs_history_dashboard(self, monkeypatch, tmp_path):
         _set_env(monkeypatch)
-        mock_viewer = MagicMock()
-        mock_viewer_cls = MagicMock(return_value=mock_viewer)
-        mock_frontend = MagicMock(DataViewer=mock_viewer_cls)
-        with _inject({"frontend.data_viewer": mock_frontend}), \
+        mock_dashboard = MagicMock()
+        mock_dashboard_cls = MagicMock(return_value=mock_dashboard)
+        mock_hd_mod = MagicMock(HistoryDashboard=mock_dashboard_cls)
+        mock_dv_mod = MagicMock()
+        with _inject({
+            "frontend.history_dashboard": mock_hd_mod,
+            "frontend.data_viewer": mock_dv_mod,
+        }), \
              patch("helpers.wide_df_path", return_value="/data/wide.pkl"), \
              patch("pandas.read_pickle", return_value=MagicMock()):
             import view_full
             importlib.reload(view_full)
             view_full.main()
-        mock_viewer.view_full.assert_called_once()
+        mock_dashboard_cls.assert_called_once()
+        mock_dashboard.run.assert_called_once()
 
 
 class TestDashboardBinding:
     """Dash apps must bind 0.0.0.0:$DASH_PORT — compose maps container ports;
     the default 127.0.0.1:8050 is unreachable through the port mapping."""
+
+    def test_history_dashboard_binds_env_port(self, monkeypatch):
+        monkeypatch.setenv("DASH_PORT", "8080")
+        import pandas as pd
+        import numpy as np
+        from frontend.data_viewer import FullData
+        from frontend.history_dashboard import HistoryDashboard
+
+        idx = pd.date_range("2024-01-01", periods=30, freq="1min")
+        df = pd.DataFrame(
+            {f"15_{c}": np.linspace(1, 2, 30)
+             for c in ("open", "high", "low", "close", "volume")},
+            index=idx,
+        )
+        dashboard = HistoryDashboard(FullData(df))
+        with patch.object(dashboard._app, "run") as mock_run:
+            dashboard.run()
+        assert mock_run.call_args.kwargs["host"] == "0.0.0.0"
+        assert mock_run.call_args.kwargs["port"] == 8080
 
     def test_live_dashboard_binds_env_port(self, monkeypatch, tmp_path):
         monkeypatch.setenv("DASH_PORT", "8080")

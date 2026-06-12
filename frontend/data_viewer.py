@@ -39,6 +39,29 @@ _INDICATOR_SUBPLOT_EXACT = {
     "macd_signal_5_13_9": "macd_5_13_9",
 }
 
+# Price-derivative (diff field) groups: subplot name → fields sharing it.
+# Routed via the exact map — the base-name split would wrongly send
+# "close_diff_prc" to a subplot named "close".
+_DERIVATIVE_SUBPLOTS = {
+    "close_diff": [
+        "close_diff_prc", "close_diff_prc_rm_20",
+        "close_diff_prc_rm_20_mean_above", "close_diff_prc_rm_20_mean_below",
+    ],
+    "high_diff": [
+        "high_diff_prc", "high_diff_prc_rm_20",
+        "high_diff_prc_rm_20_mean_above", "high_diff_prc_rm_20_mean_below",
+    ],
+    "low_diff": [
+        "low_diff_prc", "low_diff_prc_rm_20",
+        "low_diff_prc_rm_20_mean_above", "low_diff_prc_rm_20_mean_below",
+    ],
+    "rsi_diff": ["rsi_ma8_diff", "rsi_ma12_diff", "rsi_ma24_diff"],
+}
+
+_INDICATOR_SUBPLOT_EXACT.update(
+    {f: sp for sp, fields in _DERIVATIVE_SUBPLOTS.items() for f in fields}
+)
+
 
 def _indicator_subplot(indicator: str) -> str | None:
     """Return the subplot name for an indicator, or None for price-axis indicators.
@@ -137,7 +160,22 @@ class DataViewer:
         "macd_12_26_9": "blue", "macd_signal_12_26_9": "orange",
         "macd_hist_12_26_9": "gray",
         "macd_5_13_9": "blue", "macd_signal_5_13_9": "orange",
+        # Derivatives: raw diff and rm_20 stand out; mean bands muted.
+        "close_diff_prc": "blue", "close_diff_prc_rm_20": "orange",
+        "close_diff_prc_rm_20_mean_above": "lightgreen",
+        "close_diff_prc_rm_20_mean_below": "lightcoral",
+        "high_diff_prc": "blue", "high_diff_prc_rm_20": "orange",
+        "high_diff_prc_rm_20_mean_above": "lightgreen",
+        "high_diff_prc_rm_20_mean_below": "lightcoral",
+        "low_diff_prc": "blue", "low_diff_prc_rm_20": "orange",
+        "low_diff_prc_rm_20_mean_above": "lightgreen",
+        "low_diff_prc_rm_20_mean_below": "lightcoral",
+        "rsi_ma8_diff": "orange", "rsi_ma12_diff": "green",
+        "rsi_ma24_diff": "red",
     }
+
+    # Subplot → fields view of the derivative groups (module-level routing).
+    _DERIVATIVES = _DERIVATIVE_SUBPLOTS
 
     def __init__(self, full_data: FullData, tf: int = 15) -> None:
         self.full_data = full_data
@@ -283,15 +321,37 @@ class DataViewer:
         if df_slice.empty:
             return empty_figure()
         if indicators is None:
+            defaults = self._OSCILLATORS + [
+                f for fields in self._DERIVATIVES.values() for f in fields
+            ]
             indicators = [
-                i for i in self._OSCILLATORS
-                if f"{tf}_{i}" in df_slice.columns
+                i for i in defaults if f"{tf}_{i}" in df_slice.columns
             ]
         else:
             indicators = list(indicators)
         fig = self._build_figure(df_slice, indicators, tf=tf)
         self._draw_price_overlays(fig, df_slice, tf)
+        self._draw_zero_lines(fig)
+        n_rows = len(getattr(fig, "_subplot_rows", {})) or 1
+        fig.update_layout(height=max(600, 220 * n_rows))
         return fig
+
+    def _draw_zero_lines(self, fig: go.Figure) -> None:
+        """Add a zero reference line on every derivative subplot.
+
+        Diff series oscillate around 0. Uses add_shape with per-row yref —
+        same plotly 6 compatibility approach as ChartRenderer.draw_level.
+        """
+        for sp, row in getattr(fig, "_subplot_rows", {}).items():
+            if sp not in self._DERIVATIVES:
+                continue
+            yref = "y" if row == 1 else f"y{row}"
+            fig.add_shape(
+                type="line",
+                x0=0, x1=1, y0=0, y1=0,
+                xref="paper", yref=yref,
+                line={"color": "gray", "width": 1},
+            )
 
     def _draw_price_overlays(
         self,
