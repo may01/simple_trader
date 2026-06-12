@@ -271,6 +271,9 @@ def wide_df_with_stat_cols(wide_df_with_rsi):
         df[f"{tf}_rsi_14"] = np.random.uniform(20, 80, len(df))
         df[f"{tf}_cci_diff"] = np.random.normal(0, 5, len(df))
         df[f"{tf}_vol_ma_20"] = np.random.uniform(10, 50, len(df))
+        for src in ["close", "high", "low"]:
+            df[f"{tf}_{src}_diff_prc"] = np.random.normal(0, 1, len(df))
+            df[f"{tf}_{src}_diff_prc_rm_20"] = np.random.normal(0, 0.3, len(df))
     return df
 
 
@@ -311,6 +314,45 @@ class TestIndicatorStats:
             vol_diff = (closed[f"{tf}_volume"] - closed[f"{tf}_vol_ma_20"]).dropna()
             assert entry["vol_minus_vol_ma_20"]["mean"] == pytest.approx(vol_diff.mean())
             assert entry["vol_minus_vol_ma_20"]["std"] == pytest.approx(vol_diff.std())
+
+    def test_indicator_stats_diff_prc_std(
+        self, wide_df_with_stat_cols, patched_stats_folder
+    ):
+        """diff_prc_std_{src} = stats of {src}_diff_prc − {src}_diff_prc_rm_20
+        over closed candles, per source close/high/low."""
+        import json
+
+        df = wide_df_with_stat_cols
+        da = DataAttributes()
+        da.compute(df)
+
+        with open(patched_stats_folder + "indicator_stats.json") as fh:
+            stats = json.load(fh)
+
+        for tf in [15, 60, 240, 1440]:
+            closed = df[df[f"{tf}_is_closed"] == True]  # noqa: E712
+            entry = stats[str(tf)]
+            for src in ["close", "high", "low"]:
+                dev = (
+                    closed[f"{tf}_{src}_diff_prc"]
+                    - closed[f"{tf}_{src}_diff_prc_rm_20"]
+                ).dropna()
+                assert entry[f"diff_prc_std_{src}"]["mean"] == pytest.approx(dev.mean())
+                assert entry[f"diff_prc_std_{src}"]["std"] == pytest.approx(dev.std())
+
+    def test_indicator_stats_diff_prc_std_skipped_when_cols_missing(
+        self, wide_df_with_rsi, patched_stats_folder
+    ):
+        """No diff_prc/rm columns → diff_prc_std_* keys omitted."""
+        import json
+
+        da = DataAttributes()
+        da.compute(wide_df_with_rsi)
+        with open(patched_stats_folder + "indicator_stats.json") as fh:
+            stats = json.load(fh)
+        for tf_stats in stats.values():
+            for src in ["close", "high", "low"]:
+                assert f"diff_prc_std_{src}" not in tf_stats
 
     def test_indicator_stats_skips_tf_with_missing_columns(
         self, wide_df_with_rsi, patched_stats_folder
