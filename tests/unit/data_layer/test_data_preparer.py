@@ -217,6 +217,7 @@ class TestPreparePipeline:
         dp._compute_base_indicators = lambda df, start_ts=None: call_order.append("base_indicators")
         dp._compute_base_attributes = lambda df: call_order.append("base_attributes")
         dp._compute_class_indicators = lambda df, start_ts=None: call_order.append("class_indicators")
+        dp._compute_profit_labels = lambda df: call_order.append("profit_labels")
         dp._merge_nn_output = lambda df: call_order.append("merge_nn")
         dp._compute_nn_attributes = lambda df: (call_order.append("nn_attributes"), mock_data_attrs)[1]
 
@@ -228,6 +229,7 @@ class TestPreparePipeline:
             "base_indicators",
             "base_attributes",
             "class_indicators",
+            "profit_labels",
             "merge_nn",
             "nn_attributes",
         ]
@@ -269,6 +271,7 @@ class TestAtomicSave:
         dp._compute_base_indicators = lambda df, start_ts=None: None
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
+        dp._compute_profit_labels = lambda df: None
         dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: mock_data_attrs
 
@@ -444,6 +447,32 @@ class TestWarmupTrim:
         assert wide_df.loc[wide_df.index < start_ts, "1_f1"].isna().all()
         assert (wide_df.loc[wide_df.index >= start_ts, "1_f1"] == 42.0).all()
 
+    def test_profit_labels_computed_on_trimmed_frame(self, tmp_path):
+        """_compute_profit_labels receives the post-trim frame (starts at
+        DATA_START) — labels are never computed for warmup rows."""
+        raw_pkl = str(tmp_path / "graber_data.pkl")
+        _make_raw_df().to_pickle(raw_pkl)
+
+        wide_df = _make_wide_df(5)  # 2024-01-01 00:00 .. 00:04
+        data_start = wide_df.index[2]  # 00:02
+        data_start_ms = int(data_start.timestamp() * 1000)
+
+        seen = {}
+        dp = self._make_preparer(tmp_path)
+        dp._load_raw_data = lambda path: pd.DataFrame({"x": [1]})
+        dp._build_base_dataframe = lambda raw: wide_df
+        dp._compute_base_indicators = lambda df, start_ts=None: None
+        dp._compute_base_attributes = lambda df: None
+        dp._compute_class_indicators = lambda df, start_ts=None: None
+        dp._compute_profit_labels = lambda df: seen.setdefault("index", df.index)
+        dp._merge_nn_output = lambda df: None
+        dp._compute_nn_attributes = lambda df: MagicMock()
+
+        dp.prepare(raw_pkl, data_start_ms=data_start_ms)
+
+        assert seen["index"][0] == data_start
+        assert len(seen["index"]) == 3
+
     def test_prepare_trims_rows_before_data_start(self, tmp_path):
         """prepare(..., data_start_ms=...) drops rows before DATA_START
         from the saved df_with_indicators.pkl."""
@@ -461,6 +490,7 @@ class TestWarmupTrim:
         dp._compute_base_indicators = lambda df, start_ts=None: None
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
+        dp._compute_profit_labels = lambda df: None
         dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: mock_data_attrs
 
@@ -490,6 +520,7 @@ class TestWarmupTrim:
         dp._compute_class_indicators = (
             lambda df, start_ts=None: received.setdefault("class", start_ts)
         )
+        dp._compute_profit_labels = lambda df: None
         dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: MagicMock()
 
@@ -510,6 +541,7 @@ class TestWarmupTrim:
         dp._compute_base_indicators = lambda df, start_ts=None: None
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
+        dp._compute_profit_labels = lambda df: None
         dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: MagicMock()
 

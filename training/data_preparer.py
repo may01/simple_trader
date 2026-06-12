@@ -178,10 +178,11 @@ class DataPreparer:
           4. Compute base attributes (writes rsi_classification.json + diff_stats.pkl)
           5. Compute class indicators (classification + targets; only TFs [15,60,240,1440])
           6. Trim warmup rows (drop everything before data_start_ms)
-          7. Merge df_with_nn.pkl columns (left-join on index; no-op if absent)
-          8. Compute NN normalisation stats → data_attributes
-          9. Save wide_df atomically to output_path
-         10. Save data_attributes to attributes_output_path
+          7. Compute lookahead profit labels (labels: config section)
+          8. Merge df_with_nn.pkl columns (left-join on index; no-op if absent)
+          9. Compute NN normalisation stats → data_attributes
+         10. Save wide_df atomically to output_path
+         11. Save data_attributes to attributes_output_path
 
         Args:
             raw_data_path:  Path to graber_data.pkl.
@@ -218,18 +219,22 @@ class DataPreparer:
         if start_ts is not None:
             wide_df = wide_df.loc[wide_df.index >= start_ts]
 
-        # Step 7 — optional NN output merge
+        # Step 7 — lookahead profit labels on the trimmed frame (labels need
+        # future rows inside the simulation window, never warmup history)
+        self._compute_profit_labels(wide_df)
+
+        # Step 8 — optional NN output merge
         self._merge_nn_output(wide_df)
 
-        # Step 8 — NN normalisation stats
+        # Step 9 — NN normalisation stats
         data_attributes = self._compute_nn_attributes(wide_df)
 
-        # Step 9 — atomic save of wide_df
+        # Step 10 — atomic save of wide_df
         tmp_out = self.output_path + ".tmp"
         wide_df.to_pickle(tmp_out)
         os.rename(tmp_out, self.output_path)
 
-        # Step 10 — save DataAttributes
+        # Step 11 — save DataAttributes
         data_attributes.save(self.attributes_output_path)
 
     # ------------------------------------------------------------------
@@ -339,6 +344,41 @@ class DataPreparer:
                       input only. None = compute every row.
         """
         self._run_indicator_pass(df, CLASS_GROUPS, CLASS_TFS, start_ts)
+
+    def _compute_profit_labels(self, df: pd.DataFrame) -> None:
+        """Append lookahead profit-label columns per the 'labels' config section.
+
+        For each LabelSpecConfig and each of its tfs, calls
+        add_profit_labels / add_profit_strict_labels from indicators.labels
+        (vectorized over the whole frame — no per-row pass). No-op when the
+        config has no labels section.
+
+        Labels are lookahead by construction and are never indicator fields:
+        they exist only in the saved wide frame, never in the registry or the
+        live path.
+
+        Args:
+            df: Wide DataFrame (already trimmed to the simulation window;
+                mutated in place).
+        """
+        from config_loader import load_labels_config
+        specs = load_labels_config(self.config_path)
+        if not specs:
+            return
+
+        from indicators.labels import add_profit_labels, add_profit_strict_labels
+
+        for spec in specs:
+            for tf in spec.tfs:
+                if spec.type == "profit":
+                    add_profit_labels(
+                        df, tf, spec.n, spec.m, spec.x, atr_period=spec.atr_period
+                    )
+                else:  # "profit_strict" — validated by load_labels_config
+                    add_profit_strict_labels(
+                        df, tf, spec.n, spec.m, spec.x, spec.l, spec.y,
+                        atr_period=spec.atr_period,
+                    )
 
     def _merge_nn_output(self, df: pd.DataFrame) -> None:
         """Left-join columns from df_with_nn.pkl onto df (in place).

@@ -100,6 +100,51 @@ def load_nn_config(path: str = "configs/indicators_config.yaml") -> dict:
     return data["nn"]
 
 
+@dataclass
+class LabelSpecConfig:
+    """One profit-label family from the 'labels' config section."""
+
+    type: str            # "profit" | "profit_strict"
+    tfs: list
+    n: int
+    m: float
+    x: float
+    atr_period: int = 14
+    l: Optional[int] = None    # strict only
+    y: Optional[float] = None  # strict only
+
+
+def load_labels_config(path: str = "configs/indicators_config.yaml") -> list:
+    """Parse the optional 'labels' section into LabelSpecConfig entries.
+
+    Missing section → []. Raises ValueError on unknown type or a
+    profit_strict entry without l/y.
+    """
+    with open(path, "r") as fh:
+        data = yaml.safe_load(fh)
+
+    specs = []
+    for entry in data.get("labels") or []:
+        spec = LabelSpecConfig(
+            type=entry["type"],
+            tfs=[int(tf) for tf in entry["tfs"]],
+            n=int(entry["n"]),
+            m=float(entry["m"]),
+            x=float(entry["x"]),
+            atr_period=int(entry.get("atr_period", 14)),
+            l=int(entry["l"]) if "l" in entry else None,
+            y=float(entry["y"]) if "y" in entry else None,
+        )
+        if spec.type not in ("profit", "profit_strict"):
+            raise ValueError(f"Unknown label type: {spec.type!r}")
+        if spec.type == "profit_strict" and (spec.l is None or spec.y is None):
+            raise ValueError(
+                f"profit_strict label entry requires 'l' and 'y' (got l={spec.l}, y={spec.y})"
+            )
+        specs.append(spec)
+    return specs
+
+
 # Module-level constant — loaded at import from default path
 CANDLES: list = load_candles_config()
 
