@@ -20,75 +20,75 @@ def _get_tf_diff_stats(tf: int) -> dict:
 
 
 class TgtLongField(IndicatorField):
-    """Long target: close * (1 + mean_long_diff)."""
+    """Long target: prev high * (1 + high_diff_prc_rm_20 - high_diff_prc_rm_20_std_above)/100; diff_prc is percent."""
 
     name = "tgt_long"
     group = "targets"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = ["diff_stats.pkl"]
+    dependencies: list[str] = ["high_diff_prc_rm_20", "high_diff_prc_rm_20_std_above"]
+    resource_dependencies: list[str] = []
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _get_tf_diff_stats(tf)
-        mean_diff = float(stats.get("mean_long", 0.0))
         df = data_point.get_df(tf)
-        close = df[f"{tf}_close"]
-        return close * (1.0 + mean_diff)
+        prev_high = df[f"{tf}_high"].shift(1)
+        rm = df[f"{tf}_high_diff_prc_rm_20"]
+        std = df[f"{tf}_high_diff_prc_rm_20_std_above"]
+        return prev_high * (1.0 + (rm - std) / 100.0)
 
 
 class SLLongField(IndicatorField):
-    """Long stop-loss: close * (1 - mean_long_sl)."""
+    """Long stop-loss: prev low * (1 + low_diff_prc_rm_20 - low_diff_prc_rm_20_std_below)/100; diff_prc is percent."""
 
     name = "sl_long"
     group = "targets"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = ["diff_stats.pkl"]
+    dependencies: list[str] = ["low_diff_prc_rm_20", "low_diff_prc_rm_20_std_below"]
+    resource_dependencies: list[str] = []
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _get_tf_diff_stats(tf)
-        mean_sl = float(stats.get("mean_long_sl", 0.0))
         df = data_point.get_df(tf)
-        close = df[f"{tf}_close"]
-        return close * (1.0 - mean_sl)
+        prev_low = df[f"{tf}_low"].shift(1)
+        rm = df[f"{tf}_low_diff_prc_rm_20"]
+        std = df[f"{tf}_low_diff_prc_rm_20_std_below"]
+        return prev_low * (1.0 + (rm - std) / 100.0)
 
 
 class TgtShortField(IndicatorField):
-    """Short target: close * (1 - mean_short_diff)."""
+    """Short target: prev low * (1 + low_diff_prc_rm_20 + low_diff_prc_rm_20_std_below)/100; diff_prc is percent."""
 
     name = "tgt_short"
     group = "targets"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = ["diff_stats.pkl"]
+    dependencies: list[str] = ["low_diff_prc_rm_20", "low_diff_prc_rm_20_std_below"]
+    resource_dependencies: list[str] = []
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _get_tf_diff_stats(tf)
-        mean_diff = float(stats.get("mean_short", 0.0))
         df = data_point.get_df(tf)
-        close = df[f"{tf}_close"]
-        return close * (1.0 - mean_diff)
+        prev_low = df[f"{tf}_low"].shift(1)
+        rm = df[f"{tf}_low_diff_prc_rm_20"]
+        std = df[f"{tf}_low_diff_prc_rm_20_std_below"]
+        return prev_low * (1.0 + (rm + std) / 100.0)
 
 
 class SLShortField(IndicatorField):
-    """Short stop-loss: close * (1 + mean_short_sl)."""
+    """Short stop-loss: prev high * (1 + high_diff_prc_rm_20 + high_diff_prc_rm_20_std_above)/100; diff_prc is percent."""
 
     name = "sl_short"
     group = "targets"
-    dependencies: list[str] = []
-    resource_dependencies: list[str] = ["diff_stats.pkl"]
+    dependencies: list[str] = ["high_diff_prc_rm_20", "high_diff_prc_rm_20_std_above"]
+    resource_dependencies: list[str] = []
     applies_to: list[int] = [15, 60, 240, 1440]
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        stats = _get_tf_diff_stats(tf)
-        mean_sl = float(stats.get("mean_short_sl", 0.0))
         df = data_point.get_df(tf)
-        close = df[f"{tf}_close"]
-        return close * (1.0 + mean_sl)
+        prev_high = df[f"{tf}_high"].shift(1)
+        rm = df[f"{tf}_high_diff_prc_rm_20"]
+        std = df[f"{tf}_high_diff_prc_rm_20_std_above"]
+        return prev_high * (1.0 + (rm + std) / 100.0)
 
 
 class ZBField(IndicatorField):

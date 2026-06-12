@@ -403,28 +403,28 @@ fields:
   - name: tgt_long
     group: targets
     applies_to: [15, 60, 240, 1440]
-    depends_on: []
+    depends_on: [high_diff_prc_rm_20, high_diff_prc_rm_20_std_above]
     library: talib
     params: {}
 
   - name: sl_long
     group: targets
     applies_to: [15, 60, 240, 1440]
-    depends_on: []
+    depends_on: [low_diff_prc_rm_20, low_diff_prc_rm_20_std_below]
     library: talib
     params: {}
 
   - name: tgt_short
     group: targets
     applies_to: [15, 60, 240, 1440]
-    depends_on: []
+    depends_on: [low_diff_prc_rm_20, low_diff_prc_rm_20_std_below]
     library: talib
     params: {}
 
   - name: sl_short
     group: targets
     applies_to: [15, 60, 240, 1440]
-    depends_on: []
+    depends_on: [high_diff_prc_rm_20, high_diff_prc_rm_20_std_above]
     library: talib
     params: {}
 

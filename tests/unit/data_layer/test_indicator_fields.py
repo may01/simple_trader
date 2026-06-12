@@ -827,71 +827,86 @@ class TestClassificationFields:
 
 
 # ---------------------------------------------------------------------------
-# 14. Targets fields with monkeypatched _load_diff_stats
+# 14. Targets fields — previous-candle high/low anchored to rolling diff stats
 # ---------------------------------------------------------------------------
 
 class TestTargetsFields:
-    def _make_close_dp(self, tf: int = 15, n: int = 50) -> tuple:
+    _RM_HIGH = 0.02
+    _STD_HIGH = 0.005
+    _RM_LOW = -0.01
+    _STD_LOW = 0.004
+
+    def _make_target_dp(self, tf: int = 15, n: int = 50) -> tuple:
         df = make_indicator_df(tf=tf, n=n)
+        df[f"{tf}_high_diff_prc_rm_20"] = self._RM_HIGH
+        df[f"{tf}_high_diff_prc_rm_20_std_above"] = self._STD_HIGH
+        df[f"{tf}_low_diff_prc_rm_20"] = self._RM_LOW
+        df[f"{tf}_low_diff_prc_rm_20_std_below"] = self._STD_LOW
         dp = LiveDataPoint({tf: df})
         return dp, df
 
+    def test_tgt_long_prev_high_times_rm_minus_std(self):
+        """tgt_long = prev high * (1 + (high_diff_prc_rm_20 - std_above)/100) — diff_prc is percent."""
+        field = TgtLongField()
+        dp, df = self._make_target_dp(tf=15)
+        result = field.compute(dp, 15)
+        expected = df["15_high"].shift(1) * (1 + (self._RM_HIGH - self._STD_HIGH) / 100)
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_sl_long_prev_low_times_rm_minus_std(self):
+        """sl_long = prev low * (1 + low_diff_prc_rm_20 - std_below)."""
+        field = SLLongField()
+        dp, df = self._make_target_dp(tf=15)
+        result = field.compute(dp, 15)
+        expected = df["15_low"].shift(1) * (1 + (self._RM_LOW - self._STD_LOW) / 100)
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_tgt_short_prev_low_times_rm_plus_std(self):
+        """tgt_short = prev low * (1 + low_diff_prc_rm_20 + std_below)."""
+        field = TgtShortField()
+        dp, df = self._make_target_dp(tf=15)
+        result = field.compute(dp, 15)
+        expected = df["15_low"].shift(1) * (1 + (self._RM_LOW + self._STD_LOW) / 100)
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_sl_short_prev_high_times_rm_plus_std(self):
+        """sl_short = prev high * (1 + high_diff_prc_rm_20 + std_above)."""
+        field = SLShortField()
+        dp, df = self._make_target_dp(tf=15)
+        result = field.compute(dp, 15)
+        expected = df["15_high"].shift(1) * (1 + (self._RM_HIGH + self._STD_HIGH) / 100)
+        pd.testing.assert_series_equal(result, expected, check_names=False)
+
+    def test_first_row_is_nan_no_previous_candle(self):
+        dp, _ = self._make_target_dp(tf=15)
+        for field in (TgtLongField(), SLLongField(), TgtShortField(), SLShortField()):
+            assert pd.isna(field.compute(dp, 15).iloc[0])
+
+    def test_dependencies_declare_stat_fields_no_resources(self):
+        assert TgtLongField().dependencies == [
+            "high_diff_prc_rm_20", "high_diff_prc_rm_20_std_above"]
+        assert SLLongField().dependencies == [
+            "low_diff_prc_rm_20", "low_diff_prc_rm_20_std_below"]
+        assert TgtShortField().dependencies == [
+            "low_diff_prc_rm_20", "low_diff_prc_rm_20_std_below"]
+        assert SLShortField().dependencies == [
+            "high_diff_prc_rm_20", "high_diff_prc_rm_20_std_above"]
+        for field in (TgtLongField(), SLLongField(), TgtShortField(), SLShortField()):
+            assert field.resource_dependencies == []
+
+    # ZB/ZS still read diff_stats.pkl — semantics pending their own task.
     def _patch_diff_stats(self, monkeypatch, tf: int = 15):
-        import indicators.library.classification
         import indicators.library.targets
-        diff_stats = {str(tf): {
-            "mean_long": 0.02,
-            "mean_long_sl": 0.01,
-            "mean_short": 0.02,
-            "mean_short_sl": 0.01,
-            "zb_threshold": 1.0,
-            "zs_threshold": 100.0,
-        }}
+        diff_stats = {str(tf): {"zb_threshold": 1.0, "zs_threshold": 100.0}}
         monkeypatch.setenv("DATA_ROOT", "dataset")
         monkeypatch.setenv("PAIR", "link_usdt")
         monkeypatch.setattr(indicators.library.targets, "_load_diff_stats", lambda path: diff_stats)
-
-    def test_tgt_long_with_stats(self, monkeypatch):
-        """TgtLongField computes close * (1 + mean_long)."""
-        self._patch_diff_stats(monkeypatch)
-        field = TgtLongField()
-        dp, df = self._make_close_dp(tf=15)
-        result = field.compute(dp, 15)
-        assert isinstance(result, pd.Series)
-        assert len(result) == 50
-
-    def test_sl_long_with_stats(self, monkeypatch):
-        """SLLongField computes close * (1 - mean_long_sl)."""
-        self._patch_diff_stats(monkeypatch)
-        field = SLLongField()
-        dp, df = self._make_close_dp(tf=15)
-        result = field.compute(dp, 15)
-        assert isinstance(result, pd.Series)
-        assert len(result) == 50
-
-    def test_tgt_short_with_stats(self, monkeypatch):
-        """TgtShortField computes close * (1 - mean_short)."""
-        self._patch_diff_stats(monkeypatch)
-        field = TgtShortField()
-        dp, df = self._make_close_dp(tf=15)
-        result = field.compute(dp, 15)
-        assert isinstance(result, pd.Series)
-        assert len(result) == 50
-
-    def test_sl_short_with_stats(self, monkeypatch):
-        """SLShortField computes close * (1 + mean_short_sl)."""
-        self._patch_diff_stats(monkeypatch)
-        field = SLShortField()
-        dp, df = self._make_close_dp(tf=15)
-        result = field.compute(dp, 15)
-        assert isinstance(result, pd.Series)
-        assert len(result) == 50
 
     def test_zb_with_stats(self, monkeypatch):
         """ZBField returns integer Series."""
         self._patch_diff_stats(monkeypatch)
         field = ZBField()
-        dp, df = self._make_close_dp(tf=15)
+        dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
         assert isinstance(result, pd.Series)
         assert len(result) == 50
@@ -900,7 +915,7 @@ class TestTargetsFields:
         """ZSField returns integer Series."""
         self._patch_diff_stats(monkeypatch)
         field = ZSField()
-        dp, df = self._make_close_dp(tf=15)
+        dp, df = self._make_target_dp(tf=15)
         result = field.compute(dp, 15)
         assert isinstance(result, pd.Series)
         assert len(result) == 50
