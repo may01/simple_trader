@@ -39,6 +39,7 @@ _FIELD_REGISTRY: dict[str, object] = {
     "macd_hist_12_26_9": lambda cfg: MACDHistField(**cfg.params),
     "macd_5_13_9": lambda cfg: MACDFastField(**cfg.params),
     "macd_signal_5_13_9": lambda cfg: MACDFastSignalField(**cfg.params),
+    "adx_14": lambda cfg: ADXField(**cfg.params),
     # Oscillators
     "sar_002_02": lambda cfg: SARField(**cfg.params),
     "cci_14": lambda cfg: CCI14Field(**cfg.params),
@@ -72,6 +73,12 @@ _FIELD_REGISTRY: dict[str, object] = {
     "low_diff_prc_rm_20": lambda cfg: LowDiffPrcRMField(**cfg.params),
     "low_diff_prc_rm_20_mean_above": lambda cfg: LowDiffPrcRMMeanAboveField(**cfg.params),
     "low_diff_prc_rm_20_mean_below": lambda cfg: LowDiffPrcRMMeanBelowField(**cfg.params),
+    "close_diff_prc_rm_20_std_above": lambda cfg: CloseDiffPrcRMStdAboveField(**cfg.params),
+    "close_diff_prc_rm_20_std_below": lambda cfg: CloseDiffPrcRMStdBelowField(**cfg.params),
+    "high_diff_prc_rm_20_std_above": lambda cfg: HighDiffPrcRMStdAboveField(**cfg.params),
+    "high_diff_prc_rm_20_std_below": lambda cfg: HighDiffPrcRMStdBelowField(**cfg.params),
+    "low_diff_prc_rm_20_std_above": lambda cfg: LowDiffPrcRMStdAboveField(**cfg.params),
+    "low_diff_prc_rm_20_std_below": lambda cfg: LowDiffPrcRMStdBelowField(**cfg.params),
     # Classification (stats-driven; no numeric params)
     "move_class": lambda cfg: MoveClassField(),
     "zone_class": lambda cfg: ZoneClassField(),

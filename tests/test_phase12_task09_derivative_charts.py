@@ -10,11 +10,11 @@ from frontend.data_viewer import DataViewer, FullData, _indicator_subplot
 
 _DERIV_FIELDS = [
     "close_diff_prc", "close_diff_prc_rm_20",
-    "close_diff_prc_rm_20_mean_above", "close_diff_prc_rm_20_mean_below",
+    "close_diff_prc_rm_20_std_above", "close_diff_prc_rm_20_std_below",
     "high_diff_prc", "high_diff_prc_rm_20",
-    "high_diff_prc_rm_20_mean_above", "high_diff_prc_rm_20_mean_below",
+    "high_diff_prc_rm_20_std_above", "high_diff_prc_rm_20_std_below",
     "low_diff_prc", "low_diff_prc_rm_20",
-    "low_diff_prc_rm_20_mean_above", "low_diff_prc_rm_20_mean_below",
+    "low_diff_prc_rm_20_std_above", "low_diff_prc_rm_20_std_below",
     "rsi_ma8_diff", "rsi_ma12_diff", "rsi_ma24_diff",
 ]
 
@@ -67,12 +67,12 @@ class TestRouting:
         [
             ("close_diff_prc", "close_diff"),
             ("close_diff_prc_rm_20", "close_diff"),
-            ("close_diff_prc_rm_20_mean_above", "close_diff"),
-            ("close_diff_prc_rm_20_mean_below", "close_diff"),
+            ("close_diff_prc_rm_20_std_above", "close_diff"),
+            ("close_diff_prc_rm_20_std_below", "close_diff"),
             ("high_diff_prc", "high_diff"),
             ("high_diff_prc_rm_20", "high_diff"),
             ("low_diff_prc", "low_diff"),
-            ("low_diff_prc_rm_20_mean_below", "low_diff"),
+            ("low_diff_prc_rm_20_std_below", "low_diff"),
             ("rsi_ma8_diff", "rsi_diff"),
             ("rsi_ma12_diff", "rsi_diff"),
             ("rsi_ma24_diff", "rsi_diff"),
@@ -119,8 +119,8 @@ class TestDerivativeDrawing:
             for c in r.draw_line.call_args_list
             if c[0][1] == "close_diff"
         }
-        assert colors["close_diff_prc_rm_20_mean_above"] != colors["close_diff_prc"]
-        assert colors["close_diff_prc_rm_20_mean_below"] != colors["close_diff_prc"]
+        assert colors["close_diff_prc_rm_20_std_above"] != colors["close_diff_prc"]
+        assert colors["close_diff_prc_rm_20_std_below"] != colors["close_diff_prc"]
 
     def test_missing_group_produces_no_subplot(self):
         r = _mock_renderer(["close_diff"])
@@ -167,4 +167,4 @@ class TestZeroLines:
             if "height" in c.kwargs
         ]
         assert heights  # height was set
-        assert heights[-1] == max(600, 220 * len(fig._subplot_rows))
+        assert heights[-1] == max(600, 264 * len(fig._subplot_rows))

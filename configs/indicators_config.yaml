@@ -121,6 +121,14 @@ fields:
     library: talib
     params: {}
 
+  - name: adx_14
+    group: trend
+    applies_to: all
+    depends_on: []
+    library: talib
+    params:
+      period: 14
+
   # --- volatility ---
   - name: atr_14
     group: volatility
@@ -318,6 +326,42 @@ fields:
     group: price_derivatives
     applies_to: all
     depends_on: [low_diff_prc_rm_20]
+    params: {}
+
+  - name: close_diff_prc_rm_20_std_above
+    group: price_derivatives
+    applies_to: all
+    depends_on: [close_diff_prc, close_diff_prc_rm_20]
+    params: {}
+
+  - name: close_diff_prc_rm_20_std_below
+    group: price_derivatives
+    applies_to: all
+    depends_on: [close_diff_prc, close_diff_prc_rm_20]
+    params: {}
+
+  - name: high_diff_prc_rm_20_std_above
+    group: price_derivatives
+    applies_to: all
+    depends_on: [high_diff_prc, high_diff_prc_rm_20]
+    params: {}
+
+  - name: high_diff_prc_rm_20_std_below
+    group: price_derivatives
+    applies_to: all
+    depends_on: [high_diff_prc, high_diff_prc_rm_20]
+    params: {}
+
+  - name: low_diff_prc_rm_20_std_above
+    group: price_derivatives
+    applies_to: all
+    depends_on: [low_diff_prc, low_diff_prc_rm_20]
+    params: {}
+
+  - name: low_diff_prc_rm_20_std_below
+    group: price_derivatives
+    applies_to: all
+    depends_on: [low_diff_prc, low_diff_prc_rm_20]
     params: {}
 
   # --- classification (applies_to: [15, 60, 240, 1440] only) ---

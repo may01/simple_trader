@@ -1,10 +1,12 @@
 """indicators.library.price_derivatives — close/high/low percentage-diff family.
 
-Three layers per source column (close, high, low):
+Four layers per source column (close, high, low):
   {src}_diff_prc            — 1-step percentage change
   {src}_diff_prc_rm_{w}     — rolling mean over w
   {src}_diff_prc_rm_{w}_mean_above / _mean_below
                             — rolling mean of positive/negative values over w
+  {src}_diff_prc_rm_{w}_std_above / _std_below
+                            — rolling mean ± rolling std of the diff over w
 """
 
 from __future__ import annotations
@@ -130,5 +132,62 @@ class LowDiffPrcRMMeanAboveField(_DiffPrcRMMeanSideBase):
 
 
 class LowDiffPrcRMMeanBelowField(_DiffPrcRMMeanSideBase):
+    _source = "low"
+    _above = False
+
+
+class _DiffPrcRMStdSideBase(IndicatorField):
+    """Rolling mean ± rolling std band of a diff_prc column."""
+
+    group = "price_derivatives"
+    resource_dependencies: list[str] = []
+    applies_to: list[int] = []
+    _source: str
+    _above: bool
+
+    def __init__(self, window: int = 20) -> None:
+        self.window = window
+        self.params = {"window": window}
+        side = "above" if self._above else "below"
+        self.name = f"{self._source}_diff_prc_rm_{window}_std_{side}"
+        self.dependencies = [
+            f"{self._source}_diff_prc",
+            f"{self._source}_diff_prc_rm_{window}",
+        ]
+
+    def compute(self, data_point, tf: int) -> pd.Series:
+        df = data_point.get_df(tf)
+        diff = df[f"{tf}_{self._source}_diff_prc"]
+        rm = df[f"{tf}_{self._source}_diff_prc_rm_{self.window}"]
+        std = diff.rolling(self.window).std()
+        return rm + std if self._above else rm - std
+
+
+class CloseDiffPrcRMStdAboveField(_DiffPrcRMStdSideBase):
+    _source = "close"
+    _above = True
+
+
+class CloseDiffPrcRMStdBelowField(_DiffPrcRMStdSideBase):
+    _source = "close"
+    _above = False
+
+
+class HighDiffPrcRMStdAboveField(_DiffPrcRMStdSideBase):
+    _source = "high"
+    _above = True
+
+
+class HighDiffPrcRMStdBelowField(_DiffPrcRMStdSideBase):
+    _source = "high"
+    _above = False
+
+
+class LowDiffPrcRMStdAboveField(_DiffPrcRMStdSideBase):
+    _source = "low"
+    _above = True
+
+
+class LowDiffPrcRMStdBelowField(_DiffPrcRMStdSideBase):
     _source = "low"
     _above = False

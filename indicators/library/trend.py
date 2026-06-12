@@ -87,3 +87,25 @@ class MACDFastSignalField(MACDSignalField):
 
     def __init__(self, fast: int = 5, slow: int = 13, signal: int = 9) -> None:
         super().__init__(fast=fast, slow=slow, signal=signal)
+
+
+class ADXField(IndicatorField):
+    """Average Directional Index — trend strength; name carries the period (adx_14)."""
+
+    group = "trend"
+    resource_dependencies: list[str] = []
+    applies_to: list[int] = []
+
+    def __init__(self, period: int = 14) -> None:
+        self.period = period
+        self.params = {"period": period}
+        self.name = f"adx_{period}"
+        self.dependencies: list[str] = []
+
+    def compute(self, data_point, tf: int) -> pd.Series:
+        df = data_point.get_df(tf)
+        high = df[f"{tf}_high"].values.astype(float)
+        low = df[f"{tf}_low"].values.astype(float)
+        close = df[f"{tf}_close"].values.astype(float)
+        result = talib.ADX(high, low, close, timeperiod=self.period)
+        return pd.Series(result, index=df.index)

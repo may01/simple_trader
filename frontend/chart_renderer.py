@@ -14,18 +14,23 @@ class ChartRenderer:
     def create_figure(self, subplots: list[str]) -> go.Figure:
         """Create a multi-subplot figure.
 
-        The "price" subplot receives 60% of vertical space; all other subplots
-        share the remainder equally. `fig._subplot_rows` maps subplot name →
-        1-indexed row number.
+        Row height ratios: "price" weighs 0.60, every other subplot weighs
+        0.90/(n-1) — 1.5× the previous 0.60/(n-1) split (plotly normalizes
+        the ratios). `fig._subplot_rows` maps subplot name → 1-indexed row
+        number.
+
+        The candlestick auto-rangeslider is disabled on every axis and a slim
+        one (thickness 0.05 — a third of the plotly 0.15 default) is enabled
+        on the bottom row, so it can never overlap subplot rows.
         """
         n = len(subplots)
 
-        # Build row heights: price gets 0.60, others share 0.40 equally.
+        # Relative row weights: price 0.60, others 1.5 * 0.60/(n-1) each.
         if n == 1:
             row_heights = [1.0]
         else:
             price_share = 0.60
-            other_share = (1.0 - price_share) / (n - 1)
+            other_share = 1.5 * (1.0 - price_share) / (n - 1)
             row_heights = [
                 price_share if name == "price" else other_share
                 for name in subplots
@@ -41,6 +46,15 @@ class ChartRenderer:
         )
 
         fig.update_layout(title_text=self.title)
+
+        # Rangeslider: off everywhere, slim one on the bottom row only.
+        fig.update_xaxes(rangeslider_visible=False)
+        fig.update_xaxes(
+            rangeslider_visible=True,
+            rangeslider_thickness=0.05,
+            row=n,
+            col=1,
+        )
 
         # Attach subplot name → row mapping as a plain dict attribute.
         fig._subplot_rows = {name: idx + 1 for idx, name in enumerate(subplots)}

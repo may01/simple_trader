@@ -41,19 +41,20 @@ _INDICATOR_SUBPLOT_EXACT = {
 
 # Price-derivative (diff field) groups: subplot name → fields sharing it.
 # Routed via the exact map — the base-name split would wrongly send
-# "close_diff_prc" to a subplot named "close".
+# "close_diff_prc" to a subplot named "close". Charts show the diff, its
+# rolling mean, and the mean ± rolling-std band.
 _DERIVATIVE_SUBPLOTS = {
     "close_diff": [
         "close_diff_prc", "close_diff_prc_rm_20",
-        "close_diff_prc_rm_20_mean_above", "close_diff_prc_rm_20_mean_below",
+        "close_diff_prc_rm_20_std_above", "close_diff_prc_rm_20_std_below",
     ],
     "high_diff": [
         "high_diff_prc", "high_diff_prc_rm_20",
-        "high_diff_prc_rm_20_mean_above", "high_diff_prc_rm_20_mean_below",
+        "high_diff_prc_rm_20_std_above", "high_diff_prc_rm_20_std_below",
     ],
     "low_diff": [
         "low_diff_prc", "low_diff_prc_rm_20",
-        "low_diff_prc_rm_20_mean_above", "low_diff_prc_rm_20_mean_below",
+        "low_diff_prc_rm_20_std_above", "low_diff_prc_rm_20_std_below",
     ],
     "rsi_diff": ["rsi_ma8_diff", "rsi_ma12_diff", "rsi_ma24_diff"],
 }
@@ -61,6 +62,14 @@ _DERIVATIVE_SUBPLOTS = {
 _INDICATOR_SUBPLOT_EXACT.update(
     {f: sp for sp, fields in _DERIVATIVE_SUBPLOTS.items() for f in fields}
 )
+
+# The one-signed mean bands are no longer drawn by default but stay routable
+# for explicit indicator lists.
+_INDICATOR_SUBPLOT_EXACT.update({
+    f"{src}_diff_prc_rm_20_mean_{side}": f"{src}_diff"
+    for src in ("close", "high", "low")
+    for side in ("above", "below")
+})
 
 
 def _indicator_subplot(indicator: str) -> str | None:
@@ -151,6 +160,7 @@ class DataViewer:
         "cci_14", "cci_14_ma_20",
         "macd_12_26_9", "macd_signal_12_26_9", "macd_hist_12_26_9",
         "macd_5_13_9", "macd_signal_5_13_9",
+        "adx_14",
     ]
 
     _OSC_COLORS = {
@@ -160,16 +170,17 @@ class DataViewer:
         "macd_12_26_9": "blue", "macd_signal_12_26_9": "orange",
         "macd_hist_12_26_9": "gray",
         "macd_5_13_9": "blue", "macd_signal_5_13_9": "orange",
-        # Derivatives: raw diff and rm_20 stand out; mean bands muted.
+        "adx_14": "purple",
+        # Derivatives: raw diff and rm_20 stand out; std bands muted.
         "close_diff_prc": "blue", "close_diff_prc_rm_20": "orange",
-        "close_diff_prc_rm_20_mean_above": "lightgreen",
-        "close_diff_prc_rm_20_mean_below": "lightcoral",
+        "close_diff_prc_rm_20_std_above": "lightgreen",
+        "close_diff_prc_rm_20_std_below": "lightcoral",
         "high_diff_prc": "blue", "high_diff_prc_rm_20": "orange",
-        "high_diff_prc_rm_20_mean_above": "lightgreen",
-        "high_diff_prc_rm_20_mean_below": "lightcoral",
+        "high_diff_prc_rm_20_std_above": "lightgreen",
+        "high_diff_prc_rm_20_std_below": "lightcoral",
         "low_diff_prc": "blue", "low_diff_prc_rm_20": "orange",
-        "low_diff_prc_rm_20_mean_above": "lightgreen",
-        "low_diff_prc_rm_20_mean_below": "lightcoral",
+        "low_diff_prc_rm_20_std_above": "lightgreen",
+        "low_diff_prc_rm_20_std_below": "lightcoral",
         "rsi_ma8_diff": "orange", "rsi_ma12_diff": "green",
         "rsi_ma24_diff": "red",
     }
@@ -341,7 +352,9 @@ class DataViewer:
         self._draw_price_overlays(fig, df_slice, tf)
         self._draw_zero_lines(fig)
         n_rows = len(getattr(fig, "_subplot_rows", {})) or 1
-        fig.update_layout(height=max(600, 220 * n_rows))
+        # 264 = 220 * 1.2: total grows with the extra weight of the non-price
+        # rows (their ratios went 1.5x) so the price row keeps its pixel size.
+        fig.update_layout(height=max(600, 264 * n_rows))
         return fig
 
     def _draw_zero_lines(self, fig: go.Figure) -> None:
