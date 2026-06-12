@@ -111,6 +111,16 @@ class TestBuildWindowFigure:
         fig = viewer.build_window_figure("2024-01-01", 1)
         assert fig is mock_renderer.create_figure.return_value
 
+    def test_naive_start_against_tz_aware_index(self, df, mock_renderer):
+        """Real wide df index is tz-aware UTC; date-picker dates are naive."""
+        df_utc = df.tz_localize("UTC")
+        v = DataViewer(FullData(df_utc), tf=15)
+        v.renderer = mock_renderer
+        fig = v.build_window_figure("2024-01-02", 1)
+        assert fig is mock_renderer.create_figure.return_value
+        times = mock_renderer.draw_candles.call_args[0][1]
+        assert len(times) == 96
+
     def test_legacy_view_full_unchanged(self, viewer, mock_renderer, df):
         viewer.view_full(start_idx=2, end_idx=5)
         args = mock_renderer.draw_candles.call_args[0]

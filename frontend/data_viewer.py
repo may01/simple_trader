@@ -314,8 +314,12 @@ class DataViewer:
         """
         tf = self.tf if tf is None else int(tf)
         start = pd.Timestamp(start)
-        end = start + pd.Timedelta(days=days)
         df = self.full_data.df
+        # The wide df index is tz-aware (UTC); date-picker values are naive.
+        idx_tz = getattr(df.index, "tz", None)
+        if idx_tz is not None and start.tz is None:
+            start = start.tz_localize(idx_tz)
+        end = start + pd.Timedelta(days=days)
         df_slice = df[(df.index >= start) & (df.index < end)]
         df_slice = self._dedup_tf_rows(df_slice, tf)
         if df_slice.empty:
