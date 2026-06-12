@@ -11,7 +11,9 @@ class ChartRenderer:
     def __init__(self, title: str = "") -> None:
         self.title = title
 
-    def create_figure(self, subplots: list[str]) -> go.Figure:
+    def create_figure(
+        self, subplots: list[str], range_row: bool = False
+    ) -> go.Figure:
         """Create a multi-subplot figure.
 
         Row height ratios: "price" weighs 0.60, every other subplot weighs
@@ -22,6 +24,12 @@ class ChartRenderer:
         The candlestick auto-rangeslider is disabled on every axis and a slim
         one (thickness 0.05 — a third of the plotly 0.15 default) is enabled
         on the bottom row, so it can never overlap subplot rows.
+
+        With ``range_row=True`` an extra short, untitled "range" subplot is
+        appended after the regular rows and the slim rangeslider attaches to
+        it instead. Its y-axis is hidden — the caller draws the navigator
+        content (OHLC candles) there, so the slider preview always shows
+        price regardless of which indicator subplot ends up last.
         """
         n = len(subplots)
 
@@ -36,13 +44,19 @@ class ChartRenderer:
                 for name in subplots
             ]
 
+        names = list(subplots)
+        if range_row:
+            names.append("range")
+            row_heights.append(0.15)
+
         fig = make_subplots(
-            rows=n,
+            rows=len(names),
             cols=1,
             shared_xaxes=True,
             row_heights=row_heights,
             vertical_spacing=0.03,
-            subplot_titles=subplots,
+            # No title over the navigator row.
+            subplot_titles=[n if n != "range" else "" for n in names],
         )
 
         fig.update_layout(title_text=self.title)
@@ -52,12 +66,14 @@ class ChartRenderer:
         fig.update_xaxes(
             rangeslider_visible=True,
             rangeslider_thickness=0.05,
-            row=n,
+            row=len(names),
             col=1,
         )
+        if range_row:
+            fig.update_yaxes(visible=False, row=len(names), col=1)
 
         # Attach subplot name → row mapping as a plain dict attribute.
-        fig._subplot_rows = {name: idx + 1 for idx, name in enumerate(subplots)}
+        fig._subplot_rows = {name: idx + 1 for idx, name in enumerate(names)}
 
         return fig
 
@@ -69,9 +85,10 @@ class ChartRenderer:
         highs: list,
         lows: list,
         closes: list,
+        subplot: str = "price",
     ) -> None:
-        """Add a Candlestick trace to the price subplot."""
-        row = fig._subplot_rows["price"]
+        """Add a Candlestick trace to the given subplot (price by default)."""
+        row = fig._subplot_rows[subplot]
         fig.add_trace(
             go.Candlestick(
                 x=times,
@@ -81,6 +98,7 @@ class ChartRenderer:
                 close=closes,
                 increasing_line_color="green",
                 decreasing_line_color="red",
+                showlegend=subplot == "price",
             ),
             row=row,
             col=1,
@@ -139,16 +157,21 @@ class ChartRenderer:
         marker_symbol: str,
         color: str,
         label: str = "",
+        subplot: str = "price",
+        size: int | None = None,
     ) -> None:
-        """Add a marker (Scatter) trace to the price subplot."""
-        row = fig._subplot_rows["price"]
+        """Add a marker (Scatter) trace to the given subplot (price by default)."""
+        row = fig._subplot_rows[subplot]
+        marker = {"symbol": marker_symbol, "color": color}
+        if size is not None:
+            marker["size"] = size
         fig.add_trace(
             go.Scatter(
                 x=times,
                 y=prices,
                 mode="markers",
                 name=label,
-                marker={"symbol": marker_symbol, "color": color},
+                marker=marker,
             ),
             row=row,
             col=1,

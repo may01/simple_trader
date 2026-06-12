@@ -156,7 +156,9 @@ class TestOscillatorDrawing:
         subplots = mock_renderer.create_figure.call_args[0][0]
         assert "cci" not in subplots
         assert "macd_12_26_9" not in subplots
-        mock_renderer.draw_bar.assert_not_called()
+        # Volume renders as a bar; no indicator (macd_hist) bars expected.
+        bar_subplots = [c[0][1] for c in mock_renderer.draw_bar.call_args_list]
+        assert bar_subplots == ["volume"]
 
     def test_explicit_indicators_respected(self, mock_renderer):
         df = _make_df(_OSC_FIELDS)
