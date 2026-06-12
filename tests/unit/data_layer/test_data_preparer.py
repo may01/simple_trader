@@ -344,6 +344,8 @@ class TestComputeClassIndicators:
                 attributes_output_path="/tmp/test_dp_attrs.pkl",
                 nn_output_path="/tmp/nn_not_present.pkl",
             )
+            # Serial path: sys.modules mocks don't survive fork workers
+            dp.num_workers = 1
 
             wide_df = _make_wide_df()
 
@@ -396,12 +398,15 @@ class TestWarmupTrim:
 
     def _make_preparer(self, tmp_path):
         dp_mod = _import_data_preparer_with_mocks()
-        return dp_mod.DataPreparer(
+        dp = dp_mod.DataPreparer(
             config_path="configs/indicators_config.yaml",
             output_path=str(tmp_path / "df_with_indicators.pkl"),
             attributes_output_path=str(tmp_path / "data_attributes.pkl"),
             nn_output_path=str(tmp_path / "nn_not_present.pkl"),
         )
+        # Serial path: sys.modules mocks don't survive fork workers
+        dp.num_workers = 1
+        return dp
 
     def test_run_indicator_pass_respects_start_ts(self, tmp_path):
         """_run_indicator_pass(start_ts=...) computes only rows >= start_ts;

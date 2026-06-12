@@ -76,3 +76,23 @@ class CCI_MAField(IndicatorField):
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
         return df[f"{tf}_cci_{self.period}"].rolling(self.ma_length).mean()
+
+
+class CCIDiffField(IndicatorField):
+    """1-step difference of the CCI moving average (cci_diff)."""
+
+    group = "oscillators"
+    resource_dependencies: list[str] = []
+    applies_to: list[int] = []
+
+    def __init__(self, period: int = 14, ma_length: int = 20) -> None:
+        self.period = period
+        self.ma_length = ma_length
+        self.params = {"period": period, "ma_length": ma_length}
+        self.name = "cci_diff"
+        self.dependencies = [f"cci_{period}_ma_{ma_length}"]
+
+    def compute(self, data_point, tf: int) -> pd.Series:
+        df = data_point.get_df(tf)
+        series = df[f"{tf}_cci_{self.period}_ma_{self.ma_length}"]
+        return series - series.shift(1)

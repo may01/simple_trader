@@ -223,6 +223,12 @@ fields:
     depends_on: [cci_14]
     params: {}
 
+  - name: cci_diff
+    group: oscillators
+    applies_to: all
+    depends_on: [cci_14_ma_20]
+    params: {}
+
   - name: sar_002_02
     group: oscillators
     applies_to: all
@@ -269,13 +275,13 @@ fields:
   - name: close_diff_prc_rm_20_mean_above
     group: price_derivatives
     applies_to: all
-    depends_on: [close_diff_prc_rm_20]
+    depends_on: [close_diff_prc]
     params: {}
 
   - name: close_diff_prc_rm_20_mean_below
     group: price_derivatives
     applies_to: all
-    depends_on: [close_diff_prc_rm_20]
+    depends_on: [close_diff_prc]
     params: {}
 
   - name: high_diff_prc
@@ -294,13 +300,13 @@ fields:
   - name: high_diff_prc_rm_20_mean_above
     group: price_derivatives
     applies_to: all
-    depends_on: [high_diff_prc_rm_20]
+    depends_on: [high_diff_prc]
     params: {}
 
   - name: high_diff_prc_rm_20_mean_below
     group: price_derivatives
     applies_to: all
-    depends_on: [high_diff_prc_rm_20]
+    depends_on: [high_diff_prc]
     params: {}
 
   - name: low_diff_prc
@@ -319,49 +325,49 @@ fields:
   - name: low_diff_prc_rm_20_mean_above
     group: price_derivatives
     applies_to: all
-    depends_on: [low_diff_prc_rm_20]
+    depends_on: [low_diff_prc]
     params: {}
 
   - name: low_diff_prc_rm_20_mean_below
     group: price_derivatives
     applies_to: all
-    depends_on: [low_diff_prc_rm_20]
+    depends_on: [low_diff_prc]
     params: {}
 
   - name: close_diff_prc_rm_20_std_above
     group: price_derivatives
     applies_to: all
-    depends_on: [close_diff_prc, close_diff_prc_rm_20]
+    depends_on: [close_diff_prc]
     params: {}
 
   - name: close_diff_prc_rm_20_std_below
     group: price_derivatives
     applies_to: all
-    depends_on: [close_diff_prc, close_diff_prc_rm_20]
+    depends_on: [close_diff_prc]
     params: {}
 
   - name: high_diff_prc_rm_20_std_above
     group: price_derivatives
     applies_to: all
-    depends_on: [high_diff_prc, high_diff_prc_rm_20]
+    depends_on: [high_diff_prc]
     params: {}
 
   - name: high_diff_prc_rm_20_std_below
     group: price_derivatives
     applies_to: all
-    depends_on: [high_diff_prc, high_diff_prc_rm_20]
+    depends_on: [high_diff_prc]
     params: {}
 
   - name: low_diff_prc_rm_20_std_above
     group: price_derivatives
     applies_to: all
-    depends_on: [low_diff_prc, low_diff_prc_rm_20]
+    depends_on: [low_diff_prc]
     params: {}
 
   - name: low_diff_prc_rm_20_std_below
     group: price_derivatives
     applies_to: all
-    depends_on: [low_diff_prc, low_diff_prc_rm_20]
+    depends_on: [low_diff_prc]
     params: {}
 
   # --- classification (applies_to: [15, 60, 240, 1440] only) ---

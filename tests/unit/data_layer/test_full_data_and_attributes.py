@@ -256,3 +256,96 @@ class TestDataAttributes:
         assert mtime_first == mtime_second, (
             "compute() should not overwrite existing diff_stats.pkl"
         )
+
+
+# ---------------------------------------------------------------------------
+# indicator_stats.json — rsi_14−rsi_ma8, cci_diff, volume−vol_ma_20 stats
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def wide_df_with_stat_cols(wide_df_with_rsi):
+    """Add the columns indicator_stats needs for TFs [15, 60, 240, 1440]."""
+    df = wide_df_with_rsi.copy()
+    np.random.seed(55)
+    for tf in [15, 60, 240, 1440]:
+        df[f"{tf}_rsi_14"] = np.random.uniform(20, 80, len(df))
+        df[f"{tf}_cci_diff"] = np.random.normal(0, 5, len(df))
+        df[f"{tf}_vol_ma_20"] = np.random.uniform(10, 50, len(df))
+    return df
+
+
+class TestIndicatorStats:
+    def test_compute_creates_indicator_stats_file(
+        self, wide_df_with_stat_cols, patched_stats_folder
+    ):
+        """compute() creates indicator_stats.json in stats_folder()."""
+        da = DataAttributes()
+        da.compute(wide_df_with_stat_cols)
+        assert os.path.exists(patched_stats_folder + "indicator_stats.json")
+
+    def test_indicator_stats_content(
+        self, wide_df_with_stat_cols, patched_stats_folder
+    ):
+        """Per-TF stats match manual closed-row computation."""
+        import json
+
+        df = wide_df_with_stat_cols
+        da = DataAttributes()
+        da.compute(df)
+
+        with open(patched_stats_folder + "indicator_stats.json") as fh:
+            stats = json.load(fh)
+
+        for tf in [15, 60, 240, 1440]:
+            closed = df[df[f"{tf}_is_closed"] == True]  # noqa: E712
+            entry = stats[str(tf)]
+
+            rsi_diff = (closed[f"{tf}_rsi_14"] - closed[f"{tf}_rsi_ma8"]).dropna()
+            assert entry["rsi_14_minus_rsi_ma8"]["mean"] == pytest.approx(rsi_diff.mean())
+            assert entry["rsi_14_minus_rsi_ma8"]["std"] == pytest.approx(rsi_diff.std())
+
+            cci = closed[f"{tf}_cci_diff"].dropna()
+            assert entry["cci_diff"]["mean"] == pytest.approx(cci.mean())
+            assert entry["cci_diff"]["std"] == pytest.approx(cci.std())
+
+            vol_diff = (closed[f"{tf}_volume"] - closed[f"{tf}_vol_ma_20"]).dropna()
+            assert entry["vol_minus_vol_ma_20"]["mean"] == pytest.approx(vol_diff.mean())
+            assert entry["vol_minus_vol_ma_20"]["std"] == pytest.approx(vol_diff.std())
+
+    def test_indicator_stats_skips_tf_with_missing_columns(
+        self, wide_df_with_rsi, patched_stats_folder
+    ):
+        """TFs lacking the source columns are omitted, not crashed on."""
+        da = DataAttributes()
+        da.compute(wide_df_with_rsi)  # has rsi_ma8 but no rsi_14/cci_diff/vol_ma_20
+
+        import json
+        with open(patched_stats_folder + "indicator_stats.json") as fh:
+            stats = json.load(fh)
+        for tf_stats in stats.values():
+            assert "rsi_14_minus_rsi_ma8" not in tf_stats
+
+    def test_compute_idempotent_indicator_stats(
+        self, wide_df_with_stat_cols, patched_stats_folder
+    ):
+        """Calling compute() twice does not overwrite indicator_stats.json."""
+        da = DataAttributes()
+        da.compute(wide_df_with_stat_cols)
+        path = patched_stats_folder + "indicator_stats.json"
+        mtime_first = os.path.getmtime(path)
+        da.compute(wide_df_with_stat_cols)
+        assert os.path.getmtime(path) == mtime_first
+
+    def test_load_indicator_stats(
+        self, wide_df_with_stat_cols, patched_stats_folder
+    ):
+        """load_indicator_stats() returns the saved dict."""
+        da = DataAttributes()
+        da.compute(wide_df_with_stat_cols)
+        stats = DataAttributes.load_indicator_stats()
+        assert set(stats.keys()) == {"15", "60", "240", "1440"}
+
+    def test_load_indicator_stats_raises_if_absent(self, patched_stats_folder):
+        """load_indicator_stats() raises FileNotFoundError when file missing."""
+        with pytest.raises(FileNotFoundError):
+            DataAttributes.load_indicator_stats()

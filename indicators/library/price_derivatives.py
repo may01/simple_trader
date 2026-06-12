@@ -4,16 +4,34 @@ Four layers per source column (close, high, low):
   {src}_diff_prc            — 1-step percentage change
   {src}_diff_prc_rm_{w}     — rolling mean over w
   {src}_diff_prc_rm_{w}_mean_above / _mean_below
-                            — rolling mean of positive/negative values over w
+                            — mean of the window's diff_prc values above/below
+                              the window mean (the rm value)
   {src}_diff_prc_rm_{w}_std_above / _std_below
-                            — rolling mean ± rolling std of the diff over w
+                            — std (ddof=1) of those same one-sided subsets
+Empty subset → 0.0; single-value subset → std 0.0.
 """
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from ..framework import IndicatorField
+
+
+def _rolling_sided(series: pd.Series, window: int, above: bool, stat: str) -> pd.Series:
+    """Rolling mean/std of window values above/below the window mean."""
+
+    def inner(x: np.ndarray) -> float:
+        m = x.mean()
+        sel = x[x > m] if above else x[x < m]
+        if len(sel) == 0:
+            return 0.0
+        if stat == "mean":
+            return float(sel.mean())
+        return float(np.std(sel, ddof=1)) if len(sel) > 1 else 0.0
+
+    return series.rolling(window).apply(inner, raw=True)
 
 
 class _DiffPrcBase(IndicatorField):
@@ -55,7 +73,7 @@ class _DiffPrcRMBase(IndicatorField):
 
 
 class _DiffPrcRMMeanSideBase(IndicatorField):
-    """Rolling mean of one-signed values of a diff_prc_rm column."""
+    """Mean of the window's diff_prc values above/below the window mean."""
 
     group = "price_derivatives"
     resource_dependencies: list[str] = []
@@ -68,18 +86,12 @@ class _DiffPrcRMMeanSideBase(IndicatorField):
         self.params = {"window": window}
         side = "above" if self._above else "below"
         self.name = f"{self._source}_diff_prc_rm_{window}_mean_{side}"
-        self.dependencies = [f"{self._source}_diff_prc_rm_{window}"]
+        self.dependencies = [f"{self._source}_diff_prc"]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        series = df[f"{tf}_{self._source}_diff_prc_rm_{self.window}"]
-        if self._above:
-            return series.rolling(self.window).apply(
-                lambda x: x[x > 0].mean() if (x > 0).any() else 0.0, raw=True
-            )
-        return series.rolling(self.window).apply(
-            lambda x: x[x < 0].mean() if (x < 0).any() else 0.0, raw=True
-        )
+        series = df[f"{tf}_{self._source}_diff_prc"]
+        return _rolling_sided(series, self.window, self._above, "mean")
 
 
 class CloseDiffPrcField(_DiffPrcBase):
@@ -137,7 +149,7 @@ class LowDiffPrcRMMeanBelowField(_DiffPrcRMMeanSideBase):
 
 
 class _DiffPrcRMStdSideBase(IndicatorField):
-    """Rolling mean ± rolling std band of a diff_prc column."""
+    """Std of the window's diff_prc values above/below the window mean."""
 
     group = "price_derivatives"
     resource_dependencies: list[str] = []
@@ -150,17 +162,12 @@ class _DiffPrcRMStdSideBase(IndicatorField):
         self.params = {"window": window}
         side = "above" if self._above else "below"
         self.name = f"{self._source}_diff_prc_rm_{window}_std_{side}"
-        self.dependencies = [
-            f"{self._source}_diff_prc",
-            f"{self._source}_diff_prc_rm_{window}",
-        ]
+        self.dependencies = [f"{self._source}_diff_prc"]
 
     def compute(self, data_point, tf: int) -> pd.Series:
         df = data_point.get_df(tf)
-        diff = df[f"{tf}_{self._source}_diff_prc"]
-        rm = df[f"{tf}_{self._source}_diff_prc_rm_{self.window}"]
-        std = diff.rolling(self.window).std()
-        return rm + std if self._above else rm - std
+        series = df[f"{tf}_{self._source}_diff_prc"]
+        return _rolling_sided(series, self.window, self._above, "std")
 
 
 class CloseDiffPrcRMStdAboveField(_DiffPrcRMStdSideBase):

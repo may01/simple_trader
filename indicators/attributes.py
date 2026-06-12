@@ -31,8 +31,8 @@ class DataAttributes:
         """Compute and save all stats files if absent. Idempotent.
 
         Calls ``_compute_rsi_classification`` if ``rsi_classification.json``
-        is absent.  Calls ``_compute_diff_stats`` if ``diff_stats.pkl`` is
-        absent.
+        is absent, ``_compute_diff_stats`` if ``diff_stats.pkl`` is absent,
+        and ``_compute_indicator_stats`` if ``indicator_stats.json`` is absent.
 
         Args:
             df: Wide DataFrame with ``{tf}_rsi_ma8`` and ``{tf}_is_closed``
@@ -49,6 +49,10 @@ class DataAttributes:
         diff_path = base + "diff_stats.pkl"
         if not os.path.exists(diff_path):
             self._compute_diff_stats(df)
+
+        indicator_path = base + "indicator_stats.json"
+        if not os.path.exists(indicator_path):
+            self._compute_indicator_stats(df)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -111,6 +115,56 @@ class DataAttributes:
             pickle.dump(result, fh)
         os.rename(tmp_path, out_path)
 
+    def _compute_indicator_stats(self, df: pd.DataFrame) -> None:
+        """Compute per-TF distance stats over closed-candle rows.
+
+        For each TF in ``_STAT_TFS``:
+        - ``rsi_14_minus_rsi_ma8``: mean/std of ``{tf}_rsi_14 − {tf}_rsi_ma8``
+        - ``cci_diff``:             mean/std of ``{tf}_cci_diff``
+        - ``vol_minus_vol_ma_20``:  mean/std of ``{tf}_volume − {tf}_vol_ma_20``
+
+        Groups whose source columns are missing for a TF are omitted.
+        Saves to ``stats_folder() + 'indicator_stats.json'``.
+        """
+        from helpers import stats_folder
+        base = stats_folder()
+        os.makedirs(base, exist_ok=True)
+
+        result: dict = {}
+        for tf in self._STAT_TFS:
+            closed_col = f"{tf}_is_closed"
+            if closed_col not in df.columns:
+                continue
+            closed = df[df[closed_col] == True]  # noqa: E712
+            tf_stats: dict = {}
+
+            specs = {
+                "rsi_14_minus_rsi_ma8": (f"{tf}_rsi_14", f"{tf}_rsi_ma8"),
+                "cci_diff": (f"{tf}_cci_diff", None),
+                "vol_minus_vol_ma_20": (f"{tf}_volume", f"{tf}_vol_ma_20"),
+            }
+            for key, (col, minus_col) in specs.items():
+                if col not in df.columns:
+                    continue
+                if minus_col is not None:
+                    if minus_col not in df.columns:
+                        continue
+                    series = (closed[col] - closed[minus_col]).dropna()
+                else:
+                    series = closed[col].dropna()
+                tf_stats[key] = {
+                    "mean": float(series.mean()),
+                    "std": float(series.std()),
+                }
+
+            result[str(tf)] = tf_stats
+
+        out_path = base + "indicator_stats.json"
+        tmp_path = out_path + ".tmp"
+        with open(tmp_path, "w") as fh:
+            json.dump(result, fh)
+        os.rename(tmp_path, out_path)
+
     # ------------------------------------------------------------------
     # Class-level loaders
     # ------------------------------------------------------------------
@@ -146,6 +200,22 @@ class DataAttributes:
             )
         with open(path, "rb") as fh:
             return pickle.load(fh)
+
+    @classmethod
+    def load_indicator_stats(cls) -> dict:
+        """Load ``indicator_stats.json`` from ``stats_folder()``.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+        """
+        from helpers import stats_folder
+        path = stats_folder() + "indicator_stats.json"
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"indicator_stats.json not found at: {path}"
+            )
+        with open(path, "r") as fh:
+            return json.load(fh)
 
     # ------------------------------------------------------------------
     # NN column stats

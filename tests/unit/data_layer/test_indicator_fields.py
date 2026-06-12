@@ -399,6 +399,40 @@ class TestCCI14:
         valid = series.dropna()
         assert len(valid) > 0
 
+    def test_cci_diff_is_one_step_diff_of_cci_ma(self):
+        """cci_diff = cci_14_ma_20 − previous cci_14_ma_20."""
+        from indicators import CCIDiffField
+
+        tf = 5
+        dp, df = make_dp(tf=tf, n=120)
+
+        run_field(dp, df, CCI14Field(), tf)
+        run_field(dp, df, CCI_MAField(), tf)
+        series = run_field(dp, df, CCIDiffField(), tf)
+
+        expected = df[f"{tf}_cci_14_ma_20"].diff()
+        pd.testing.assert_series_equal(series, expected, check_names=False)
+        assert series.dropna().shape[0] > 0
+
+    def test_cci_diff_field_metadata(self):
+        """cci_diff: oscillators group, depends on cci_14_ma_20, all TFs."""
+        from indicators import CCIDiffField
+
+        field = CCIDiffField()
+        assert field.name == "cci_diff"
+        assert field.group == "oscillators"
+        assert field.dependencies == ["cci_14_ma_20"]
+        assert field.applies_to == []
+
+    def test_cci_diff_in_config_after_dependency(self):
+        """indicators_config.yaml wires cci_diff after cci_14_ma_20 (topo order)."""
+        from config_loader import load_indicators_config
+
+        fields = load_indicators_config()
+        names = [f.name for f in fields]
+        assert "cci_diff" in names
+        assert names.index("cci_14_ma_20") < names.index("cci_diff")
+
 
 # ---------------------------------------------------------------------------
 # 8. VolMA uses volume column
@@ -485,31 +519,91 @@ class TestPriceDerivatives:
         valid = series.dropna()
         assert len(valid) > 0
 
-    def test_close_diff_prc_rm_mean_above_non_negative(self):
-        """CloseDiffPrcRMMeanAbove returns non-negative values (or 0 if none positive)."""
+    @staticmethod
+    def _sided_expectations(diff: pd.Series, window: int = 20):
+        """Manual rolling sided stats: mean/std of window values above/below
+        the window mean. Returns dict of four expected Series."""
+        def f(stat, above):
+            def inner(x):
+                m = x.mean()
+                sel = x[x > m] if above else x[x < m]
+                if len(sel) == 0:
+                    return 0.0
+                if stat == "mean":
+                    return sel.mean()
+                return np.std(sel, ddof=1) if len(sel) > 1 else 0.0
+            return diff.rolling(window).apply(inner, raw=True)
+
+        return {
+            "mean_above": f("mean", True),
+            "mean_below": f("mean", False),
+            "std_above": f("std", True),
+            "std_below": f("std", False),
+        }
+
+    def test_close_diff_prc_rm_mean_above_is_mean_of_values_above_rm(self):
+        """mean_above = mean of diff_prc window values above the window mean."""
         tf = 5
         dp, df = make_dp(tf=tf, n=120)
 
         for fld in [CloseDiffPrcField(), CloseDiffPrcRMField(), CloseDiffPrcRMMeanAboveField()]:
             run_field(dp, df, fld, tf)
 
+        expected = self._sided_expectations(df[f"{tf}_close_diff_prc"])["mean_above"]
         series = df[f"{tf}_close_diff_prc_rm_20_mean_above"]
-        valid = series.dropna()
-        assert len(valid) > 0
-        assert (valid >= 0).all()
+        pd.testing.assert_series_equal(series, expected, check_names=False)
 
-    def test_close_diff_prc_rm_mean_below_non_positive(self):
-        """CloseDiffPrcRMMeanBelow returns non-positive values (or 0 if none negative)."""
+        # Values above the window mean average strictly above it
+        rm = df[f"{tf}_close_diff_prc_rm_20"]
+        mask = series.notna() & rm.notna() & (series != 0.0)
+        assert mask.any()
+        assert (series[mask] > rm[mask]).all()
+
+    def test_close_diff_prc_rm_mean_below_is_mean_of_values_below_rm(self):
+        """mean_below = mean of diff_prc window values below the window mean."""
         tf = 5
         dp, df = make_dp(tf=tf, n=120)
 
         for fld in [CloseDiffPrcField(), CloseDiffPrcRMField(), CloseDiffPrcRMMeanBelowField()]:
             run_field(dp, df, fld, tf)
 
+        expected = self._sided_expectations(df[f"{tf}_close_diff_prc"])["mean_below"]
         series = df[f"{tf}_close_diff_prc_rm_20_mean_below"]
-        valid = series.dropna()
-        assert len(valid) > 0
-        assert (valid <= 0).all()
+        pd.testing.assert_series_equal(series, expected, check_names=False)
+
+        rm = df[f"{tf}_close_diff_prc_rm_20"]
+        mask = series.notna() & rm.notna() & (series != 0.0)
+        assert mask.any()
+        assert (series[mask] < rm[mask]).all()
+
+    def test_close_diff_prc_rm_std_sides_are_subset_stds(self):
+        """std_above/std_below = std (ddof=1) of the window values above/below
+        the window mean — not the old rm ± std band."""
+        from indicators import CloseDiffPrcRMStdAboveField, CloseDiffPrcRMStdBelowField
+
+        tf = 5
+        dp, df = make_dp(tf=tf, n=120)
+
+        for fld in [
+            CloseDiffPrcField(),
+            CloseDiffPrcRMField(),
+            CloseDiffPrcRMStdAboveField(),
+            CloseDiffPrcRMStdBelowField(),
+        ]:
+            run_field(dp, df, fld, tf)
+
+        expected = self._sided_expectations(df[f"{tf}_close_diff_prc"])
+        pd.testing.assert_series_equal(
+            df[f"{tf}_close_diff_prc_rm_20_std_above"], expected["std_above"],
+            check_names=False,
+        )
+        pd.testing.assert_series_equal(
+            df[f"{tf}_close_diff_prc_rm_20_std_below"], expected["std_below"],
+            check_names=False,
+        )
+        # Stds are non-negative
+        assert (df[f"{tf}_close_diff_prc_rm_20_std_above"].dropna() >= 0).all()
+        assert (df[f"{tf}_close_diff_prc_rm_20_std_below"].dropna() >= 0).all()
 
     def test_high_diff_prc_fields(self):
         """High diff prc family produces valid Series."""

@@ -93,38 +93,42 @@ class TestDiffStdBands:
         assert HighDiffPrcRMStdAboveField().name == "high_diff_prc_rm_20_std_above"
         assert LowDiffPrcRMStdBelowField().name == "low_diff_prc_rm_20_std_below"
 
+    @staticmethod
+    def _sided_std(diff: pd.Series, above: bool, window: int = 20) -> pd.Series:
+        def inner(x):
+            m = x.mean()
+            sel = x[x > m] if above else x[x < m]
+            if len(sel) == 0:
+                return 0.0
+            return float(np.std(sel, ddof=1)) if len(sel) > 1 else 0.0
+        return diff.rolling(window).apply(inner, raw=True)
+
     def test_dependencies(self):
         f = CloseDiffPrcRMStdAboveField()
-        assert f.dependencies == ["close_diff_prc", "close_diff_prc_rm_20"]
+        assert f.dependencies == ["close_diff_prc"]
 
-    def test_above_is_rm_plus_std(self):
+    def test_above_is_subset_std(self):
+        """std_above = std of the window's diff_prc values above the window mean."""
         dp = self._dp()
         df = dp.get_df(15)
         out = CloseDiffPrcRMStdAboveField().compute(dp, 15)
-        expected = (
-            df["15_close_diff_prc_rm_20"]
-            + df["15_close_diff_prc"].rolling(20).std()
-        )
-        pd.testing.assert_series_equal(out, expected)
+        expected = self._sided_std(df["15_close_diff_prc"], above=True)
+        pd.testing.assert_series_equal(out, expected, check_names=False)
 
-    def test_below_is_rm_minus_std(self):
+    def test_below_is_subset_std(self):
+        """std_below = std of the window's diff_prc values below the window mean."""
         dp = self._dp()
         df = dp.get_df(15)
         out = CloseDiffPrcRMStdBelowField().compute(dp, 15)
-        expected = (
-            df["15_close_diff_prc_rm_20"]
-            - df["15_close_diff_prc"].rolling(20).std()
-        )
-        pd.testing.assert_series_equal(out, expected)
+        expected = self._sided_std(df["15_close_diff_prc"], above=False)
+        pd.testing.assert_series_equal(out, expected, check_names=False)
 
-    def test_above_band_envelopes_rm(self):
+    def test_sided_stds_non_negative(self):
         dp = self._dp()
-        df = dp.get_df(15)
         above = CloseDiffPrcRMStdAboveField().compute(dp, 15).dropna()
         below = CloseDiffPrcRMStdBelowField().compute(dp, 15).dropna()
-        rm = df["15_close_diff_prc_rm_20"].loc[above.index]
-        assert (above >= rm).all()
-        assert (below <= rm).all()
+        assert (above >= 0).all()
+        assert (below >= 0).all()
 
     def test_all_six_registered(self):
         from indicators.registry import _FIELD_REGISTRY

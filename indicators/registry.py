@@ -44,6 +44,7 @@ _FIELD_REGISTRY: dict[str, object] = {
     "sar_002_02": lambda cfg: SARField(**cfg.params),
     "cci_14": lambda cfg: CCI14Field(**cfg.params),
     "cci_14_ma_20": lambda cfg: CCI_MAField(**cfg.params),
+    "cci_diff": lambda cfg: CCIDiffField(**cfg.params),
     # Volatility
     "atr_14": lambda cfg: ATR14Field(**cfg.params),
     "natr_14": lambda cfg: NATR14Field(**cfg.params),
