@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Optional, Any
 
 import pandas as pd
@@ -27,6 +28,40 @@ _INDICATOR_SUBPLOT = {
     "stoch": "stoch",
 }
 
+# Full-name routing checked before the base-name split. The split would send
+# every macd_* field to one "macd" subplot; the two configured MACD variants
+# need their own subplots, with signal/hist joining their line.
+_INDICATOR_SUBPLOT_EXACT = {
+    "macd_12_26_9": "macd_12_26_9",
+    "macd_signal_12_26_9": "macd_12_26_9",
+    "macd_hist_12_26_9": "macd_12_26_9",
+    "macd_5_13_9": "macd_5_13_9",
+    "macd_signal_5_13_9": "macd_5_13_9",
+}
+
+# Price-derivative (diff field) groups: subplot name → fields sharing it.
+# Routed via the exact map — the base-name split would wrongly send
+# "close_diff_prc" to a subplot named "close".
+_DERIVATIVE_SUBPLOTS = {
+    "close_diff": [
+        "close_diff_prc", "close_diff_prc_rm_20",
+        "close_diff_prc_rm_20_mean_above", "close_diff_prc_rm_20_mean_below",
+    ],
+    "high_diff": [
+        "high_diff_prc", "high_diff_prc_rm_20",
+        "high_diff_prc_rm_20_mean_above", "high_diff_prc_rm_20_mean_below",
+    ],
+    "low_diff": [
+        "low_diff_prc", "low_diff_prc_rm_20",
+        "low_diff_prc_rm_20_mean_above", "low_diff_prc_rm_20_mean_below",
+    ],
+    "rsi_diff": ["rsi_ma8_diff", "rsi_ma12_diff", "rsi_ma24_diff"],
+}
+
+_INDICATOR_SUBPLOT_EXACT.update(
+    {f: sp for sp, fields in _DERIVATIVE_SUBPLOTS.items() for f in fields}
+)
+
 
 def _indicator_subplot(indicator: str) -> str | None:
     """Return the subplot name for an indicator, or None for price-axis indicators.
@@ -42,9 +77,19 @@ def _indicator_subplot(indicator: str) -> str | None:
     for prefix in _PRICE_AXIS_PREFIXES:
         if lower.startswith(prefix):
             return None
+    # Exact-name routing (MACD variants)
+    if lower in _INDICATOR_SUBPLOT_EXACT:
+        return _INDICATOR_SUBPLOT_EXACT[lower]
     # Oscillator indicators: use the part before the first underscore
     base = lower.split("_")[0]
     return _INDICATOR_SUBPLOT.get(base, base)
+
+
+def empty_figure(message: str = "no data in range") -> go.Figure:
+    """Return an empty figure with a centered annotation instead of raising."""
+    fig = go.Figure()
+    fig.add_annotation(text=message, showarrow=False)
+    return fig
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +122,61 @@ class DataViewer:
 
     _DEFAULT_INDICATORS = ["rsi_14", "cci_14"]
 
+    # Price-axis overlays drawn on every window figure (skip-if-absent).
+    # Bollinger variants share one colour per variant; EMAs get distinct
+    # colours; SAR renders as markers, never a connected line.
+    _PRICE_OVERLAYS = [
+        "bb_upper_20_2", "bb_middle_20_2", "bb_lower_20_2",
+        "bb_upper_10_15", "bb_lower_10_15",
+        "bb_upper_20_3", "bb_lower_20_3",
+        "ema_7", "ema_14", "ema_25", "ema_50", "ema_100",
+        "sar_002_02",
+    ]
+
+    _OVERLAY_COLORS = {
+        "bb_upper_20_2": "royalblue", "bb_middle_20_2": "royalblue",
+        "bb_lower_20_2": "royalblue",
+        "bb_upper_10_15": "darkorange", "bb_lower_10_15": "darkorange",
+        "bb_upper_20_3": "purple", "bb_lower_20_3": "purple",
+        "ema_7": "gold", "ema_14": "orange", "ema_25": "magenta",
+        "ema_50": "teal", "ema_100": "brown",
+        "sar_002_02": "black",
+    }
+
+    # Oscillator set for window figures (skip-if-absent). Each oscillator's
+    # MA lines share the subplot of their source series; macd_hist_* renders
+    # as bars. Order drives subplot order under price/volume.
+    _OSCILLATORS = [
+        "rsi_14", "rsi_ma8", "rsi_ma12", "rsi_ma24",
+        "cci_14", "cci_14_ma_20",
+        "macd_12_26_9", "macd_signal_12_26_9", "macd_hist_12_26_9",
+        "macd_5_13_9", "macd_signal_5_13_9",
+    ]
+
+    _OSC_COLORS = {
+        "rsi_14": "blue", "rsi_ma8": "orange", "rsi_ma12": "green",
+        "rsi_ma24": "red",
+        "cci_14": "blue", "cci_14_ma_20": "orange",
+        "macd_12_26_9": "blue", "macd_signal_12_26_9": "orange",
+        "macd_hist_12_26_9": "gray",
+        "macd_5_13_9": "blue", "macd_signal_5_13_9": "orange",
+        # Derivatives: raw diff and rm_20 stand out; mean bands muted.
+        "close_diff_prc": "blue", "close_diff_prc_rm_20": "orange",
+        "close_diff_prc_rm_20_mean_above": "lightgreen",
+        "close_diff_prc_rm_20_mean_below": "lightcoral",
+        "high_diff_prc": "blue", "high_diff_prc_rm_20": "orange",
+        "high_diff_prc_rm_20_mean_above": "lightgreen",
+        "high_diff_prc_rm_20_mean_below": "lightcoral",
+        "low_diff_prc": "blue", "low_diff_prc_rm_20": "orange",
+        "low_diff_prc_rm_20_mean_above": "lightgreen",
+        "low_diff_prc_rm_20_mean_below": "lightcoral",
+        "rsi_ma8_diff": "orange", "rsi_ma12_diff": "green",
+        "rsi_ma24_diff": "red",
+    }
+
+    # Subplot → fields view of the derivative groups (module-level routing).
+    _DERIVATIVES = _DERIVATIVE_SUBPLOTS
+
     def __init__(self, full_data: FullData, tf: int = 15) -> None:
         self.full_data = full_data
         self.tf = tf
@@ -95,6 +195,22 @@ class DataViewer:
             return list(self._DEFAULT_INDICATORS)
         return list(indicators)
 
+    def _dedup_tf_rows(self, df_slice: pd.DataFrame, tf: int) -> pd.DataFrame:
+        """Keep one row per *tf*-minute period (the last — completed candle state).
+
+        Higher TFs repeat values on every base-frequency row of the wide df;
+        without dedup their candles would render once per base row.
+        Warm-up rows with NaN close for this TF are dropped too.
+        """
+        if df_slice.empty:
+            return df_slice
+        floored = df_slice.index.floor(f"{tf}min")
+        df_slice = df_slice[~floored.duplicated(keep="last")]
+        close_col = f"{tf}_close"
+        if close_col in df_slice.columns:
+            df_slice = df_slice[df_slice[close_col].notna()]
+        return df_slice
+
     def _subplot_list(self, indicators: list[str]) -> list[str]:
         """Build the ordered subplot name list for create_figure."""
         subplots = ["price", "volume"]
@@ -111,48 +227,159 @@ class DataViewer:
         fig: go.Figure,
         df_slice: pd.DataFrame,
         indicators: list[str],
+        tf: int | None = None,
     ) -> None:
         """Draw each indicator as a line on the appropriate subplot."""
+        tf = self.tf if tf is None else tf
         times = list(df_slice.index)
         for ind in indicators:
-            col = f"{self.tf}_{ind}"
+            col = f"{tf}_{ind}"
             if col not in df_slice.columns:
                 continue
             values = list(df_slice[col])
             sp = _indicator_subplot(ind)
             subplot = sp if sp is not None else "price"
-            self.renderer.draw_line(fig, subplot, times, values, label=ind)
+            color = self._OSC_COLORS.get(ind, "blue")
+            if ind.lower().startswith("macd_hist"):
+                self.renderer.draw_bar(
+                    fig, subplot, times, values, label=ind, color=color
+                )
+            else:
+                self.renderer.draw_line(
+                    fig, subplot, times, values, label=ind, color=color
+                )
 
     def _build_figure(
         self,
         df_slice: pd.DataFrame,
         indicators: list[str],
+        tf: int | None = None,
     ) -> go.Figure:
         """Create and populate a figure (candles + indicators). Does not show/save."""
+        tf = self.tf if tf is None else tf
         subplots = self._subplot_list(indicators)
         fig = self.renderer.create_figure(subplots)
 
         times = list(df_slice.index)
-        opens = list(df_slice[f"{self.tf}_open"])
-        highs = list(df_slice[f"{self.tf}_high"])
-        lows = list(df_slice[f"{self.tf}_low"])
-        closes = list(df_slice[f"{self.tf}_close"])
+        opens = list(df_slice[f"{tf}_open"])
+        highs = list(df_slice[f"{tf}_high"])
+        lows = list(df_slice[f"{tf}_low"])
+        closes = list(df_slice[f"{tf}_close"])
 
         self.renderer.draw_candles(fig, times, opens, highs, lows, closes)
 
         # Draw volume if column exists
-        vol_col = f"{self.tf}_volume"
+        vol_col = f"{tf}_volume"
         if vol_col in df_slice.columns:
             vol_vals = list(df_slice[vol_col])
             self.renderer.draw_line(fig, "volume", times, vol_vals, label="volume")
 
-        self._draw_indicators(fig, df_slice, indicators)
+        self._draw_indicators(fig, df_slice, indicators, tf=tf)
 
         return fig
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def available_tfs(self) -> list[int]:
+        """Timeframes present in the wide df — every ``{tf}_close`` column, ascending."""
+        tfs = []
+        for col in self.full_data.df.columns:
+            m = re.match(r"^(\d+)_close$", str(col))
+            if m:
+                tfs.append(int(m.group(1)))
+        return sorted(tfs)
+
+    def build_window_figure(
+        self,
+        start: pd.Timestamp,
+        days: int,
+        indicators: list[str] | None = None,
+        tf: int | None = None,
+    ) -> go.Figure:
+        """Build a figure for a date window of the wide DataFrame.
+
+        Slices by DatetimeIndex — ``[start, start + days)`` — unlike the
+        iloc-based ``view_full()`` API. Returns the figure without showing it.
+        An empty window returns an annotated empty figure, never raises.
+
+        Args:
+            start: Window start (inclusive).
+            days: Window length in days from *start*.
+            indicators: Same contract as ``view_full()``, except ``None``
+                defaults to the full oscillator set (``_OSCILLATORS``) filtered
+                to columns present for this TF.
+            tf: Timeframe override for this figure; ``None`` uses ``self.tf``.
+        """
+        tf = self.tf if tf is None else int(tf)
+        start = pd.Timestamp(start)
+        df = self.full_data.df
+        # The wide df index is tz-aware (UTC); date-picker values are naive.
+        idx_tz = getattr(df.index, "tz", None)
+        if idx_tz is not None and start.tz is None:
+            start = start.tz_localize(idx_tz)
+        end = start + pd.Timedelta(days=days)
+        df_slice = df[(df.index >= start) & (df.index < end)]
+        df_slice = self._dedup_tf_rows(df_slice, tf)
+        if df_slice.empty:
+            return empty_figure()
+        if indicators is None:
+            defaults = self._OSCILLATORS + [
+                f for fields in self._DERIVATIVES.values() for f in fields
+            ]
+            indicators = [
+                i for i in defaults if f"{tf}_{i}" in df_slice.columns
+            ]
+        else:
+            indicators = list(indicators)
+        fig = self._build_figure(df_slice, indicators, tf=tf)
+        self._draw_price_overlays(fig, df_slice, tf)
+        self._draw_zero_lines(fig)
+        n_rows = len(getattr(fig, "_subplot_rows", {})) or 1
+        fig.update_layout(height=max(600, 220 * n_rows))
+        return fig
+
+    def _draw_zero_lines(self, fig: go.Figure) -> None:
+        """Add a zero reference line on every derivative subplot.
+
+        Diff series oscillate around 0. Uses add_shape with per-row yref —
+        same plotly 6 compatibility approach as ChartRenderer.draw_level.
+        """
+        for sp, row in getattr(fig, "_subplot_rows", {}).items():
+            if sp not in self._DERIVATIVES:
+                continue
+            yref = "y" if row == 1 else f"y{row}"
+            fig.add_shape(
+                type="line",
+                x0=0, x1=1, y0=0, y1=0,
+                xref="paper", yref=yref,
+                line={"color": "gray", "width": 1},
+            )
+
+    def _draw_price_overlays(
+        self,
+        fig: go.Figure,
+        df_slice: pd.DataFrame,
+        tf: int,
+    ) -> None:
+        """Draw Bollinger/EMA/SAR overlays on the price subplot. Skip-if-absent."""
+        times = list(df_slice.index)
+        for name in self._PRICE_OVERLAYS:
+            col = f"{tf}_{name}"
+            if col not in df_slice.columns:
+                continue
+            values = list(df_slice[col])
+            color = self._OVERLAY_COLORS.get(name, "gray")
+            if name.startswith("sar"):
+                self.renderer.draw_marker(
+                    fig, times, values,
+                    marker_symbol="circle", color=color, label=name,
+                )
+            else:
+                self.renderer.draw_line(
+                    fig, "price", times, values, label=name, color=color,
+                )
 
     def view_full(
         self,
