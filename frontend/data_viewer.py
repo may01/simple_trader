@@ -196,16 +196,20 @@ class DataViewer:
         return list(indicators)
 
     def _dedup_tf_rows(self, df_slice: pd.DataFrame, tf: int) -> pd.DataFrame:
-        """Keep one row per *tf*-minute period (the last — completed candle state).
+        """Keep one row per *tf*-minute period (the last — completed candle state),
+        re-indexed to the period open timestamp.
 
         Higher TFs repeat values on every base-frequency row of the wide df;
-        without dedup their candles would render once per base row.
-        Warm-up rows with NaN close for this TF are dropped too.
+        without dedup their candles would render once per base row. The index
+        is floored to the period start so each candle plots at its open time;
+        the resulting even spacing makes plotly render it across the full
+        period width. Warm-up rows with NaN close for this TF are dropped too.
         """
         if df_slice.empty:
             return df_slice
         floored = df_slice.index.floor(f"{tf}min")
-        df_slice = df_slice[~floored.duplicated(keep="last")]
+        keep = ~floored.duplicated(keep="last")
+        df_slice = df_slice[keep].set_axis(floored[keep])
         close_col = f"{tf}_close"
         if close_col in df_slice.columns:
             df_slice = df_slice[df_slice[close_col].notna()]

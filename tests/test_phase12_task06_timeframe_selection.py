@@ -135,11 +135,27 @@ class TestBuildWindowFigurePerTf:
         # 15-min TF over 1 day → 96 deduped candles
         assert len(args[2]) == 96
 
-    def test_dedup_keeps_last_row_per_period(self, viewer, mock_renderer, df):
+    def test_candle_plotted_at_period_open_timestamp(self, viewer, mock_renderer, df):
         viewer.build_window_figure(pd.Timestamp("2024-01-01"), 1, tf=60)
         times = mock_renderer.draw_candles.call_args[0][1]
-        # Last row of first hour period is 00:59
-        assert times[0] == pd.Timestamp("2024-01-01 00:59:00")
+        assert times[0] == pd.Timestamp("2024-01-01 00:00:00")
+        assert times[1] == pd.Timestamp("2024-01-01 01:00:00")
+
+    def test_candles_evenly_spaced_one_tf_apart(self, viewer, mock_renderer, df):
+        """Even spacing makes plotly render each candle across the full period."""
+        viewer.build_window_figure(pd.Timestamp("2024-01-01"), 1, tf=60)
+        times = mock_renderer.draw_candles.call_args[0][1]
+        deltas = {b - a for a, b in zip(times, times[1:])}
+        assert deltas == {pd.Timedelta(minutes=60)}
+
+    def test_dedup_keeps_last_row_values_per_period(self, viewer, mock_renderer, df):
+        """Timestamp moves to period open, values stay from the period's last row."""
+        viewer.build_window_figure(pd.Timestamp("2024-01-01"), 1, tf=60)
+        args = mock_renderer.draw_candles.call_args[0]
+        closes = args[5]
+        # _make_multi_tf_df: 60_close = (row // 60) + 102; last row of hour 0
+        # is row 59 → period value 0 + 102
+        assert closes[0] == df["60_close"].iloc[59]
 
     def test_dedup_drops_nan_close_rows(self, mock_renderer):
         idx = pd.date_range("2024-01-01", periods=60, freq="1min")
