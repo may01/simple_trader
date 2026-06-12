@@ -2,6 +2,8 @@
 # Create Docker volumes for simple_trader.
 set -e
 
+VOL_PATH="${VOL_PATH:-/media/om/Alexandria/simple_trader}"
+
 if [ -n "$VOL_PATH" ]; then
     mkdir -p "$VOL_PATH/simple_trader_vol" "$VOL_PATH/simple_trader_vol_long"
     docker volume create --driver local \
