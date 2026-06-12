@@ -269,6 +269,7 @@ def wide_df_with_stat_cols(wide_df_with_rsi):
     np.random.seed(55)
     for tf in [15, 60, 240, 1440]:
         df[f"{tf}_rsi_14"] = np.random.uniform(20, 80, len(df))
+        df[f"{tf}_cci_14"] = np.random.normal(0, 100, len(df))
         df[f"{tf}_cci_diff"] = np.random.normal(0, 5, len(df))
         df[f"{tf}_vol_ma_20"] = np.random.uniform(10, 50, len(df))
         for src in ["close", "high", "low"]:
@@ -314,6 +315,42 @@ class TestIndicatorStats:
             vol_diff = (closed[f"{tf}_volume"] - closed[f"{tf}_vol_ma_20"]).dropna()
             assert entry["vol_minus_vol_ma_20"]["mean"] == pytest.approx(vol_diff.mean())
             assert entry["vol_minus_vol_ma_20"]["std"] == pytest.approx(vol_diff.std())
+
+    def test_indicator_stats_raw_rsi_cci_values(
+        self, wide_df_with_stat_cols, patched_stats_folder
+    ):
+        """rsi_14 / cci_14 entries = mean/std of the raw indicator values
+        over closed candles."""
+        import json
+
+        df = wide_df_with_stat_cols
+        da = DataAttributes()
+        da.compute(df)
+
+        with open(patched_stats_folder + "indicator_stats.json") as fh:
+            stats = json.load(fh)
+
+        for tf in [15, 60, 240, 1440]:
+            closed = df[df[f"{tf}_is_closed"] == True]  # noqa: E712
+            entry = stats[str(tf)]
+            for key in ["rsi_14", "cci_14"]:
+                series = closed[f"{tf}_{key}"].dropna()
+                assert entry[key]["mean"] == pytest.approx(series.mean())
+                assert entry[key]["std"] == pytest.approx(series.std())
+
+    def test_indicator_stats_raw_values_skipped_when_cols_missing(
+        self, wide_df_with_rsi, patched_stats_folder
+    ):
+        """No rsi_14/cci_14 columns → keys omitted."""
+        import json
+
+        da = DataAttributes()
+        da.compute(wide_df_with_rsi)
+        with open(patched_stats_folder + "indicator_stats.json") as fh:
+            stats = json.load(fh)
+        for tf_stats in stats.values():
+            assert "rsi_14" not in tf_stats
+            assert "cci_14" not in tf_stats
 
     def test_indicator_stats_diff_prc_std(
         self, wide_df_with_stat_cols, patched_stats_folder

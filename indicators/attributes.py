@@ -119,6 +119,7 @@ class DataAttributes:
         """Compute per-TF distance stats over closed-candle rows.
 
         For each TF in ``_STAT_TFS``:
+        - ``rsi_14`` / ``cci_14``:  mean/std of the raw indicator values
         - ``rsi_14_minus_rsi_ma8``: mean/std of ``{tf}_rsi_14 − {tf}_rsi_ma8``
         - ``cci_diff``:             mean/std of ``{tf}_cci_diff``
         - ``vol_minus_vol_ma_20``:  mean/std of ``{tf}_volume − {tf}_vol_ma_20``
@@ -142,6 +143,8 @@ class DataAttributes:
             tf_stats: dict = {}
 
             specs = {
+                "rsi_14": (f"{tf}_rsi_14", None),
+                "cci_14": (f"{tf}_cci_14", None),
                 "rsi_14_minus_rsi_ma8": (f"{tf}_rsi_14", f"{tf}_rsi_ma8"),
                 "cci_diff": (f"{tf}_cci_diff", None),
                 "vol_minus_vol_ma_20": (f"{tf}_volume", f"{tf}_vol_ma_20"),
