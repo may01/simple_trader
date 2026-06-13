@@ -758,16 +758,18 @@ class TestNNFeatureFields:
 
 class TestClassificationFields:
     def _make_rsi_df(self, tf: int = 15, n: int = 50) -> tuple:
-        """Return (dp, df) with rsi_ma8 column pre-populated."""
+        """Return (dp, df) with rsi_ma8 + rsi_ma8_diff columns pre-populated."""
         df = make_indicator_df(tf=tf, n=n)
         df[f"{tf}_rsi_ma8"] = 52.0
+        df[f"{tf}_rsi_ma8_diff"] = 0.5
         dp = LiveDataPoint({tf: df})
         return dp, df
 
     def test_move_class_with_stats(self, monkeypatch):
         """MoveClassField computes correctly with monkeypatched loader."""
         import indicators.library.classification
-        stats = {"15": {"mean": 50.0, "std": 14.0}}
+        stats = {"15": {"mean": 50.0, "std": 14.0,
+                        "diff_mean": 0.0, "diff_std": 2.0}}
         monkeypatch.setenv("DATA_ROOT", "dataset")
         monkeypatch.setenv("PAIR", "link_usdt")
         monkeypatch.setattr(indicators.library.classification, "_load_rsi_classification", lambda path: stats)

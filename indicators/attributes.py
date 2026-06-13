@@ -59,7 +59,13 @@ class DataAttributes:
     # ------------------------------------------------------------------
 
     def _compute_rsi_classification(self, df: pd.DataFrame) -> None:
-        """Compute mean/std of ``{tf}_rsi_ma8`` for closed-candle rows per TF.
+        """Compute per-TF rsi_ma8 level and diff stats for closed-candle rows.
+
+        Each entry carries ``mean``/``std`` of ``{tf}_rsi_ma8`` (zone_class
+        thresholds) and ``diff_mean``/``diff_std`` of ``{tf}_rsi_ma8_diff``
+        (move_class thresholds). TFs with fewer than 2 valid rows are skipped
+        entirely — the file never contains NaN; classification fields fall
+        back to the nearest available TF.
 
         Saves to ``stats_folder() + 'rsi_classification.json'``.
         """
@@ -71,12 +77,23 @@ class DataAttributes:
         for tf in self._STAT_TFS:
             closed_col = f"{tf}_is_closed"
             rsi_col = f"{tf}_rsi_ma8"
+            diff_col = f"{tf}_rsi_ma8_diff"
             if closed_col not in df.columns or rsi_col not in df.columns:
                 continue
-            closed_rows = df[df[closed_col] == True][rsi_col].dropna()  # noqa: E712
+            closed = df[df[closed_col] == True]  # noqa: E712
+            levels = closed[rsi_col].dropna()
+            diffs = (
+                closed[diff_col].dropna()
+                if diff_col in df.columns
+                else levels.diff().dropna()
+            )
+            if len(levels) < 2 or len(diffs) < 2:
+                continue
             result[str(tf)] = {
-                "mean": float(closed_rows.mean()),
-                "std": float(closed_rows.std()),
+                "mean": float(levels.mean()),
+                "std": float(levels.std()),
+                "diff_mean": float(diffs.mean()),
+                "diff_std": float(diffs.std()),
             }
 
         out_path = base + "rsi_classification.json"

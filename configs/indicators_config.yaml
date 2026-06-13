@@ -374,7 +374,7 @@ fields:
   - name: move_class
     group: classification
     applies_to: [15, 60, 240, 1440]
-    depends_on: [rsi_ma8]
+    depends_on: [rsi_ma8, rsi_ma8_diff]
     library: talib
     params: {}
 
