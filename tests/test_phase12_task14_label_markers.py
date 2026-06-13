@@ -65,8 +65,8 @@ class TestLabelMarkers:
         _viewer(df, mock_renderer).build_window_figure("2024-01-01", 1)
         labels = {c.kwargs.get("label") for c in _price_marker_calls(mock_renderer)}
         assert {
-            "plong_n1_m1_x0p4", "pshort_n1_m1_x0p4",
-            "pslong_n1_m1_x0p4_l15_y0p4", "psshort_n1_m1_x0p4_l15_y0p4",
+            "15_plong_n1_m1_x0p4", "15_pshort_n1_m1_x0p4",
+            "15_pslong_n1_m1_x0p4_l15_y0p4", "15_psshort_n1_m1_x0p4_l15_y0p4",
         } <= labels
 
     def test_markers_only_on_label_one_rows(self, mock_renderer):
@@ -74,7 +74,7 @@ class TestLabelMarkers:
         _viewer(df, mock_renderer).build_window_figure("2024-01-01", 1)
         call = next(
             c for c in _price_marker_calls(mock_renderer)
-            if c.kwargs.get("label") == "plong_n1_m1_x0p4"
+            if c.kwargs.get("label") == "15_plong_n1_m1_x0p4"
         )
         times = call[0][1]
         df_dedup = df[~df.index.floor("15min").duplicated(keep="last")]
@@ -93,8 +93,8 @@ class TestLabelMarkers:
         ])
         _viewer(df, mock_renderer).build_window_figure("2024-01-01", 1)
         calls = {c.kwargs.get("label"): c for c in _price_marker_calls(mock_renderer)}
-        long_call = calls["plong_n1_m1_x0p4"]
-        short_call = calls["pshort_n1_m1_x0p4"]
+        long_call = calls["15_plong_n1_m1_x0p4"]
+        short_call = calls["15_pshort_n1_m1_x0p4"]
         candle_args = mock_renderer.draw_candles.call_args_list[0][0]
         lows, highs = np.array(candle_args[4]), np.array(candle_args[3])
         assert (np.array(long_call[0][2]) < lows).all()
@@ -109,8 +109,8 @@ class TestLabelMarkers:
         ])
         _viewer(df, mock_renderer).build_window_figure("2024-01-01", 1)
         calls = {c.kwargs.get("label"): c for c in _price_marker_calls(mock_renderer)}
-        y1 = np.array(calls["plong_n1_m1_x0p4"][0][2])
-        y2 = np.array(calls["pslong_n1_m1_x0p4_l15_y0p4"][0][2])
+        y1 = np.array(calls["15_plong_n1_m1_x0p4"][0][2])
+        y2 = np.array(calls["15_pslong_n1_m1_x0p4_l15_y0p4"][0][2])
         assert (y1 != y2).all()
 
     def test_no_label_columns_no_markers(self, mock_renderer):
@@ -122,3 +122,35 @@ class TestLabelMarkers:
         df = _make_df(labels=[("plong_n1_m1_x0p4", np.zeros(N, dtype=int))])
         _viewer(df, mock_renderer).build_window_figure("2024-01-01", 1)
         assert _price_marker_calls(mock_renderer) == []
+
+
+class TestLabelsAcrossTimeframes:
+    def test_15m_labels_drawn_on_60m_chart(self, mock_renderer):
+        df = _make_df(labels=[("plong_n1_m1_x0p4", _ones(N))])
+        # add 60-TF columns so the chart can render at tf=60
+        period = (np.arange(N) // 60).astype(float)
+        for col, off in (("open", 100), ("high", 105), ("low", 95),
+                         ("close", 102), ("volume", 1000)):
+            df[f"60_{col}"] = period + off
+        v = _viewer(df, mock_renderer)
+        v.build_window_figure("2024-01-01", 1, tf=60)
+        labels = {c.kwargs.get("label") for c in _price_marker_calls(mock_renderer)}
+        assert "15_plong_n1_m1_x0p4" in labels
+
+    def test_marker_y_uses_label_tf_low(self, mock_renderer):
+        df = _make_df(labels=[("plong_n1_m1_x0p4", _ones(N))])
+        period = (np.arange(N) // 60).astype(float)
+        for col, off in (("open", 100), ("high", 105), ("low", 95),
+                         ("close", 102), ("volume", 1000)):
+            df[f"60_{col}"] = period + off
+        v = _viewer(df, mock_renderer)
+        v.build_window_figure("2024-01-01", 1, tf=60)
+        call = next(
+            c for c in _price_marker_calls(mock_renderer)
+            if c.kwargs.get("label") == "15_plong_n1_m1_x0p4"
+        )
+        ys = np.array(call[0][2])
+        # offsets are below the 15m lows (95..105), far from 60m period lows
+        assert (ys < np.array(
+            [df.loc[t, "15_low"] for t in call[0][1]]
+        )).all()

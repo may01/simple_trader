@@ -378,8 +378,8 @@ class DataViewer:
         if idx_tz is not None and start.tz is None:
             start = start.tz_localize(idx_tz)
         end = start + pd.Timedelta(days=days)
-        df_slice = df[(df.index >= start) & (df.index < end)]
-        df_slice = self._dedup_tf_rows(df_slice, tf)
+        window = df[(df.index >= start) & (df.index < end)]
+        df_slice = self._dedup_tf_rows(window, tf)
         if df_slice.empty:
             return empty_figure()
         if indicators is None:
@@ -400,7 +400,7 @@ class DataViewer:
         fig = self._build_figure(df_slice, indicators, tf=tf, range_row=True)
         self._draw_price_overlays(fig, df_slice, tf)
         self._draw_rsi_class_markers(fig, df_slice, tf)
-        self._draw_label_markers(fig, df_slice, tf)
+        self._draw_label_markers(fig, window, tf)
         self._draw_zero_lines(fig)
         n_rows = len(getattr(fig, "_subplot_rows", {})) or 1
         # 264 = 220 * 1.2: total grows with the extra weight of the non-price
@@ -409,15 +409,18 @@ class DataViewer:
         return fig
 
     # Class markers on the rsi subplot: field → (marker symbol, size,
-    # class value → colour). Both fields classify rsi_ma8 against mean ± std
-    # (see indicators/library/classification.py); zone_class == move_class + 1,
-    # so the open diamond rings the move_class dot for the same bucket.
+    # class value → colour). move_class buckets rsi_ma8_diff momentum (-2..2),
+    # zone_class buckets the rsi_ma8 level (0..4) — five spec tiers each
+    # (see indicators/library/classification.py); both are drawn at the
+    # rsi_ma8 y-value, the diamond ringing the dot.
     _RSI_CLASS_MARKERS = {
         "move_class": ("circle", 6, {
-            -1: "red", 0: "orange", 1: "lightgreen", 2: "green",
+            -2: "red", -1: "orange", 0: "silver",
+            1: "lightgreen", 2: "green",
         }),
         "zone_class": ("diamond-open", 11, {
-            0: "red", 1: "orange", 2: "lightgreen", 3: "green",
+            0: "red", 1: "orange", 2: "silver",
+            3: "lightgreen", 4: "green",
         }),
     }
 
@@ -477,47 +480,53 @@ class DataViewer:
     # per variant so several label sets stack instead of overlapping.
     _LABEL_OFFSET_STEP = 0.002
 
+    _LABEL_COL_RE = re.compile(r"^(\d+)_(plong|pslong|pshort|psshort)_.+$")
+
     def _draw_label_markers(
         self,
         fig: go.Figure,
-        df_slice: pd.DataFrame,
+        window: pd.DataFrame,
         tf: int,
     ) -> None:
-        """Draw profit-label markers on the price subplot. Skip-if-absent.
+        """Draw profit-label markers of every TF on the price subplot.
 
-        Every ``{tf}_plong_* / pslong_* / pshort_* / psshort_*`` column gets
-        one trace with markers on rows where the label is 1: longs as
-        triangles-up below the candle low, shorts as triangles-down above
-        the high, each variant on its own offset step.
+        *window* is the raw (un-deduped) date-window slice: each label column
+        is deduped to its own TF grid, so e.g. 15m labels keep their 15m
+        timestamps on a 4h chart. One trace per column, markers on rows where
+        the label is 1: longs as triangles-up below the label-TF candle low,
+        shorts as triangles-down above its high, each variant on its own
+        offset step. Trace name = full column name. Skip-if-absent.
         """
-        prefix_re = re.compile(
-            rf"^{tf}_(plong|pslong|pshort|psshort)_(.+)$"
-        )
         side_counts = {"long": 0, "short": 0}
-        for col in df_slice.columns:
-            m = prefix_re.match(str(col))
+        for col in window.columns:
+            m = self._LABEL_COL_RE.match(str(col))
             if not m:
                 continue
-            prefix = m.group(1)
+            label_tf, prefix = int(m.group(1)), m.group(2)
             side, color = self._LABEL_PREFIXES[prefix]
-            mask = df_slice[col] == 1
             step = self._LABEL_OFFSET_STEP * (side_counts[side] + 1)
             side_counts[side] += 1
+            # One row per label-TF candle, stamped at its period open —
+            # same convention as _dedup_tf_rows.
+            floored = window.index.floor(f"{label_tf}min")
+            keep = ~floored.duplicated(keep="last")
+            sub = window[keep].set_axis(floored[keep])
+            mask = sub[col] == 1
             if not mask.any():
                 continue
             if side == "long":
-                ys = df_slice.loc[mask, f"{tf}_low"] * (1.0 - step)
+                ys = sub.loc[mask, f"{label_tf}_low"] * (1.0 - step)
                 symbol = "triangle-up"
             else:
-                ys = df_slice.loc[mask, f"{tf}_high"] * (1.0 + step)
+                ys = sub.loc[mask, f"{label_tf}_high"] * (1.0 + step)
                 symbol = "triangle-down"
             self.renderer.draw_marker(
                 fig,
-                list(df_slice.index[mask]),
+                list(sub.index[mask]),
                 list(ys),
                 marker_symbol=symbol,
                 color=color,
-                label=f"{prefix}_{m.group(2)}",
+                label=str(col),
                 subplot="price",
             )
 
