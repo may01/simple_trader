@@ -123,10 +123,7 @@ class OverLowField(IndicatorField):
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        from helpers import stats_folder
-        path = os.path.join(stats_folder(), "rsi_classification.json")
-        data = _load_rsi_classification(path)
-        tf_data = data[str(tf)]
+        tf_data = _get_tf_classification(tf)
         mean = float(tf_data["mean"])
         std = float(tf_data["std"])
 
@@ -146,10 +143,7 @@ class OverHighField(IndicatorField):
     params: dict = {}
 
     def compute(self, data_point, tf: int) -> pd.Series:
-        from helpers import stats_folder
-        path = os.path.join(stats_folder(), "rsi_classification.json")
-        data = _load_rsi_classification(path)
-        tf_data = data[str(tf)]
+        tf_data = _get_tf_classification(tf)
         mean = float(tf_data["mean"])
         std = float(tf_data["std"])
 

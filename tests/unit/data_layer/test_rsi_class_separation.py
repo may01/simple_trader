@@ -161,3 +161,9 @@ class TestRsiClassificationFile:
         assert "NaN" not in raw
         data = json.loads(raw)
         assert "1440" not in data
+
+    def test_over_fields_fall_back_too(self, patched_stats):
+        from indicators import OverLowField, OverHighField
+        dp = _dp(1440, [65.0], [0.0])
+        assert list(OverLowField().compute(dp, 1440)) == [True]
+        assert list(OverHighField().compute(dp, 1440)) == [True]
