@@ -399,7 +399,7 @@ class DataViewer:
             ]
         fig = self._build_figure(df_slice, indicators, tf=tf, range_row=True)
         self._draw_price_overlays(fig, df_slice, tf)
-        self._draw_rsi_class_markers(fig, df_slice, tf)
+        self._draw_rsi_class_markers(fig, window, tf)
         self._draw_label_markers(fig, window, tf)
         self._draw_zero_lines(fig)
         n_rows = len(getattr(fig, "_subplot_rows", {})) or 1
@@ -430,34 +430,37 @@ class DataViewer:
     def _draw_rsi_class_markers(
         self,
         fig: go.Figure,
-        df_slice: pd.DataFrame,
+        window: pd.DataFrame,
         tf: int,
     ) -> None:
         """Draw move_class/zone_class markers on the rsi_ma8 line. Skip-if-absent.
 
-        One marker trace per (field, class value): markers sit at the
-        rsi_ma8 y-value of each row, coloured by the class bucket. Skipped
-        when the rsi subplot is hidden or the source/class columns are absent.
+        One marker trace per (field, class value), plotted per-minute on the
+        raw (un-deduped) window: the class fields and rsi_ma8 recompute on
+        every base-frequency row, so a marker is drawn at each minute's
+        rsi_ma8 y-value rather than once per displayed candle — exposing
+        intra-candle class evolution. Skipped when the rsi subplot is hidden
+        or the source/class columns are absent.
         """
         rows = getattr(fig, "_subplot_rows", {})
         if "rsi" not in rows:
             return
         src_col = f"{tf}_{self._RSI_CLASS_SOURCE}"
-        if src_col not in df_slice.columns:
+        if src_col not in window.columns:
             return
-        src = df_slice[src_col]
+        src = window[src_col]
         for field, (symbol, size, colors) in self._RSI_CLASS_MARKERS.items():
             col = f"{tf}_{field}"
-            if col not in df_slice.columns:
+            if col not in window.columns:
                 continue
-            cls = df_slice[col]
+            cls = window[col]
             for value, color in colors.items():
                 mask = cls == value
                 if not mask.any():
                     continue
                 self.renderer.draw_marker(
                     fig,
-                    list(df_slice.index[mask]),
+                    list(window.index[mask]),
                     list(src[mask]),
                     marker_symbol=symbol,
                     color=color,
@@ -490,12 +493,14 @@ class DataViewer:
     ) -> None:
         """Draw profit-label markers of every TF on the price subplot.
 
-        *window* is the raw (un-deduped) date-window slice: each label column
-        is deduped to its own TF grid, so e.g. 15m labels keep their 15m
-        timestamps on a 4h chart. One trace per column, markers on rows where
-        the label is 1: longs as triangles-up below the label-TF candle low,
-        shorts as triangles-down above its high, each variant on its own
-        offset step. Trace name = full column name. Skip-if-absent.
+        *window* is the raw (un-deduped) date-window slice. A profit label
+        holds constant across its whole label-TF candle, so every
+        base-frequency (per-minute) row of a flagged candle gets a marker — a
+        band spanning the candle width rather than one marker at its open. One
+        trace per column, markers on rows where the label is 1: longs as
+        triangles-up below the label-TF candle low, shorts as triangles-down
+        above its high, each variant on its own offset step. Trace name = full
+        column name. Skip-if-absent.
         """
         side_counts = {"long": 0, "short": 0}
         for col in window.columns:
@@ -506,23 +511,19 @@ class DataViewer:
             side, color = self._LABEL_PREFIXES[prefix]
             step = self._LABEL_OFFSET_STEP * (side_counts[side] + 1)
             side_counts[side] += 1
-            # One row per label-TF candle, stamped at its period open —
-            # same convention as _dedup_tf_rows.
-            floored = window.index.floor(f"{label_tf}min")
-            keep = ~floored.duplicated(keep="last")
-            sub = window[keep].set_axis(floored[keep])
-            mask = sub[col] == 1
+            # Per-minute: keep every base-frequency row where the label is set.
+            mask = window[col] == 1
             if not mask.any():
                 continue
             if side == "long":
-                ys = sub.loc[mask, f"{label_tf}_low"] * (1.0 - step)
+                ys = window.loc[mask, f"{label_tf}_low"] * (1.0 - step)
                 symbol = "triangle-up"
             else:
-                ys = sub.loc[mask, f"{label_tf}_high"] * (1.0 + step)
+                ys = window.loc[mask, f"{label_tf}_high"] * (1.0 + step)
                 symbol = "triangle-down"
             self.renderer.draw_marker(
                 fig,
-                list(sub.index[mask]),
+                list(window.index[mask]),
                 list(ys),
                 marker_symbol=symbol,
                 color=color,

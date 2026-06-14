@@ -77,13 +77,10 @@ class TestLabelMarkers:
             if c.kwargs.get("label") == "15_plong_n1_m1_x0p4"
         )
         times = call[0][1]
-        df_dedup = df[~df.index.floor("15min").duplicated(keep="last")]
-        flagged = set(
-            df_dedup.index.floor("15min")[
-                df_dedup["15_plong_n1_m1_x0p4"].values == 1
-            ]
-        )
-        assert set(times) <= flagged
+        # Per-minute: a marker on every raw row where the label is 1, not one
+        # per 15m candle.
+        flagged = set(df.index[df["15_plong_n1_m1_x0p4"].values == 1])
+        assert set(times) == flagged
         assert len(times) > 0
 
     def test_long_markers_below_low_short_above_high(self, mock_renderer):
@@ -95,10 +92,12 @@ class TestLabelMarkers:
         calls = {c.kwargs.get("label"): c for c in _price_marker_calls(mock_renderer)}
         long_call = calls["15_plong_n1_m1_x0p4"]
         short_call = calls["15_pshort_n1_m1_x0p4"]
-        candle_args = mock_renderer.draw_candles.call_args_list[0][0]
-        lows, highs = np.array(candle_args[4]), np.array(candle_args[3])
-        assert (np.array(long_call[0][2]) < lows).all()
-        assert (np.array(short_call[0][2]) > highs).all()
+        # Per-minute markers: compare each marker y to the 15m low/high of its
+        # own row, not to the deduped candle array.
+        long_lows = np.array([df.loc[t, "15_low"] for t in long_call[0][1]])
+        short_highs = np.array([df.loc[t, "15_high"] for t in short_call[0][1]])
+        assert (np.array(long_call[0][2]) < long_lows).all()
+        assert (np.array(short_call[0][2]) > short_highs).all()
         assert long_call.kwargs.get("marker_symbol", long_call[0][3] if len(long_call[0]) > 3 else None) == "triangle-up"
         assert short_call.kwargs.get("marker_symbol", short_call[0][3] if len(short_call[0]) > 3 else None) == "triangle-down"
 
