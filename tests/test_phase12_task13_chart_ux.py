@@ -168,6 +168,19 @@ class TestRsiClassMarkers:
             ys = c[0][2]
             assert set(np.round(ys, 6)) <= valid
 
+    def test_markers_drawn_per_minute_not_per_candle(self, mock_renderer):
+        # _class_df cycles move_class over every 1m row; per-minute rendering
+        # plots one marker per raw row (1440), not one per 15m candle (96).
+        df = _class_df()
+        v = _viewer(df, mock_renderer)
+        v.build_window_figure("2024-01-01", 1)
+        move_times = sum(
+            len(c[0][1])
+            for c in mock_renderer.draw_marker.call_args_list
+            if str(c.kwargs.get("label", "")).startswith("move_class=")
+        )
+        assert move_times == (df["15_move_class"].notna()).sum() == len(df)
+
     def test_skipped_without_class_columns(self, mock_renderer):
         extras = [("rsi_14", np.linspace(40, 60, 60 * 24)),
                   ("rsi_ma8", np.linspace(40, 60, 60 * 24))]
