@@ -372,12 +372,13 @@ class DataPreparer:
             for tf in spec.tfs:
                 if spec.type == "profit":
                     add_profit_labels(
-                        df, tf, spec.n, spec.m, spec.x, atr_period=spec.atr_period
+                        df, tf, spec.n, spec.m, spec.x,
+                        atr_period=spec.atr_period, ma_length=spec.ma_length,
                     )
                 else:  # "profit_strict" — validated by load_labels_config
                     add_profit_strict_labels(
                         df, tf, spec.n, spec.m, spec.x, spec.l, spec.y,
-                        atr_period=spec.atr_period,
+                        atr_period=spec.atr_period, ma_length=spec.ma_length,
                     )
 
     def _merge_nn_output(self, df: pd.DataFrame) -> None:
