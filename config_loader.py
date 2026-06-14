@@ -110,7 +110,7 @@ class LabelSpecConfig:
     m: float
     x: float
     atr_period: int = 14
-    ma_length: int = 20        # SMA window of the atr_{atr_period}_ma_ column
+    ma_length: int = 5         # SMA window of the atr_{atr_period}_ma_ column
     l: Optional[int] = None    # strict only
     y: Optional[float] = None  # strict only
 
@@ -133,7 +133,7 @@ def load_labels_config(path: str = "configs/indicators_config.yaml") -> list:
             m=float(entry["m"]),
             x=float(entry["x"]),
             atr_period=int(entry.get("atr_period", 14)),
-            ma_length=int(entry.get("ma_length", 20)),
+            ma_length=int(entry.get("ma_length", 5)),
             l=int(entry["l"]) if "l" in entry else None,
             y=float(entry["y"]) if "y" in entry else None,
         )

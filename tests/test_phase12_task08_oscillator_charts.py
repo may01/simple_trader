@@ -11,7 +11,7 @@ from frontend.data_viewer import DataViewer, FullData, _indicator_subplot
 
 _OSC_FIELDS = [
     "rsi_14", "rsi_ma8", "rsi_ma12", "rsi_ma24",
-    "cci_14", "cci_14_ma_20",
+    "cci_14", "cci_14_ma_5",
     "macd_12_26_9", "macd_signal_12_26_9", "macd_hist_12_26_9",
     "macd_5_13_9", "macd_signal_5_13_9",
 ]
@@ -70,7 +70,7 @@ class TestRouting:
             ("rsi_ma12", "rsi"),
             ("rsi_ma24", "rsi"),
             ("cci_14", "cci"),
-            ("cci_14_ma_20", "cci"),
+            ("cci_14_ma_5", "cci"),
             ("macd_12_26_9", "macd_12_26_9"),
             ("macd_signal_12_26_9", "macd_12_26_9"),
             ("macd_hist_12_26_9", "macd_12_26_9"),
@@ -120,7 +120,7 @@ class TestOscillatorDrawing:
         _viewer(df, mock_renderer).build_window_figure("2024-01-01", 1)
         pairs = _line_subplot_labels(mock_renderer)
         assert ("cci", "cci_14") in pairs
-        assert ("cci", "cci_14_ma_20") in pairs
+        assert ("cci", "cci_14_ma_5") in pairs
 
     def test_macd_hist_drawn_as_bar(self, mock_renderer):
         df = _make_df(_OSC_FIELDS)

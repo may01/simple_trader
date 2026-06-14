@@ -24,12 +24,12 @@ def _make_wide_df(n_minutes: int = 16 * 60) -> pd.DataFrame:
     from data import _build_wide_df
     wide = _build_wide_df(raw)
     # The volatility indicator pass normally adds atr_ma; the test configs use
-    # atr_period=2 (default ma_length=20). Inject a positive, NaN-warmed proxy
+    # atr_period=2 (default ma_length=5). Inject a positive, NaN-warmed proxy
     # so _compute_profit_labels has its sizing column for the tfs under test.
     for tf in (15, 60):
-        wide[f"{tf}_atr_2_ma_20"] = (
+        wide[f"{tf}_atr_2_ma_5"] = (
             (wide[f"{tf}_high"] - wide[f"{tf}_low"])
-            .rolling(20, min_periods=20).mean()
+            .rolling(5, min_periods=5).mean()
         )
     return wide
 

@@ -425,13 +425,13 @@ class TestCCI14:
         assert field.applies_to == []
 
     def test_cci_diff_in_config_after_dependency(self):
-        """indicators_config.yaml wires cci_diff after cci_14_ma_20 (topo order)."""
+        """indicators_config.yaml wires cci_diff after cci_14_ma_5 (topo order)."""
         from config_loader import load_indicators_config
 
         fields = load_indicators_config()
         names = [f.name for f in fields]
         assert "cci_diff" in names
-        assert names.index("cci_14_ma_20") < names.index("cci_diff")
+        assert names.index("cci_14_ma_5") < names.index("cci_diff")
 
 
 # ---------------------------------------------------------------------------

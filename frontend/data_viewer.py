@@ -162,20 +162,30 @@ class DataViewer:
     # as bars. Order drives subplot order under price/volume.
     _OSCILLATORS = [
         "rsi_14", "rsi_ma8", "rsi_ma12", "rsi_ma24",
-        "cci_14", "cci_14_ma_20",
+        "cci_14", "cci_14_ma_5",
         "macd_12_26_9", "macd_signal_12_26_9", "macd_hist_12_26_9",
         "macd_5_13_9", "macd_signal_5_13_9",
         "adx_14",
     ]
 
+    # ATR / volatility fields. Routed by base name (_indicator_subplot): the
+    # price-unit ATR and its MA share the "atr" subplot; the normalized %
+    # variants share "natr". Order drives subplot order under the oscillators.
+    _ATR_FIELDS = [
+        "atr_14", "atr_14_ma_5",
+        "natr_14", "natr_14_ma_5",
+    ]
+
     _OSC_COLORS = {
         "rsi_14": "blue", "rsi_ma8": "orange", "rsi_ma12": "green",
         "rsi_ma24": "red",
-        "cci_14": "blue", "cci_14_ma_20": "orange",
+        "cci_14": "blue", "cci_14_ma_5": "orange",
         "macd_12_26_9": "blue", "macd_signal_12_26_9": "orange",
         "macd_hist_12_26_9": "gray",
         "macd_5_13_9": "blue", "macd_signal_5_13_9": "orange",
         "adx_14": "purple",
+        "atr_14": "blue", "atr_14_ma_5": "orange",
+        "natr_14": "blue", "natr_14_ma_5": "orange",
         # Derivatives: raw diff and rm_20 stand out; std bands muted.
         "close_diff_prc": "blue", "close_diff_prc_rm_6": "orange",
         "close_diff_prc_rm_6_std_above": "lightgreen",
@@ -330,7 +340,7 @@ class DataViewer:
         column exists for at least one available TF are included, so the
         list is TF-independent and usable as one control for all TFs.
         """
-        defaults = self._OSCILLATORS + [
+        defaults = self._OSCILLATORS + self._ATR_FIELDS + [
             f for fields in self._DERIVATIVES.values() for f in fields
         ]
         tfs = self.available_tfs()
@@ -383,7 +393,7 @@ class DataViewer:
         if df_slice.empty:
             return empty_figure()
         if indicators is None:
-            defaults = self._OSCILLATORS + [
+            defaults = self._OSCILLATORS + self._ATR_FIELDS + [
                 f for fields in self._DERIVATIVES.values() for f in fields
             ]
             indicators = [
