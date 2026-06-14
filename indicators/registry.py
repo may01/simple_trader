@@ -43,12 +43,12 @@ _FIELD_REGISTRY: dict[str, object] = {
     # Oscillators
     "sar_002_02": lambda cfg: SARField(**cfg.params),
     "cci_14": lambda cfg: CCI14Field(**cfg.params),
-    "cci_14_ma_20": lambda cfg: CCI_MAField(**cfg.params),
+    "cci_14_ma_5": lambda cfg: CCI_MAField(**cfg.params),
     "cci_diff": lambda cfg: CCIDiffField(**cfg.params),
     # Volatility
     "atr_14": lambda cfg: ATR14Field(**cfg.params),
     "natr_14": lambda cfg: NATR14Field(**cfg.params),
-    "atr_14_ma_20": lambda cfg: ATR_MAField(**cfg.params),
+    "atr_14_ma_5": lambda cfg: ATR_MAField(**cfg.params),
     "natr_14_ma_5": lambda cfg: NATR_MAField(**cfg.params),
     "bb_upper_20_2": lambda cfg: BollingerUpperField(**cfg.params),
     "bb_middle_20_2": lambda cfg: BollingerMiddleField(**cfg.params),
@@ -97,5 +97,5 @@ _FIELD_REGISTRY: dict[str, object] = {
     "trend_down_50": lambda cfg: TrendDownField(**cfg.params),
     # NN features
     "nn_rsi_ma8_norm_mean_20": lambda cfg: NNRSINormField(**cfg.params),
-    "nn_close_diff_atr_14_ma_20": lambda cfg: NNCloseDiffATRField(**cfg.params),
+    "nn_close_diff_atr_14_ma_5": lambda cfg: NNCloseDiffATRField(**cfg.params),
 }

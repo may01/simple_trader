@@ -7,7 +7,8 @@
 # slices, which end at "now" and have no future rows.
 #
 # Labels are set for EVERY wide row, closed or forming: a label answers
-# "if I entered at this minute's close, does it reach target before stop?".
+# "if I entered at this minute (long at the 1-min low, short at the 1-min
+# high — a pessimistic fill), does it reach target before stop?".
 # Target/stop are sized off the precomputed atr_ma column
 # ({tf}_atr_{atr_period}_ma_{ma_length}), read straight from the wide frame —
 # so the volatility indicator pass must have run before labels are computed.
@@ -31,13 +32,14 @@ def _fmt(v) -> str:
 
 def _entry_state(
     wide_df: pd.DataFrame, tf: int, atr_period: int, ma_length: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-row positions, entry prices, and per-row atr_ma for one tf.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-row positions and per-row atr_ma for one tf.
 
-    Every wide row is a candidate entry (closed or forming). The entry price
-    is that row's 1-min close ({tf}_close); the volatility used to size
-    target/stop is the precomputed {tf}_atr_{atr_period}_ma_{ma_length}
-    column, which is forming-candle-aware and already defined per row.
+    Every wide row is a candidate entry (closed or forming). The volatility
+    used to size target/stop is the precomputed
+    {tf}_atr_{atr_period}_ma_{ma_length} column, which is forming-candle-aware
+    and already defined per row. The entry *price* is direction-dependent and
+    is chosen in _forward_labels (1-min low for long, 1-min high for short).
     """
     col = f"{tf}_atr_{atr_period}_ma_{ma_length}"
     if col not in wide_df.columns:
@@ -46,9 +48,8 @@ def _entry_state(
             f"volatility indicator pass before computing labels"
         )
     pos = np.arange(len(wide_df))
-    entry = wide_df[f"{tf}_close"].to_numpy(dtype=float)
     atr = wide_df[col].to_numpy(dtype=float)
-    return pos, entry, atr
+    return pos, atr
 
 
 def _forward_labels(
@@ -63,14 +64,19 @@ def _forward_labels(
     """
     one_high = wide_df["1_high"].to_numpy(dtype=float)
     one_low = wide_df["1_low"].to_numpy(dtype=float)
-    pos, entry, atr = _entry_state(wide_df, tf, atr_period, ma_length)
+    pos, atr = _entry_state(wide_df, tf, atr_period, ma_length)
     n_rows = len(wide_df)
     win = n * tf
 
+    # Pessimistic fill: a long enters at the minute's 1-min low, a short at the
+    # 1-min high — never the mid/close — so the labeled move must clear target
+    # from the worse of the two extremes.
     if direction == "long":
+        entry = one_low
         target = entry + m * atr
         stop = entry - x * atr
     else:
+        entry = one_high
         target = entry - m * atr
         stop = entry + x * atr
 
@@ -152,7 +158,7 @@ def _profit_strict(wide_df, tf, n, m, x, l, y, atr_period, ma_length,
 
 def profit_long(
     wide_df: pd.DataFrame, tf: int, n: int, m: float, x: float,
-    atr_period: int = 14, ma_length: int = 20,
+    atr_period: int = 14, ma_length: int = 5,
 ) -> pd.Series:
     """1 where a long entry at any tf row reaches entry + m*atr_ma within the
     next n*tf minutes before touching entry - x*atr_ma."""
@@ -161,7 +167,7 @@ def profit_long(
 
 def profit_short(
     wide_df: pd.DataFrame, tf: int, n: int, m: float, x: float,
-    atr_period: int = 14, ma_length: int = 20,
+    atr_period: int = 14, ma_length: int = 5,
 ) -> pd.Series:
     """Short mirror of profit_long: target below entry, stop above."""
     return _profit(wide_df, tf, n, m, x, atr_period, ma_length, "short")
@@ -169,7 +175,7 @@ def profit_short(
 
 def add_profit_labels(
     wide_df: pd.DataFrame, tf: int, n: int, m: float, x: float,
-    atr_period: int = 14, ma_length: int = 20,
+    atr_period: int = 14, ma_length: int = 5,
 ) -> None:
     """Append {tf}_plong_... and {tf}_pshort_... columns in place."""
     suffix = f"n{_fmt(n)}_m{_fmt(m)}_x{_fmt(x)}"
@@ -181,7 +187,7 @@ def add_profit_labels(
 
 def profit_strict_long(
     wide_df: pd.DataFrame, tf: int, n: int, m: float, x: float,
-    l: int, y: float, atr_period: int = 14, ma_length: int = 20,
+    l: int, y: float, atr_period: int = 14, ma_length: int = 5,
 ) -> pd.Series:
     """profit_long AND no dip below entry - y*atr_ma in the last l 1-min rows
     (entry row inclusive) — labels bottoms, not rising slopes."""
@@ -191,7 +197,7 @@ def profit_strict_long(
 
 def profit_strict_short(
     wide_df: pd.DataFrame, tf: int, n: int, m: float, x: float,
-    l: int, y: float, atr_period: int = 14, ma_length: int = 20,
+    l: int, y: float, atr_period: int = 14, ma_length: int = 5,
 ) -> pd.Series:
     """Short mirror of profit_strict_long: no spike above entry + y*atr_ma."""
     return _profit_strict(wide_df, tf, n, m, x, l, y, atr_period, ma_length,
@@ -200,7 +206,7 @@ def profit_strict_short(
 
 def add_profit_strict_labels(
     wide_df: pd.DataFrame, tf: int, n: int, m: float, x: float,
-    l: int, y: float, atr_period: int = 14, ma_length: int = 20,
+    l: int, y: float, atr_period: int = 14, ma_length: int = 5,
 ) -> None:
     """Append {tf}_pslong_... and {tf}_psshort_... columns in place."""
     suffix = f"n{_fmt(n)}_m{_fmt(m)}_x{_fmt(x)}_l{_fmt(l)}_y{_fmt(y)}"

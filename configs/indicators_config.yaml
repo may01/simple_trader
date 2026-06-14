@@ -153,11 +153,11 @@ fields:
     library: talib
     params: {}
 
-  - name: atr_14_ma_20
+  - name: atr_14_ma_5
     group: volatility
     applies_to: all
     depends_on: [atr_14]
-    params: {}
+    params: {ma_length: 5}
 
   - name: bb_upper_20_2
     group: volatility
@@ -217,17 +217,17 @@ fields:
     params:
       period: 14
 
-  - name: cci_14_ma_20
+  - name: cci_14_ma_5
     group: oscillators
     applies_to: all
     depends_on: [cci_14]
-    params: {}
+    params: {ma_length: 5}
 
   - name: cci_diff
     group: oscillators
     applies_to: all
-    depends_on: [cci_14_ma_20]
-    params: {}
+    depends_on: [cci_14_ma_5]
+    params: {ma_length: 5}
 
   - name: sar_002_02
     group: oscillators
@@ -464,11 +464,11 @@ fields:
     depends_on: [rsi_ma8]
     params: {}
 
-  - name: nn_close_diff_atr_14_ma_20
+  - name: nn_close_diff_atr_14_ma_5
     group: nn_features
     applies_to: all
-    depends_on: [close_diff_prc, atr_14_ma_20]
-    params: {}
+    depends_on: [close_diff_prc, atr_14_ma_5]
+    params: {atr_ma_length: 5}
 
 # Profit labels — lookahead training/backtest targets (indicators/labels.py).
 # NEVER indicator fields: not in the fields: section, not in the registry,
@@ -478,91 +478,91 @@ labels:
     tfs: [15]
     n: 1
     m: 1
-    x: 0.4
+    x: 0.3
 
   - type: profit_strict
     tfs: [15]
     n: 1
     m: 1
-    x: 0.4
-    l: 15
-    y: 0.4
-
-  - type: profit
-    tfs: [15]
-    n: 2
-    m: 1
-    x: 0.4
-
-  - type: profit_strict
-    tfs: [15]
-    n: 2
-    m: 1
-    x: 0.4
-    l: 15
-    y: 0.4
-
-  - type: profit
-    tfs: [60]
-    n: 1
-    m: 1
     x: 0.3
-
-  - type: profit_strict
-    tfs: [60]
-    n: 1
-    m: 1
-    x: 0.3
-    l: 15
-    y: 0.3
-
-  - type: profit
-    tfs: [60]
-    n: 2
-    m: 1
-    x: 0.3
-
-  - type: profit_strict
-    tfs: [60]
-    n: 2
-    m: 1
-    x: 0.3
-    l: 15
-    y: 0.3
-
-  - type: profit
-    tfs: [240]
-    n: 1
-    m: 1
-    x: 0.2
-
-  - type: profit_strict
-    tfs: [240]
-    n: 1
-    m: 1
-    x: 0.2
     l: 15
     y: 0.2
 
   - type: profit
-    tfs: [240]
+    tfs: [15]
+    n: 2
+    m: 1
+    x: 0.3
+
+  - type: profit_strict
+    tfs: [15]
+    n: 2
+    m: 1
+    x: 0.3
+    l: 15
+    y: 0.2
+
+  - type: profit
+    tfs: [60]
+    n: 1
+    m: 1
+    x: 0.2
+
+  - type: profit_strict
+    tfs: [60]
+    n: 1
+    m: 1
+    x: 0.2
+    l: 15
+    y: 0.1
+
+  - type: profit
+    tfs: [60]
     n: 2
     m: 1
     x: 0.2
 
   - type: profit_strict
-    tfs: [240]
+    tfs: [60]
     n: 2
     m: 1
     x: 0.2
     l: 15
-    y: 0.2
+    y: 0.1
+
+  - type: profit
+    tfs: [240]
+    n: 1
+    m: 1
+    x: 0.1
+
+  - type: profit_strict
+    tfs: [240]
+    n: 1
+    m: 1
+    x: 0.1
+    l: 15
+    y: 0.1
+
+  - type: profit
+    tfs: [240]
+    n: 2
+    m: 1
+    x: 0.1
+
+  - type: profit_strict
+    tfs: [240]
+    n: 2
+    m: 1
+    x: 0.1
+    l: 15
+    y: 0.1
 
 nn:
   feature_cols:
     - "15_nn_rsi_ma8_norm_mean_20"
-    - "15_nn_close_diff_atr_14_ma_20"
+    - "15_nn_close_diff_atr_14_ma_5"
     - "60_nn_rsi_ma8_norm_mean_20"
-    - "60_nn_close_diff_atr_14_ma_20"
+    - "60_nn_close_diff_atr_14_ma_5"
     - "240_nn_rsi_ma8_norm_mean_20"
   checkpoint_dir: "checkpoints/"

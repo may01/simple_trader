@@ -27,7 +27,7 @@ from indicators.labels import (
 # ---------------------------------------------------------------------------
 
 
-def ref_labels(wide_df, tf, n, m, x, atr_period=2, ma_length=20,
+def ref_labels(wide_df, tf, n, m, x, atr_period=2, ma_length=5,
                direction="long", l=None, y=None):
     """Oracle: walk 1-minute bars per entry, one entry per wide row.
 
@@ -52,10 +52,12 @@ def ref_labels(wide_df, tf, n, m, x, atr_period=2, ma_length=20,
         if l is not None and p + 1 < l:
             continue  # strict: fewer than l rows of history → NaN
 
-        entry = close[p]
+        # Pessimistic fill: long enters at the 1-min low, short at the 1-min high.
         if direction == "long":
+            entry = one_low[p]
             target, stop = entry + m * atr, entry - x * atr
         else:
+            entry = one_high[p]
             target, stop = entry - m * atr, entry + x * atr
 
         label = 0.0
@@ -94,7 +96,7 @@ def ref_labels(wide_df, tf, n, m, x, atr_period=2, ma_length=20,
 # Wide-df builders for hand-crafted paths
 # ---------------------------------------------------------------------------
 
-ATR_P, MA_L = 2, 20
+ATR_P, MA_L = 2, 5
 
 
 def make_wide(high, low, close, tf, atr_ma=None, atr_period=ATR_P,
@@ -141,8 +143,9 @@ def baseline_arrays(n_rows):
 
 
 # Baseline geometry used by hand tests: tf=5, atr_period=2, n=2, atr_ma=2.
-# Entry under test: minute 24 (entry=100, atr=2). Window: minutes 25..34.
-# Long: m=2 → target 104, x=1 → stop 98.
+# Entry under test: minute 24. Window: minutes 25..34. Pessimistic fill:
+# long enters at the 1-min low (99) → target 103, stop 97; short enters at
+# the 1-min high (101) → target 97, stop 103.
 TF, N, M, X = 5, 2, 2.0, 1.0
 ENTRY = 24
 ROWS = 40
@@ -166,19 +169,19 @@ def run_short(high, low, close, atr_ma=None):
 class TestProfitLong:
     def test_target_touched_stop_never(self):
         h, l, c = baseline_arrays(ROWS)
-        h[28] = 105.0  # > target 104
+        h[28] = 105.0  # > target 103
         assert run_long(h, l, c).iloc[ENTRY] == 1.0
 
     def test_stop_first_target_later(self):
         h, l, c = baseline_arrays(ROWS)
-        l[26] = 97.5   # < stop 98 first
+        l[26] = 96.5   # < stop 97 first
         h[28] = 105.0  # target later
         assert run_long(h, l, c).iloc[ENTRY] == 0.0
 
     def test_both_same_minute_pessimistic(self):
         h, l, c = baseline_arrays(ROWS)
         h[27] = 105.0
-        l[27] = 97.5
+        l[27] = 96.5
         assert run_long(h, l, c).iloc[ENTRY] == 0.0
 
     def test_neither_touched(self):
@@ -187,7 +190,7 @@ class TestProfitLong:
 
     def test_touch_requires_strict_inequality(self):
         h, l, c = baseline_arrays(ROWS)
-        h[28] = 104.0  # == target, not >
+        h[28] = 103.0  # == target, not >
         assert run_long(h, l, c).iloc[ENTRY] == 0.0
 
     def test_window_truncated_is_nan(self):
@@ -224,18 +227,18 @@ class TestProfitLong:
 class TestProfitShort:
     def test_target_touched_stop_never(self):
         h, l, c = baseline_arrays(ROWS)
-        l[28] = 95.0  # < target 96
+        l[28] = 95.0  # < target 97
         assert run_short(h, l, c).iloc[ENTRY] == 1.0
 
     def test_stop_first_target_later(self):
         h, l, c = baseline_arrays(ROWS)
-        h[26] = 102.5  # > stop 102 first
+        h[26] = 103.5  # > stop 103 first
         l[28] = 95.0
         assert run_short(h, l, c).iloc[ENTRY] == 0.0
 
     def test_both_same_minute_pessimistic(self):
         h, l, c = baseline_arrays(ROWS)
-        h[27] = 102.5
+        h[27] = 103.5
         l[27] = 95.0
         assert run_short(h, l, c).iloc[ENTRY] == 0.0
 
@@ -298,11 +301,11 @@ class TestProfitStrictLong:
         l[16] = 90.0  # just outside the window
         assert run_strict_long(h, l, c).iloc[ENTRY] == 1.0
 
-    def test_entry_minute_own_wick_counts(self):
+    def test_entry_minute_own_wick_defines_entry(self):
         h, l, c = baseline_arrays(ROWS)
         h[28] = 120.0
-        l[24] = 90.0  # entry row itself, window inclusive
-        assert run_strict_long(h, l, c).iloc[ENTRY] == 0.0
+        l[24] = 90.0  # entry row's own low IS the long entry → never self-dirty
+        assert run_strict_long(h, l, c).iloc[ENTRY] == 1.0
 
     def test_short_history_is_nan(self):
         h, l, c = baseline_arrays(ROWS)
@@ -346,11 +349,11 @@ class TestProfitStrictShort:
         h[16] = 110.0
         assert run_strict_short(h, l, c).iloc[ENTRY] == 1.0
 
-    def test_entry_minute_own_wick_counts(self):
+    def test_entry_minute_own_wick_defines_entry(self):
         h, l, c = baseline_arrays(ROWS)
         l[28] = 80.0
-        h[24] = 110.0
-        assert run_strict_short(h, l, c).iloc[ENTRY] == 0.0
+        h[24] = 110.0  # entry row's own high IS the short entry → never self-dirty
+        assert run_strict_short(h, l, c).iloc[ENTRY] == 1.0
 
     def test_short_history_is_nan(self):
         h, l, c = baseline_arrays(ROWS)
@@ -464,9 +467,9 @@ def test_labels_on_wide_df():
 
     wide = _build_wide_df(synthetic_ohlcv_df)
     # The volatility indicator group would normally add this; inject a
-    # positive, NaN-warmed atr_ma so labels (default atr_period=14, ma_length=20)
+    # positive, NaN-warmed atr_ma so labels (default atr_period=14, ma_length=5)
     # have their sizing column.
-    wide["15_atr_14_ma_20"] = make_atr_ma(
+    wide["15_atr_14_ma_5"] = make_atr_ma(
         wide["15_high"].to_numpy(), wide["15_low"].to_numpy())
     s = profit_long(wide, tf=15, n=4, m=2.0, x=1.0)
     assert s.index.equals(wide.index)
