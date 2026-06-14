@@ -2,12 +2,14 @@
 
 Contains a naive reference implementation (impl B) used as the oracle for the
 vectorized production implementation in indicators/labels.py (impl A).
+
+A label is produced for EVERY wide row (closed or forming), sized from the
+precomputed {tf}_atr_{atr_period}_ma_{ma_length} column.
 """
 
 import numpy as np
 import pandas as pd
 import pytest
-import talib
 
 from data import _build_wide_df
 from indicators.labels import (
@@ -25,27 +27,26 @@ from indicators.labels import (
 # ---------------------------------------------------------------------------
 
 
-def ref_labels(wide_df, tf, n, m, x, atr_period=14, direction="long",
-               l=None, y=None):
-    """Oracle: walk 1-minute bars per entry. Strict variant when l/y given."""
+def ref_labels(wide_df, tf, n, m, x, atr_period=2, ma_length=20,
+               direction="long", l=None, y=None):
+    """Oracle: walk 1-minute bars per entry, one entry per wide row.
+
+    atr_ma is read from the precomputed column (per row); entry is the 1-min
+    close at the row. Strict variant when l/y given.
+    """
     n_rows = len(wide_df)
-    closed = wide_df[f"{tf}_is_closed"].to_numpy(dtype=bool)
-    high = wide_df[f"{tf}_high"].to_numpy(dtype=float)
-    low = wide_df[f"{tf}_low"].to_numpy(dtype=float)
     close = wide_df[f"{tf}_close"].to_numpy(dtype=float)
     one_high = wide_df["1_high"].to_numpy(dtype=float)
     one_low = wide_df["1_low"].to_numpy(dtype=float)
+    atr_ma = wide_df[f"{tf}_atr_{atr_period}_ma_{ma_length}"].to_numpy(float)
 
-    pos = np.flatnonzero(closed)
-    atr_closed = talib.ATR(high[pos], low[pos], close[pos],
-                           timeperiod=atr_period)
     out = np.full(n_rows, np.nan)
     win = n * tf
 
-    for k, p in enumerate(pos):
-        atr = atr_closed[k]
+    for p in range(n_rows):
+        atr = atr_ma[p]
         if np.isnan(atr):
-            continue  # ATR warmup → NaN
+            continue  # atr_ma unavailable → NaN
         if p + win > n_rows - 1:
             continue  # incomplete future window → NaN
         if l is not None and p + 1 < l:
@@ -93,9 +94,17 @@ def ref_labels(wide_df, tf, n, m, x, atr_period=14, direction="long",
 # Wide-df builders for hand-crafted paths
 # ---------------------------------------------------------------------------
 
+ATR_P, MA_L = 2, 20
 
-def make_wide(high, low, close, tf):
-    """Minimal wide df from 1-min h/l/c arrays for a single tf (+ tf=1 cols)."""
+
+def make_wide(high, low, close, tf, atr_ma=None, atr_period=ATR_P,
+              ma_length=MA_L):
+    """Minimal wide df from 1-min h/l/c arrays for a single tf (+ tf=1 cols).
+
+    The precomputed atr_ma column ({tf}_atr_{atr_period}_ma_{ma_length}) is
+    injected directly. atr_ma None → flat 2.0 (matches the hand-test geometry);
+    a scalar broadcasts; an array is used as-is.
+    """
     high = np.asarray(high, dtype=float)
     low = np.asarray(low, dtype=float)
     close = np.asarray(close, dtype=float)
@@ -110,32 +119,43 @@ def make_wide(high, low, close, tf):
     df[f"{tf}_is_closed"] = (
         (idx + pd.Timedelta(minutes=1)).floor(f"{tf}min") != open_index
     )
+    if atr_ma is None:
+        atr_ma = 2.0
+    if np.isscalar(atr_ma):
+        atr_ma = np.full(len(high), float(atr_ma))
+    df[f"{tf}_atr_{atr_period}_ma_{ma_length}"] = np.asarray(atr_ma, dtype=float)
     return df
 
 
+def make_atr_ma(high, low, ma_length=MA_L):
+    """Positive per-row atr_ma proxy with NaN warmup — only needs to be the
+    same column both impls read, plus exercise NaN handling."""
+    return (pd.Series(np.asarray(high) - np.asarray(low))
+            .rolling(ma_length, min_periods=ma_length).mean().to_numpy())
+
+
 def baseline_arrays(n_rows):
-    """Flat market: every 1-min bar high=101 low=99 close=100 → tf ATR == 2."""
+    """Flat market: every 1-min bar high=101 low=99 close=100; atr_ma == 2."""
     return (np.full(n_rows, 101.0), np.full(n_rows, 99.0),
             np.full(n_rows, 100.0))
 
 
-# Baseline geometry used by hand tests: tf=5, atr_period=2, n=2.
-# Closed rows at minutes 4, 9, 14, ... — ATR valid from minute 14 on.
+# Baseline geometry used by hand tests: tf=5, atr_period=2, n=2, atr_ma=2.
 # Entry under test: minute 24 (entry=100, atr=2). Window: minutes 25..34.
 # Long: m=2 → target 104, x=1 → stop 98.
-TF, N, M, X, ATR_P = 5, 2, 2.0, 1.0, 2
+TF, N, M, X = 5, 2, 2.0, 1.0
 ENTRY = 24
 ROWS = 40
 
 
-def run_long(high, low, close):
-    return profit_long(make_wide(high, low, close, TF), TF, N, M, X,
-                       atr_period=ATR_P)
+def run_long(high, low, close, atr_ma=None):
+    return profit_long(make_wide(high, low, close, TF, atr_ma=atr_ma),
+                       TF, N, M, X, atr_period=ATR_P)
 
 
-def run_short(high, low, close):
-    return profit_short(make_wide(high, low, close, TF), TF, N, M, X,
-                        atr_period=ATR_P)
+def run_short(high, low, close, atr_ma=None):
+    return profit_short(make_wide(high, low, close, TF, atr_ma=atr_ma),
+                        TF, N, M, X, atr_period=ATR_P)
 
 
 # ---------------------------------------------------------------------------
@@ -176,19 +196,24 @@ class TestProfitLong:
         # Entry at minute 34 needs rows 35..44; only 35..39 exist.
         assert np.isnan(s.iloc[34])
 
-    def test_atr_warmup_is_nan(self):
+    def test_nan_atr_ma_is_nan(self):
         h, l, c = baseline_arrays(ROWS)
-        s = run_long(h, l, c)
-        # talib ATR(2) is NaN for the first 2 closed candles (minutes 4, 9).
-        assert np.isnan(s.iloc[4]) and np.isnan(s.iloc[9])
-        assert not np.isnan(s.iloc[14])
+        atr_ma = np.full(ROWS, 2.0)
+        atr_ma[ENTRY] = np.nan  # atr_ma warmup / gap at this row
+        s = run_long(h, l, c, atr_ma=atr_ma)
+        assert np.isnan(s.iloc[ENTRY])
+        assert not np.isnan(s.iloc[ENTRY - 1])  # neighbour still labeled
 
-    def test_values_only_at_closed_rows(self):
+    def test_values_at_every_row(self):
         h, l, c = baseline_arrays(ROWS)
         wide = make_wide(h, l, c, TF)
         s = profit_long(wide, TF, N, M, X, atr_period=ATR_P)
         assert s.index.equals(wide.index)
-        assert s[~wide[f"{TF}_is_closed"].astype(bool)].isna().all()
+        # Non-closed (forming) rows are now labeled too, not only closed ones.
+        forming = ~wide[f"{TF}_is_closed"].astype(bool)
+        assert s[forming].notna().any()
+        # The final win rows have no complete forward window → NaN.
+        assert s.iloc[-(N * TF):].isna().all()
 
 
 # ---------------------------------------------------------------------------
@@ -222,18 +247,19 @@ class TestProfitShort:
         h, l, c = baseline_arrays(ROWS)
         assert np.isnan(run_short(h, l, c).iloc[34])
 
-    def test_atr_warmup_is_nan(self):
+    def test_nan_atr_ma_is_nan(self):
         h, l, c = baseline_arrays(ROWS)
-        s = run_short(h, l, c)
-        assert np.isnan(s.iloc[4]) and np.isnan(s.iloc[9])
+        atr_ma = np.full(ROWS, 2.0)
+        atr_ma[ENTRY] = np.nan
+        assert np.isnan(run_short(h, l, c, atr_ma=atr_ma).iloc[ENTRY])
 
 
 # ---------------------------------------------------------------------------
 # Unit tests — strict variant
 # ---------------------------------------------------------------------------
-# Deep dips/spikes (90 / 110) shift ATR via the candle they land in; magnitudes
-# are chosen so the past condition outcome is unambiguous regardless, and the
-# forward touch (120 / 80) clears any resulting target.
+# Deep dips/spikes (90 / 110) move 1-min wicks; atr_ma is fixed at 2 so the
+# past condition outcome is unambiguous; the forward touch (120 / 80) clears
+# any target.
 
 L, Y = 8, 0.5  # past window: rows 17..24 inclusive for entry 24
 
@@ -353,8 +379,8 @@ def random_walk_arrays(n_rows, seed):
 ])
 def test_vectorized_matches_reference(tf, n, m, x, l, y):
     h, lo, c = random_walk_arrays(4000, seed=tf * 1000 + n)
-    wide = make_wide(h, lo, c, tf)
     atr_p = 3
+    wide = make_wide(h, lo, c, tf, atr_ma=make_atr_ma(h, lo), atr_period=atr_p)
 
     pd.testing.assert_series_equal(
         profit_long(wide, tf, n, m, x, atr_period=atr_p),
@@ -379,7 +405,7 @@ def test_vectorized_matches_reference(tf, n, m, x, l, y):
 def test_labels_not_all_trivial_on_random_walk():
     """Sanity: the property test exercises both 0s and 1s."""
     h, lo, c = random_walk_arrays(4000, seed=42)
-    wide = make_wide(h, lo, c, 15)
+    wide = make_wide(h, lo, c, 15, atr_ma=make_atr_ma(h, lo), atr_period=3)
     s = profit_long(wide, 15, 2, 1.0, 1.0, atr_period=3).dropna()
     assert (s == 1.0).any() and (s == 0.0).any()
 
@@ -437,7 +463,14 @@ def test_labels_on_wide_df():
     )
 
     wide = _build_wide_df(synthetic_ohlcv_df)
+    # The volatility indicator group would normally add this; inject a
+    # positive, NaN-warmed atr_ma so labels (default atr_period=14, ma_length=20)
+    # have their sizing column.
+    wide["15_atr_14_ma_20"] = make_atr_ma(
+        wide["15_high"].to_numpy(), wide["15_low"].to_numpy())
     s = profit_long(wide, tf=15, n=4, m=2.0, x=1.0)
     assert s.index.equals(wide.index)
-    assert s[~wide["15_is_closed"].astype(bool)].isna().all()
     assert s.dropna().isin([0, 1]).all()
+    # Labels exist on forming rows, not only closed candles.
+    forming = ~wide["15_is_closed"].astype(bool)
+    assert s[forming].notna().any()
