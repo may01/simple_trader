@@ -8,6 +8,7 @@ from constants import (
     STRATEGY_ACTION_OPEN_LONG,
     STRATEGY_ACTION_OPEN_SHORT,
 )
+from constants import POSITION_TYPE_UNKNOWN
 from position.base_position import BasePosition
 from position.long_position import LongPosition
 from position.short_position import ShortPosition
@@ -30,6 +31,41 @@ class Position:
         self.fee: float = fee
         self.thread_num: int = thread_num
         self.full_position: float = 10000.0
+        # Facade-level change buffer (Phase 14, Task 03): survives posImpl being
+        # discarded at finalize so the robot can drain the close/settle events.
+        self._changes: list = []
+
+    @property
+    def position_type(self) -> str:
+        """Current position type, or UNKNOWN when no position is open."""
+        if self.posImpl is None:
+            return POSITION_TYPE_UNKNOWN
+        return self.posImpl.position_type
+
+    @property
+    def open_time(self) -> float:
+        """Open timestamp of the active position, or 0.0 when flat."""
+        if self.posImpl is None:
+            return 0.0
+        return self.posImpl.open_time
+
+    @open_time.setter
+    def open_time(self, value: float) -> None:
+        """Override the active position's open timestamp (sim clock)."""
+        if self.posImpl is not None:
+            self.posImpl.open_time = value
+
+    def _pull_changes(self) -> None:
+        """Move any pending changes off posImpl into the facade buffer."""
+        if self.posImpl is not None:
+            self._changes.extend(self.posImpl.drain_changes())
+
+    def drain_changes(self) -> list:
+        """Return accumulated lifecycle changes and clear the buffer."""
+        self._pull_changes()
+        changes = self._changes
+        self._changes = []
+        return changes
 
     # ------------------------------------------------------------------
     # Position lifecycle
@@ -52,16 +88,23 @@ class Position:
             return False
 
         if strategy_action == STRATEGY_ACTION_OPEN_LONG:
-            self.posImpl = LongPosition(self.fee, self.thread_num, self.full_position)
+            impl = LongPosition(self.fee, self.thread_num, self.full_position)
         elif strategy_action == STRATEGY_ACTION_OPEN_SHORT:
-            self.posImpl = ShortPosition(self.fee, self.thread_num, self.full_position)
+            impl = ShortPosition(self.fee, self.thread_num, self.full_position)
         else:
             return False
 
-        return self.posImpl.open(
+        opened = impl.open(
             strategy_action, price_open, price_close, price_stop_loss,
             time_period, action_msg,
         )
+        if not opened:
+            # Inner open rejected (e.g. risk <= 0). Keep the facade flat so
+            # is_opened() does not lie, but salvage any recorded change.
+            self._changes.extend(impl.drain_changes())
+            return False
+        self.posImpl = impl
+        return True
 
     def close(
         self,
@@ -102,6 +145,7 @@ class Position:
         if self.posImpl is None:
             return (0.0, 0.0)
         result = self.posImpl.finalize()
+        self._pull_changes()  # capture close/settle before discarding posImpl
         self.posImpl = None
         return result
 
@@ -136,6 +180,18 @@ class Position:
         if self.posImpl is None:
             return False
         return self.posImpl.is_stop_loss_triggered(cur_price)
+
+    def is_target_reached(self, cur_price: float) -> bool:
+        """Return True if the take-profit target has been reached; False if flat."""
+        if self.posImpl is None:
+            return False
+        return self.posImpl.is_target_reached(cur_price)
+
+    def current_target(self) -> float:
+        """Return the active take-profit target, or 0.0 when flat."""
+        if self.posImpl is None:
+            return 0.0
+        return self.posImpl.current_target()
 
     def check_stop_open(self, cur_price: float) -> bool:
         """Return True if entry order is stale; False if no position."""

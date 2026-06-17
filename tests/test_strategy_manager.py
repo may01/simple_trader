@@ -22,7 +22,13 @@ from constants import (
     STRATEGY_ACTION_MOVE_STOP_LOSS_SHORT,
     STRATEGY_ACTION_DO_STOP_LOSS,
     POSITION_STATE_WAIT,
+    POSITION_STATE_WAIT_SELL,
 )
+
+# A "position is open" state, used by close/stop/move resolution tests.
+# State-aware resolution drops OPEN actions when holding and CLOSE/STOP/MOVE
+# actions when flat, so these scenarios must run from a holding state.
+_HOLDING = POSITION_STATE_WAIT_SELL
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +279,7 @@ class TestStrategyManagerCheckSingleAction:
             tf=5
         ))
         dp = make_dp()
-        action, _, _, _, tf = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, tf = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_CLOSE_LONG
         assert tf == 5
 
@@ -290,7 +296,7 @@ class TestStrategyManagerConflictResolutionDoStopLoss:
         sm.register(StrategyReturning()(STRATEGY_ACTION_DO_STOP_LOSS, stop_price=90.0, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_OPEN_LONG, stop_price=95.0, tf=1))
         dp = make_dp()
-        action, _, _, stop_price, _ = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, stop_price, _ = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_DO_STOP_LOSS
         assert stop_price == 90.0
 
@@ -300,7 +306,7 @@ class TestStrategyManagerConflictResolutionDoStopLoss:
         sm.register(StrategyReturning()(STRATEGY_ACTION_CLOSE_LONG, stop_price=92.0, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_DO_STOP_LOSS, stop_price=90.0, tf=1))
         dp = make_dp()
-        action, _, _, _, _ = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, _ = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_DO_STOP_LOSS
 
     def test_do_stop_loss_takes_priority_over_move_stop_loss(self):
@@ -309,7 +315,7 @@ class TestStrategyManagerConflictResolutionDoStopLoss:
         sm.register(StrategyReturning()(STRATEGY_ACTION_MOVE_STOP_LOSS_LONG, stop_price=92.0, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_DO_STOP_LOSS, stop_price=90.0, tf=1))
         dp = make_dp()
-        action, _, _, _, _ = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, _ = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_DO_STOP_LOSS
 
 
@@ -325,7 +331,7 @@ class TestStrategyManagerConflictResolutionClose:
         sm.register(StrategyReturning()(STRATEGY_ACTION_MOVE_STOP_LOSS_LONG, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_CLOSE_LONG, tf=5))
         dp = make_dp()
-        action, _, _, _, tf = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, tf = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_CLOSE_LONG
         assert tf == 5
 
@@ -335,7 +341,7 @@ class TestStrategyManagerConflictResolutionClose:
         sm.register(StrategyReturning()(STRATEGY_ACTION_MOVE_STOP_LOSS_SHORT, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_CLOSE_SHORT, tf=5))
         dp = make_dp()
-        action, _, _, _, _ = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, _ = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_CLOSE_SHORT
 
     def test_close_long_part_takes_priority_over_move_stop_loss(self):
@@ -345,7 +351,7 @@ class TestStrategyManagerConflictResolutionClose:
         sm.register(StrategyReturning()(STRATEGY_ACTION_MOVE_STOP_LOSS_LONG, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_CLOSE_LONG_PART, tf=5))
         dp = make_dp()
-        action, _, _, _, _ = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, _ = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_CLOSE_LONG_PART
 
     def test_close_takes_priority_over_open(self):
@@ -355,7 +361,7 @@ class TestStrategyManagerConflictResolutionClose:
         sm.register(StrategyReturning()(STRATEGY_ACTION_OPEN_LONG, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_CLOSE_LONG, tf=5))
         dp = make_dp()
-        action, _, _, _, tf = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, tf = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_CLOSE_LONG
         assert tf == 5
 
@@ -366,7 +372,7 @@ class TestStrategyManagerConflictResolutionClose:
         sm.register(StrategyReturning()(STRATEGY_ACTION_CLOSE_LONG, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_CLOSE_LONG, tf=5))
         dp = make_dp()
-        action, _, _, _, tf = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, tf = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_CLOSE_LONG
         assert tf == 1  # First strategy
 
@@ -383,7 +389,7 @@ class TestStrategyManagerConflictResolutionMoveStopLoss:
         sm.register(StrategyReturning()(STRATEGY_ACTION_OPEN_LONG, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_MOVE_STOP_LOSS_LONG, tf=5))
         dp = make_dp()
-        action, _, _, _, tf = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, tf = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_MOVE_STOP_LOSS_LONG
         assert tf == 5
 
@@ -393,7 +399,7 @@ class TestStrategyManagerConflictResolutionMoveStopLoss:
         sm.register(StrategyReturning()(STRATEGY_ACTION_OPEN_SHORT, tf=1))
         sm.register(StrategyReturning()(STRATEGY_ACTION_MOVE_STOP_LOSS_SHORT, tf=5))
         dp = make_dp()
-        action, _, _, _, tf = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, _, tf = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_MOVE_STOP_LOSS_SHORT
         assert tf == 5
 
@@ -454,7 +460,7 @@ class TestStrategyManagerConflictResolutionOnlyMoveStopLoss:
         sm.register(StrategyReturning()(STRATEGY_ACTION_MOVE_STOP_LOSS_LONG, tf=1, stop_price=95.0))
         sm.register(StrategyReturningNothing()())
         dp = make_dp()
-        action, _, _, stop_price, tf = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, stop_price, tf = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_MOVE_STOP_LOSS_LONG
         assert tf == 1
         assert stop_price == 95.0
@@ -465,7 +471,7 @@ class TestStrategyManagerConflictResolutionOnlyMoveStopLoss:
         sm.register(StrategyReturning()(STRATEGY_ACTION_MOVE_STOP_LOSS_SHORT, tf=5, stop_price=105.0))
         sm.register(StrategyReturningNothing()())
         dp = make_dp()
-        action, _, _, stop_price, tf = sm.check(dp, POSITION_STATE_WAIT, 1000.0, None)
+        action, _, _, stop_price, tf = sm.check(dp, _HOLDING, 1000.0, None)
         assert action == STRATEGY_ACTION_MOVE_STOP_LOSS_SHORT
         assert tf == 5
         assert stop_price == 105.0

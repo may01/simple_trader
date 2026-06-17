@@ -50,6 +50,7 @@ def make_strategy_manager(action=STRATEGY_ACTION_NOTHING,
 def make_position(state=POSITION_STATE_WAIT, full_position=10000.0,
                   open_returns=True,
                   stop_loss_triggered=False, close_by_time=False,
+                  target_reached=False,
                   finalize_returns=(0.02, 200.0)):
     """Return a mocked Position with sensible defaults."""
     pos = MagicMock()
@@ -57,6 +58,7 @@ def make_position(state=POSITION_STATE_WAIT, full_position=10000.0,
     pos.full_position = full_position
     pos.open.return_value = open_returns
     pos.is_stop_loss_triggered.return_value = stop_loss_triggered
+    pos.is_target_reached.return_value = target_reached
     pos.close_by_time.return_value = close_by_time
     pos.finalize.return_value = finalize_returns
     return pos
@@ -454,6 +456,7 @@ class TestDoDispatch:
         sm = make_strategy_manager(action=STRATEGY_ACTION_NOTHING)
         robot = self._make_robot_with_position(sm)
         robot.position.is_stop_loss_triggered.return_value = False
+        robot.position.is_target_reached.return_value = False
         robot.position.close_by_time.return_value = False
         dp = make_data_point()
         robot._do(dp)

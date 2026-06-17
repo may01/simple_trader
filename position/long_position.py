@@ -67,6 +67,13 @@ class LongPosition(BasePosition):
         self.open_time = time.time()
         self.state = POSITION_STATE_WAIT_BUY
         self.action = strategy_action
+        # OPEN action: executed=entry, target=take-profit (price_close[0]),
+        # stop_loss read from self.price_stop_loss inside _record_change.
+        self._record_change(
+            "OPEN",
+            target_price=self.price_close[0] if self.price_close else 0.0,
+            executed_price=self.price_open[0],
+        )
         return True
 
     def record_entry_fill(self, coin_amount: float, price: float) -> None:
@@ -119,6 +126,13 @@ class LongPosition(BasePosition):
         self.price_close = price_close
         self.set_stop_loss(price_stop_loss, action_msg, force=True)
         self.action = strategy_action
+        from constants import STRATEGY_ACTION_DO_STOP_LOSS
+        self._record_change(
+            "STOP_LOSS" if strategy_action == STRATEGY_ACTION_DO_STOP_LOSS else "CLOSE",
+            target_price=price_close[0] if price_close else 0.0,
+            executed_price=0.0,
+            was_stop_loss=(strategy_action == STRATEGY_ACTION_DO_STOP_LOSS),
+        )
 
     # ------------------------------------------------------------------
     # P&L helpers
@@ -157,6 +171,8 @@ class LongPosition(BasePosition):
             for px, amt in zip(self.executed_close, self.executed_close_amount)
         )
         total_coins = sum(self.executed_close_amount)
+        if total_coins == 0:
+            return 0.0
         return total_value / total_coins
 
     # ------------------------------------------------------------------
