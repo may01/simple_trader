@@ -361,6 +361,7 @@ class DataViewer:
         indicators: list[str] | None = None,
         tf: int | None = None,
         subplots: list[str] | None = None,
+        show_actions: bool = False,
     ) -> go.Figure:
         """Build a figure for a date window of the wide DataFrame.
 
@@ -411,6 +412,8 @@ class DataViewer:
         self._draw_price_overlays(fig, df_slice, tf)
         self._draw_rsi_class_markers(fig, window, tf)
         self._draw_label_markers(fig, window, tf)
+        if show_actions:
+            self._draw_action_markers(fig, window)
         self._draw_zero_lines(fig)
         n_rows = len(getattr(fig, "_subplot_rows", {})) or 1
         # 264 = 220 * 1.2: total grows with the extra weight of the non-price
@@ -540,6 +543,115 @@ class DataViewer:
                 label=str(col),
                 subplot="price",
             )
+
+    # Action-marker styling: event → (symbol, colour). OPEN direction is
+    # resolved from the action's position_type. SIGNAL_FIRED is never drawn.
+    _ACTION_OPEN = {
+        "POSITION_TYPE_LONG": ("triangle-up", "limegreen"),
+        "POSITION_TYPE_SHORT": ("triangle-down", "orange"),
+    }
+    _ACTION_OFFSET = 0.003
+
+    def _load_latest_actions(self) -> list[dict]:
+        """Load the newest simulation's actions.jsonl. Skip-if-absent → []."""
+        import json
+
+        try:
+            from helpers import latest_simulation_folder
+            folder = latest_simulation_folder()
+            if not folder:
+                return []
+            path = folder + "actions.jsonl"
+            with open(path) as fh:
+                return [json.loads(line) for line in fh if line.strip()]
+        except Exception as exc:  # noqa: BLE001 — viewer must never crash
+            print(f"[DataViewer] _load_latest_actions skipped: {exc}")
+            return []
+
+    def _draw_action_markers(self, fig: go.Figure, window: pd.DataFrame) -> None:
+        """Draw latest-simulation OPEN/CLOSE/STOP_LOSS markers on the price subplot.
+
+        x = action timestamp (epoch s → tz-aware UTC), y = executed_price
+        (falling back to target_price). Only actions inside the visible window
+        are drawn. SIGNAL_FIRED actions are intentionally skipped (too noisy).
+        Skip-if-absent: no simulation / empty window renders unchanged.
+        """
+        actions = self._load_latest_actions()
+        if not actions or window.empty:
+            return
+
+        idx_tz = getattr(window.index, "tz", None)
+        start, end = window.index.min(), window.index.max()
+
+        # Bucket markers by (symbol, colour, label) so each is one trace.
+        # Each action yields one or more (symbol, color, label, y) points; an
+        # OPEN yields three: entry, take-profit target, and stop-loss.
+        buckets: dict[tuple, tuple[list, list, list]] = {}
+        for a in actions:
+            event = a.get("event")
+            ts = pd.Timestamp(a["timestamp"], unit="s")
+            if idx_tz is not None:
+                ts = ts.tz_localize(idx_tz)
+            if ts < start or ts > end:
+                continue
+
+            hover = self._action_hover(a, ts)
+            entry = a.get("executed_price") or a.get("target_price") or 0.0
+            points: list[tuple] = []  # (symbol, color, label, y, hover)
+
+            if event == "OPEN":
+                spec = self._ACTION_OPEN.get(a.get("position_type"))
+                if spec is None:
+                    continue
+                symbol, color = spec
+                side = a.get("position_type", "").replace("POSITION_TYPE_", "").lower()
+                # Entry marker sits exactly at the execution price.
+                points.append((symbol, color, f"OPEN {side}", entry, hover))
+                tp = a.get("target_price") or 0.0
+                sl = a.get("stop_loss_price") or 0.0
+                if tp > 0:
+                    points.append(("triangle-right", "seagreen", "target", tp, hover))
+                if sl > 0:
+                    points.append(("triangle-right", "crimson", "open_stop", sl, hover))
+            elif event == "CLOSE":
+                points.append(("x", "royalblue", "CLOSE", entry, hover))
+            elif event == "STOP_LOSS":
+                points.append(("x", "red", "STOP_LOSS", entry, hover))
+            else:
+                continue  # SIGNAL_FIRED / MOVE_STOP_LOSS not plotted
+
+            for symbol, color, label, y, hov in points:
+                xs, ys, hs = buckets.setdefault((symbol, color, label), ([], [], []))
+                xs.append(ts)
+                ys.append(y)
+                hs.append(hov)
+
+        for (symbol, color, label), (xs, ys, hs) in buckets.items():
+            if not xs:
+                continue
+            self.renderer.draw_marker(
+                fig, xs, ys,
+                marker_symbol=symbol, color=color, label=label,
+                subplot="price", size=11, hovertext=hs,
+            )
+
+    @staticmethod
+    def _action_hover(a: dict, ts: pd.Timestamp) -> str:
+        """Multi-line hover string exposing every meaningful field of an action."""
+        lines = [
+            f"<b>{a.get('event', '')}</b>",
+            f"time: {ts:%Y-%m-%d %H:%M}",
+            f"action: {a.get('action_type', '')}",
+            f"position: {str(a.get('position_type', '')).replace('POSITION_TYPE_', '')}",
+            f"target: {a.get('target_price', 0.0):.4f}",
+            f"executed: {a.get('executed_price', 0.0):.4f}",
+            f"stop_loss: {a.get('stop_loss_price', 0.0):.4f}",
+        ]
+        if a.get("event") in ("CLOSE", "STOP_LOSS"):
+            lines.append(f"revenue: {a.get('revenue_pct', 0.0) * 100:.2f}% "
+                         f"({a.get('revenue_abs', 0.0):.2f})")
+            lines.append(f"stopped_out: {a.get('was_stop_loss', False)}")
+        return "<br>".join(lines)
 
     def _draw_zero_lines(self, fig: go.Figure) -> None:
         """Add a zero reference line on every derivative subplot.

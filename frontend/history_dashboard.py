@@ -69,11 +69,13 @@ class HistoryDashboard:
         days: int | None,
         tfs: list | None,
         subplots: list | None = None,
+        show_actions: bool = False,
     ) -> list:
         """Return one dcc.Graph per selected TF, ascending TF order. Never raises.
 
         *subplots* is the shared oscillator-subplot selection applied to every
         TF's figure. ``None`` keeps all subplots; ``[]`` hides them all.
+        *show_actions* overlays the latest simulation's actions on each chart.
         """
         try:
             if start_date is None or days is None or int(days) < 1 or not tfs:
@@ -81,7 +83,8 @@ class HistoryDashboard:
             graphs = []
             for tf in sorted(int(t) for t in tfs):
                 fig = self.viewer.build_window_figure(
-                    pd.Timestamp(start_date), int(days), tf=tf, subplots=subplots
+                    pd.Timestamp(start_date), int(days), tf=tf, subplots=subplots,
+                    show_actions=show_actions,
                 )
                 graphs.append(
                     dcc.Graph(id={"type": "tf-chart", "tf": tf}, figure=fig)
@@ -95,12 +98,23 @@ class HistoryDashboard:
     # Dash app construction
     # ------------------------------------------------------------------
 
+    def _day_options(self) -> list[int]:
+        """Day-count presets bounded to the dataset span (always sorted, unique)."""
+        dmin, dmax = self._date_bounds()
+        span = max(1, int((dmax - dmin).total_seconds() // 86400) + 1)
+        presets = [1, 2, 3, 5, 7, 10, 14, 21, 30, 60, 90, 180, 365]
+        opts = sorted({d for d in presets if d <= span} | {span})
+        return opts
+
     def _build_app(self) -> dash.Dash:
         app = dash.Dash(__name__)
         dmin, dmax = self._date_bounds()
         tfs = self.viewer.available_tfs()
         initial = [self.tf] if self.tf in tfs else tfs[:1]
         subplot_names = self.viewer.available_subplots()
+        day_opts = self._day_options()
+        # Prefer a 7-day window; for shorter datasets show the full span.
+        default_days = 7 if 7 in day_opts else day_opts[-1]
 
         app.layout = html.Div(
             [
@@ -113,7 +127,15 @@ class HistoryDashboard:
                             min_date_allowed=dmin.date(),
                             max_date_allowed=dmax.date(),
                         ),
-                        dcc.Input(id="days", type="number", min=1, value=7),
+                        html.Label("days:", style={"marginLeft": "10px"}),
+                        dcc.Dropdown(
+                            id="days",
+                            options=[{"label": f"{d}d", "value": d} for d in day_opts],
+                            value=default_days,
+                            clearable=False,
+                            style={"width": "100px", "display": "inline-block",
+                                   "verticalAlign": "middle"},
+                        ),
                         dcc.Checklist(
                             id="timeframes",
                             options=[
@@ -130,6 +152,12 @@ class HistoryDashboard:
                             value=list(subplot_names),
                             inline=True,
                         ),
+                        dcc.Checklist(
+                            id="overlays",
+                            options=[{"label": "actions", "value": "actions"}],
+                            value=[],  # off by default
+                            inline=True,
+                        ),
                     ]
                 ),
                 html.Div(id="chart-groups"),
@@ -143,11 +171,13 @@ class HistoryDashboard:
                 Input("days", "value"),
                 Input("timeframes", "value"),
                 Input("subplots", "value"),
+                Input("overlays", "value"),
             ],
         )
-        def update(start_date, days, tfs_selected, subplots_selected):  # type: ignore[return]
+        def update(start_date, days, tfs_selected, subplots_selected, overlays_selected):  # type: ignore[return]
             return self._render_groups(
-                start_date, days, tfs_selected, subplots_selected
+                start_date, days, tfs_selected, subplots_selected,
+                show_actions=bool(overlays_selected and "actions" in overlays_selected),
             )
 
         return app
