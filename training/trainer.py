@@ -161,8 +161,9 @@ class Trainer:
         """
         from backtesting.performance_analyzer import PerformanceAnalyzer  # lazy
         from backtesting.simulation_orchestrator import SimulationOrchestrator  # lazy
+        from backtesting.simulation_report import SimulationReport  # lazy
         from data import SimulationData  # lazy
-        from helpers import shared_folder  # lazy
+        from helpers import shared_folder, simulation_folder  # lazy
 
         pair = os.environ["PAIR"]
         begin_ts = int(os.environ["DATA_START"]) // 1000
@@ -173,14 +174,44 @@ class Trainer:
 
         fee = float(os.environ.get("FEE", os.environ.get("EXCHANGE_FEE", "0.001")))
 
-        orch = SimulationOrchestrator(
-            strategy_factory=_DefaultStrategyFactory(fee),
-            fee=fee,
-        )
-        results = orch.run(simulation_data)
+        # Select strategy set: STRATEGY_SET=test registers the Phase 14 test
+        # strategies; otherwise the default (empty) factory.
+        strategy_set = os.environ.get("STRATEGY_SET", "default")
+        if strategy_set == "test":
+            from strategies.test_factory import TestStrategyFactory  # lazy
+            factory = TestStrategyFactory(fee)
+        elif strategy_set == "ema":
+            from strategies.test_factory import EmaStrategyFactory  # lazy
+            factory = EmaStrategyFactory(fee)
+        else:
+            factory = _DefaultStrategyFactory(fee)
+
+        num_workers = int(os.environ.get("NUM_WORKERS", "4"))
+        orch = SimulationOrchestrator(strategy_factory=factory, fee=fee)
+        run_result = orch.run(simulation_data)
+
+        results = run_result["results"]
+        sim_id = run_result["sim_id"]
 
         analyzer = PerformanceAnalyzer(results)
         metrics = analyzer.analyze()
+
+        # Build and write the per-simulation report beside actions.jsonl.
+        with open(run_result["actions_path"]) as f:
+            actions_jsonl = f.read()
+        action_counts = SimulationReport.action_counts_from_jsonl(actions_jsonl)
+        context = {
+            "strategy_set": strategy_set,
+            "pair": pair,
+            "begin_ts": begin_ts,
+            "end_ts": end_ts,
+            "step_min": step_min,
+            "num_workers": num_workers,
+            "fee": fee,
+        }
+        report_path = SimulationReport(
+            sim_id, metrics, action_counts, context
+        ).write(simulation_folder(sim_id))
 
         # Write training state checkpoint
         shared = shared_folder()
@@ -189,7 +220,12 @@ class Trainer:
         with open(state_path, "wb") as f:
             pickle.dump({"phase": "simulate", "metrics": metrics}, f)
 
-        self.metadata["simulate"] = metrics
+        self.metadata["simulate"] = {
+            **metrics,
+            "sim_id": sim_id,
+            "report_path": report_path,
+            "action_count": run_result["action_count"],
+        }
 
     def _run_train_nn(self) -> None:
         """Train the neural network using NNOrchestrator (nn/, Phase 11)."""

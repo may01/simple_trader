@@ -413,12 +413,22 @@ class TestRunSimulate:
 
         mock_sim_data = MagicMock()
         mock_sim_data_cls = MagicMock(return_value=mock_sim_data)
+        _actions_file = tmp_path / "actions.jsonl"
+        _actions_file.write_text("")
         mock_orch_instance = MagicMock()
-        mock_orch_instance.run.return_value = []
+        mock_orch_instance.run.return_value = {
+            "results": [], "sim_id": 1,
+            "actions_path": str(_actions_file), "action_count": 0,
+        }
         mock_orch_cls = MagicMock(return_value=mock_orch_instance)
         mock_analyzer_instance = MagicMock()
         mock_analyzer_instance.analyze.return_value = {"total_trades": 0}
         mock_analyzer_cls = MagicMock(return_value=mock_analyzer_instance)
+        mock_report_instance = MagicMock()
+        mock_report_instance.write.return_value = str(tmp_path / "report.json")
+        mock_backtesting_report = MagicMock()
+        mock_backtesting_report.SimulationReport = MagicMock(return_value=mock_report_instance)
+        mock_backtesting_report.SimulationReport.action_counts_from_jsonl = MagicMock(return_value={})
 
         # Inject mock modules so lazy imports find them
         mock_data_module = MagicMock()
@@ -430,11 +440,13 @@ class TestRunSimulate:
         mock_robots = MagicMock()
 
         _keys_to_mock = ["data", "backtesting.simulation_orchestrator",
-                         "backtesting.performance_analyzer", "robots.train_robot"]
+                         "backtesting.performance_analyzer",
+                         "backtesting.simulation_report", "robots.train_robot"]
         _saved = {k: sys.modules.get(k) for k in _keys_to_mock}
         sys.modules["data"] = mock_data_module
         sys.modules["backtesting.simulation_orchestrator"] = mock_backtesting_sim
         sys.modules["backtesting.performance_analyzer"] = mock_backtesting_perf
+        sys.modules["backtesting.simulation_report"] = mock_backtesting_report
         sys.modules["robots.train_robot"] = mock_robots
 
         # Also patch pandas.read_pickle to avoid actual file access
@@ -445,7 +457,8 @@ class TestRunSimulate:
 
         try:
             with patch("helpers.wide_df_path", return_value="/data/wide.pkl"), \
-                 patch("helpers.shared_folder", return_value=str(tmp_path) + "/"):
+                 patch("helpers.shared_folder", return_value=str(tmp_path) + "/"), \
+                 patch("helpers.simulation_folder", return_value=str(tmp_path) + "/"):
                 t = mod.Trainer()
                 t._run_simulate()
         finally:
@@ -470,12 +483,22 @@ class TestRunSimulate:
 
         mock_sim_data = MagicMock()
         mock_sim_data_cls = MagicMock(return_value=mock_sim_data)
+        _actions_file = tmp_path / "actions.jsonl"
+        _actions_file.write_text("")
         mock_orch_instance = MagicMock()
-        mock_orch_instance.run.return_value = []
+        mock_orch_instance.run.return_value = {
+            "results": [], "sim_id": 1,
+            "actions_path": str(_actions_file), "action_count": 0,
+        }
         mock_orch_cls = MagicMock(return_value=mock_orch_instance)
         mock_analyzer_instance = MagicMock()
         mock_analyzer_instance.analyze.return_value = {"total_trades": 0}
         mock_analyzer_cls = MagicMock(return_value=mock_analyzer_instance)
+        mock_report_instance = MagicMock()
+        mock_report_instance.write.return_value = str(tmp_path / "report.json")
+        mock_backtesting_report = MagicMock()
+        mock_backtesting_report.SimulationReport = MagicMock(return_value=mock_report_instance)
+        mock_backtesting_report.SimulationReport.action_counts_from_jsonl = MagicMock(return_value={})
 
         mock_data_module = MagicMock()
         mock_data_module.SimulationData = mock_sim_data_cls
@@ -486,16 +509,19 @@ class TestRunSimulate:
         mock_robots = MagicMock()
 
         _keys_to_mock = ["data", "backtesting.simulation_orchestrator",
-                         "backtesting.performance_analyzer", "robots.train_robot"]
+                         "backtesting.performance_analyzer",
+                         "backtesting.simulation_report", "robots.train_robot"]
         _saved = {k: sys.modules.get(k) for k in _keys_to_mock}
         sys.modules["data"] = mock_data_module
         sys.modules["backtesting.simulation_orchestrator"] = mock_backtesting_sim
         sys.modules["backtesting.performance_analyzer"] = mock_backtesting_perf
+        sys.modules["backtesting.simulation_report"] = mock_backtesting_report
         sys.modules["robots.train_robot"] = mock_robots
 
         try:
             with patch("helpers.wide_df_path", return_value="/data/wide.pkl"), \
-                 patch("helpers.shared_folder", return_value=str(tmp_path) + "/"):
+                 patch("helpers.shared_folder", return_value=str(tmp_path) + "/"), \
+                 patch("helpers.simulation_folder", return_value=str(tmp_path) + "/"):
                 t = mod.Trainer()
                 t._run_simulate()
         finally:
@@ -585,14 +611,23 @@ class TestRunSimulateRealSignatures:
     def _injected(self, tmp_path):
         import sys
 
+        _actions_file = tmp_path / "actions.jsonl"
+        _actions_file.write_text("")
         mock_sim_data_cls = MagicMock(return_value=MagicMock())
         mock_orch_instance = MagicMock()
-        mock_orch_instance.run.return_value = []
+        mock_orch_instance.run.return_value = {
+            "results": [], "sim_id": 1,
+            "actions_path": str(_actions_file), "action_count": 0,
+        }
         mock_orch_cls = MagicMock(return_value=mock_orch_instance)
         mock_analyzer_cls = MagicMock(
             return_value=MagicMock(analyze=MagicMock(return_value={"total_trades": 0}))
         )
         mock_strategy_manager_cls = MagicMock(return_value=MagicMock())
+        mock_report_cls = MagicMock(
+            return_value=MagicMock(write=MagicMock(return_value=str(tmp_path / "report.json")))
+        )
+        mock_report_cls.action_counts_from_jsonl = MagicMock(return_value={})
 
         mods = {
             "data": MagicMock(SimulationData=mock_sim_data_cls),
@@ -602,6 +637,9 @@ class TestRunSimulateRealSignatures:
             "backtesting.performance_analyzer": MagicMock(
                 PerformanceAnalyzer=mock_analyzer_cls
             ),
+            "backtesting.simulation_report": MagicMock(
+                SimulationReport=mock_report_cls
+            ),
             "strategies.strategy_manager": MagicMock(
                 StrategyManager=mock_strategy_manager_cls
             ),
@@ -609,7 +647,8 @@ class TestRunSimulateRealSignatures:
         saved = {k: sys.modules.get(k) for k in mods}
         sys.modules.update(mods)
         try:
-            with patch("helpers.shared_folder", return_value=str(tmp_path) + "/"):
+            with patch("helpers.shared_folder", return_value=str(tmp_path) + "/"), \
+                 patch("helpers.simulation_folder", return_value=str(tmp_path) + "/"):
                 yield (mock_sim_data_cls, mock_orch_cls, mock_strategy_manager_cls)
         finally:
             for key, original in saved.items():

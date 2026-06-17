@@ -63,6 +63,44 @@ def action_folder() -> str:
     return f"{shared_folder()}actions/"
 
 
+def simulation_folder(sim_id: int) -> str:
+    """Return {action_folder()}/sim_{sim_id}/ — one folder per simulation."""
+    return f"{action_folder()}sim_{sim_id}/"
+
+
+def _existing_sim_ids() -> list:
+    """Return sorted list of existing simulation ids under action_folder()."""
+    base = action_folder()
+    if not os.path.isdir(base):
+        return []
+    ids = []
+    for name in os.listdir(base):
+        if name.startswith("sim_"):
+            suffix = name[4:]
+            if suffix.isdigit():
+                ids.append(int(suffix))
+    return sorted(ids)
+
+
+def next_simulation_id() -> int:
+    """Return max existing sim id + 1, or 1 when none exist.
+
+    Creates action_folder() if absent. Racy under concurrent runs — acceptable
+    for backtesting (a single driver allocates ids).
+    """
+    os.makedirs(action_folder(), exist_ok=True)
+    ids = _existing_sim_ids()
+    return (ids[-1] + 1) if ids else 1
+
+
+def latest_simulation_folder() -> str | None:
+    """Return the newest sim_<id>/ folder by id, or None if none exist."""
+    ids = _existing_sim_ids()
+    if not ids:
+        return None
+    return simulation_folder(ids[-1])
+
+
 def graber_data_path() -> str:
     """Return {dataset_folder()}/graber_data.pkl"""
     return f"{dataset_folder()}graber_data.pkl"
