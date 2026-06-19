@@ -89,14 +89,14 @@ def dry_run() -> int:
     print("DRY RUN — no orders sent, no loans taken.")
     print(f"  pair           : {pair}")
     print(f"  notional cap   : {usdt} USDT (hard cap {USDT_CAP})")
-    print("  planned calls:")
+    print("  planned calls (borrow funds the sell, so no pre-held inventory needed):")
     print("    1. item.info()                                  # get_info")
     print("    2. item.depth(100) -> best_ask, best_bid")
-    print(f"    3. item.trade(TRADE_BUY,  best_bid*{BUY_OFFSET}, usdt/price)  # buy (non-filling)")
-    print("    4. item.order_info(order_id)                    # get_order")
-    print("    5. item.cancel_order(order_id)                  # cleanup")
-    print(f"    6. item.trade(TRADE_SELL, best_ask*{SELL_OFFSET}, usdt/price) # sell (non-filling) + cancel")
-    print("    7. item.borrow(coin, usdt/best_ask)             # borrow (<= get_aviable_loan)")
+    print("    3. item.borrow(coin, usdt/best_ask)             # borrow (<= get_aviable_loan)")
+    print(f"    4. item.trade(TRADE_SELL, best_ask*{SELL_OFFSET}, usdt/price) # sell (uses borrowed coin)")
+    print("    5. item.order_info(order_id)                    # get_order (on sell)")
+    print("    6. item.cancel_order(order_id)                  # cancel sell, frees coin")
+    print(f"    7. item.trade(TRADE_BUY,  best_bid*{BUY_OFFSET}, usdt/price)  # buy (non-filling) + cancel")
     print("    8. item.repay(coin, amount); assert loan back to pre-test level  # repay")
     return 0
 
@@ -128,66 +128,11 @@ def real_run() -> int:
         best_ask, best_bid = _best_prices(item)
         print(f"INFO: best_ask={best_ask} best_bid={best_bid}")
 
-        # 3. buy (non-filling) -------------------------------------------
-        buy_price = round(best_bid * BUY_OFFSET, 2)
-        buy_amount = usdt / buy_price
-        if item.is_invalid_amount(buy_amount, buy_price):
-            rec.record("buy", False, "amount below exchange minimums at offset price")
-            buy_id = ""
-        else:
-            status, res = item.trade(TRADE_BUY, buy_price, buy_amount)
-            buy_id = res.get("order_id", "")
-            if status == STATUS_SUCCESS and buy_id:
-                open_order_ids.append(buy_id)
-            rec.record(
-                "buy",
-                status == STATUS_SUCCESS and bool(buy_id),
-                f"order_id={buy_id} price={buy_price} amount={round(buy_amount, 2)}",
-            )
-
-        # 4. get_order ----------------------------------------------------
-        if buy_id:
-            status, oinfo = item.order_info(buy_id)
-            rec.record(
-                "get_order",
-                status == STATUS_SUCCESS
-                and oinfo.get("status") in {"NEW", "PARTIALLY_FILLED"}
-                and oinfo.get("start_amount", 0) > 0,
-                f"status={oinfo.get('status')} start_amount={oinfo.get('start_amount')}",
-            )
-        else:
-            rec.record("get_order", False, "skipped — no buy order placed")
-
-        # 5. cancel buy (cleanup, not a spec op) -------------------------
-        if buy_id:
-            status, cinfo = item.cancel_order(buy_id)
-            cancelled = status == STATUS_SUCCESS and cinfo.get("status") == "CANCELED"
-            if cancelled and buy_id in open_order_ids:
-                open_order_ids.remove(buy_id)
-            rec.record("cancel_buy", cancelled, f"status={cinfo.get('status')}")
-
-        # 6. sell (non-filling) + cancel ---------------------------------
-        sell_price = round(best_ask * SELL_OFFSET, 2)
-        sell_amount = usdt / sell_price
-        if item.is_invalid_amount(sell_amount, sell_price):
-            rec.record("sell", False, "amount below exchange minimums at offset price")
-        else:
-            status, res = item.trade(TRADE_SELL, sell_price, sell_amount)
-            sell_id = res.get("order_id", "")
-            if status == STATUS_SUCCESS and sell_id:
-                open_order_ids.append(sell_id)
-            rec.record(
-                "sell",
-                status == STATUS_SUCCESS and bool(sell_id),
-                f"order_id={sell_id} price={sell_price} amount={round(sell_amount, 2)}",
-            )
-            if sell_id:
-                status, cinfo = item.cancel_order(sell_id)
-                if status == STATUS_SUCCESS and cinfo.get("status") == "CANCELED" \
-                        and sell_id in open_order_ids:
-                    open_order_ids.remove(sell_id)
-
-        # 7. borrow -------------------------------------------------------
+        # 3. borrow ------------------------------------------------------
+        # Borrow first so the loaned coin funds the sell test below — the
+        # harness is then self-sufficient and does not require pre-held
+        # inventory. Borrow enough to cover the sell amount (best_ask < the
+        # 1.20x sell price, so usdt/best_ask > usdt/sell_price).
         _, loan_before = item.funds(coin, "borrowed")
         _, available = item.get_aviable_loan(coin)
         borrow_amount = round(min(usdt / best_ask, available), 2)
@@ -203,7 +148,66 @@ def real_run() -> int:
                 f"coin={coin} amount={borrow_amount}",
             )
 
-        # 8. repay --------------------------------------------------------
+        # 4. sell (non-filling) — uses the borrowed coin as inventory -----
+        sell_price = round(best_ask * SELL_OFFSET, 2)
+        sell_amount = usdt / sell_price
+        sell_id = ""
+        if item.is_invalid_amount(sell_amount, sell_price):
+            rec.record("sell", False, "amount below exchange minimums at offset price")
+        else:
+            status, res = item.trade(TRADE_SELL, sell_price, sell_amount)
+            sell_id = res.get("order_id", "")
+            if status == STATUS_SUCCESS and sell_id:
+                open_order_ids.append(sell_id)
+            rec.record(
+                "sell",
+                status == STATUS_SUCCESS and bool(sell_id),
+                f"order_id={sell_id} price={sell_price} amount={round(sell_amount, 2)}",
+            )
+
+        # 5. get_order — inspect the resting sell order ------------------
+        if sell_id:
+            status, oinfo = item.order_info(sell_id)
+            rec.record(
+                "get_order",
+                status == STATUS_SUCCESS
+                and oinfo.get("status") in {"NEW", "PARTIALLY_FILLED"}
+                and oinfo.get("start_amount", 0) > 0,
+                f"status={oinfo.get('status')} start_amount={oinfo.get('start_amount')}",
+            )
+        else:
+            rec.record("get_order", False, "skipped — no sell order placed")
+
+        # 6. cancel sell (cleanup, frees the coin for repay) -------------
+        if sell_id:
+            status, cinfo = item.cancel_order(sell_id)
+            cancelled = status == STATUS_SUCCESS and cinfo.get("status") == "CANCELED"
+            if cancelled and sell_id in open_order_ids:
+                open_order_ids.remove(sell_id)
+            rec.record("cancel_sell", cancelled, f"status={cinfo.get('status')}")
+
+        # 7. buy (non-filling) + cancel ----------------------------------
+        buy_price = round(best_bid * BUY_OFFSET, 2)
+        buy_amount = usdt / buy_price
+        if item.is_invalid_amount(buy_amount, buy_price):
+            rec.record("buy", False, "amount below exchange minimums at offset price")
+        else:
+            status, res = item.trade(TRADE_BUY, buy_price, buy_amount)
+            buy_id = res.get("order_id", "")
+            if status == STATUS_SUCCESS and buy_id:
+                open_order_ids.append(buy_id)
+            rec.record(
+                "buy",
+                status == STATUS_SUCCESS and bool(buy_id),
+                f"order_id={buy_id} price={buy_price} amount={round(buy_amount, 2)}",
+            )
+            if buy_id:
+                status, cinfo = item.cancel_order(buy_id)
+                if status == STATUS_SUCCESS and cinfo.get("status") == "CANCELED" \
+                        and buy_id in open_order_ids:
+                    open_order_ids.remove(buy_id)
+
+        # 8. repay -------------------------------------------------------
         if borrowed_amount > 0:
             status, _ = item.repay(coin, borrowed_amount)
             _, loan_after = item.funds(coin, "borrowed")
