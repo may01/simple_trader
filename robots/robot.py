@@ -24,7 +24,9 @@ from constants import (
     TRADE_BUY,
     TRADE_SELL,
 )
+from backtesting.action import Action
 from position.position import Position
+from robots.live_action_log import LIVE_SIM_ID, LiveActionLog
 from robots.live_order_tracker import LiveOrderTracker
 from stocks.base_stock import StockInterface
 from strategies.strategy_manager import StrategyManager
@@ -59,6 +61,7 @@ class Robot:
         stock: StockInterface,
         fee: float,
         persist_path: str,
+        action_log_path: str | None = None,
     ) -> None:
         self.strategy_manager: StrategyManager = strategy_manager
         self.live_data = live_data
@@ -73,6 +76,11 @@ class Robot:
             stock=stock,
             persist_path=persist_path,
         )
+        # Optional live Action persistence (Phase 15 Task 03). None → inert.
+        self._action_log: LiveActionLog | None = (
+            LiveActionLog(action_log_path) if action_log_path else None
+        )
+        self._tick_index: int = 0
 
     # ------------------------------------------------------------------
     # Public loop entry point
@@ -132,6 +140,37 @@ class Robot:
             self._stop_loss(data_point, close_prices, stop_price, tf)
         else:
             self.wait(data_point)
+
+        self._record_live_actions(data_point)
+        self._tick_index += 1
+
+    def _record_live_actions(self, data_point) -> None:
+        """Persist any position lifecycle changes from this tick as Action records.
+
+        No-op when no action log is configured. Drains the position's change
+        buffer (OPEN / CLOSE / STOP_LOSS events produced by open / close /
+        finalize) and appends one Action per change to the live store.
+        """
+        if self._action_log is None:
+            return
+        ts_attr = data_point.timestamp
+        ts = ts_attr.timestamp() if hasattr(ts_attr, "timestamp") else float(ts_attr)
+        for ch in self.position.drain_changes():
+            executed = ch["executed_price"] or ch["target_price"]
+            self._action_log.record(Action(
+                sim_id=LIVE_SIM_ID,
+                timestamp=ts,
+                tick_index=self._tick_index,
+                event=ch["kind"],
+                action_type=ch["kind"],
+                position_type=ch["position_type"],
+                was_stop_loss=ch["was_stop_loss"],
+                target_price=ch["target_price"],
+                executed_price=float(executed),
+                stop_loss_price=ch["stop_loss_price"],
+                revenue_pct=ch["revenue_pct"],
+                revenue_abs=ch["revenue_abs"],
+            ))
 
     def wait(self, data_point) -> None:
         """Handle a NOTHING tick: check fills and stop-loss cancellations.

@@ -81,6 +81,7 @@ def main() -> None:
         stock,
         stock.fee,
         persist_path=shared_folder() + "live_tracker.json",
+        action_log_path=shared_folder() + "live_actions.jsonl",
     )
     robot.position.full_position = resolve_live_usdt()
     robot.run_instantly()
