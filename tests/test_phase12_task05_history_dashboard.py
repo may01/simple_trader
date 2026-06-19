@@ -184,12 +184,18 @@ class TestHistoryDashboardLayout:
         assert str(picker.max_date_allowed) == str(df.index.max().date())
         assert str(picker.date) == str(df.index.min().date())
 
-    def test_days_input_defaults(self, full_data):
+    def test_days_selector_defaults(self, full_data):
+        # Days control is a dropdown (the old number Input did not accept changes
+        # on this Dash version). Options are bounded to the dataset span; the
+        # default value must be one of them and the control non-clearable.
         d = HistoryDashboard(full_data)
         days = _find_component(d._app.layout, "days")
-        assert days.value == 7
-        assert days.min == 1
-        assert days.type == "number"
+        option_values = [o["value"] for o in days.options]
+        assert days.value in option_values
+        assert days.clearable is False
+        # 3-day fixture → 7 is not offered, so default falls back to full span (3).
+        assert days.value == 3
+        assert option_values == sorted(option_values)
 
 
 def _find_component(layout, target_id):
@@ -216,7 +222,7 @@ class TestRenderGroups:
         assert len(graphs) == 1
         assert graphs[0].figure is sentinel
         d.viewer.build_window_figure.assert_called_once_with(
-            pd.Timestamp("2024-01-01"), 2, tf=15, subplots=None
+            pd.Timestamp("2024-01-01"), 2, tf=15, subplots=None, show_actions=False
         )
 
     def test_none_start_date_returns_no_groups(self, full_data):

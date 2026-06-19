@@ -64,6 +64,51 @@ class BasePosition(ABC):
         # Exit target tracking
         self.close_idx: int = 0
 
+        # Lifecycle change log (Phase 14, Task 03) — raw, strategy-agnostic.
+        # Survives finalize() reset; drained by the robot each tick.
+        self.change_history: list = []
+
+    def _record_change(
+        self,
+        kind: str,
+        target_price: float,
+        executed_price: float,
+        was_stop_loss: bool = False,
+        revenue_pct: float = 0.0,
+        revenue_abs: float = 0.0,
+    ) -> None:
+        """Append one lifecycle change event to change_history.
+
+        Args:
+            kind: One of "OPEN", "CLOSE", "MOVE_STOP_LOSS", "STOP_LOSS".
+            target_price: Price target involved in the change.
+            executed_price: Fill price if known, else 0.0.
+            was_stop_loss: True when the close was stop-loss driven.
+            revenue_pct: Realised return fraction (set at finalize).
+            revenue_abs: Realised return in USD (set at finalize).
+        """
+        self.change_history.append({
+            "kind": kind,
+            "position_type": self.position_type,
+            "target_price": float(target_price),
+            "executed_price": float(executed_price),
+            "stop_loss_price": float(self.price_stop_loss),
+            "was_stop_loss": bool(was_stop_loss),
+            "revenue_pct": float(revenue_pct),
+            "revenue_abs": float(revenue_abs),
+            "open_time": float(self.open_time),
+        })
+
+    def drain_changes(self) -> list:
+        """Return accumulated changes and clear the buffer.
+
+        Returns:
+            The list of change dicts recorded since the last drain.
+        """
+        changes = self.change_history
+        self.change_history = []
+        return changes
+
     # ------------------------------------------------------------------
     # Abstract methods — must be implemented by LongPosition / ShortPosition
     # ------------------------------------------------------------------
@@ -128,6 +173,26 @@ class BasePosition(ABC):
         Short: cur_price >= price_stop_loss
         """
 
+    def current_target(self) -> float:
+        """Return the active take-profit target price (0.0 if none)."""
+        if not self.price_close:
+            return 0.0
+        idx = self.close_idx if self.close_idx < len(self.price_close) else -1
+        return self.price_close[idx]
+
+    def is_target_reached(self, cur_price: float) -> bool:
+        """Return True when price has reached the take-profit target.
+
+        Long:  cur_price >= target (price rose to target)
+        Short: cur_price <= target (price fell to target)
+        """
+        target = self.current_target()
+        if target <= 0.0:
+            return False
+        if self.position_type == POSITION_TYPE_LONG:
+            return cur_price >= target
+        return cur_price <= target
+
     # ------------------------------------------------------------------
     # Concrete shared methods
     # ------------------------------------------------------------------
@@ -149,6 +214,10 @@ class BasePosition(ABC):
         """
         if force or self.first_in_profit(price, self.price_stop_loss):
             self.price_stop_loss = price
+            # Record only genuine trailing moves; force=True is used internally
+            # by close() and would otherwise log a spurious change every exit.
+            if not force:
+                self._record_change("MOVE_STOP_LOSS", target_price=price, executed_price=0.0)
             return True
         return False
 
@@ -296,6 +365,18 @@ class BasePosition(ABC):
         revenue_abs = revenue_pct * self.full_position
 
         self.log_revenue(revenue_pct, revenue_abs)
+
+        # Attach realised P&L to the trailing close event (Phase 14, Task 03).
+        # change_history is intentionally NOT reset below — the robot drains it
+        # after finalize to capture this realised result.
+        if self.change_history and self.change_history[-1]["kind"] in ("CLOSE", "STOP_LOSS"):
+            self.change_history[-1]["revenue_pct"] = revenue_pct
+            self.change_history[-1]["revenue_abs"] = revenue_abs
+        else:
+            self._record_change(
+                "CLOSE", target_price=avg_close, executed_price=avg_close,
+                revenue_pct=revenue_pct, revenue_abs=revenue_abs,
+            )
 
         # Reset all state
         self.price_open = []

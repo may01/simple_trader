@@ -16,6 +16,7 @@ from constants import (
     STRATEGY_ACTION_MOVE_STOP_LOSS_LONG,
     STRATEGY_ACTION_MOVE_STOP_LOSS_SHORT,
     STRATEGY_ACTION_DO_STOP_LOSS,
+    POSITION_STATE_WAIT,
 )
 
 
@@ -54,6 +55,9 @@ class StrategyManager:
         """
         self.fee: float = fee
         self.strategies: list = []
+        # Per-tick scratch: action types fired before conflict resolution.
+        # Overwritten every check() — not state carried between ticks.
+        self.last_fired: list = []
 
     def register(self, strategy) -> None:
         """Register a strategy instance.
@@ -87,6 +91,7 @@ class StrategyManager:
             where action is the resolved winning action, or NOTHING if no
             consensus or empty strategies list.
         """
+        self.last_fired = []
         if not self.strategies:
             return (STRATEGY_ACTION_NOTHING, [], [], 0.0, 0)
 
@@ -99,8 +104,23 @@ class StrategyManager:
             if action != STRATEGY_ACTION_NOTHING:
                 results.append((action, open_prices, close_prices, stop_price, tf))
 
+        # Record pre-resolution firings (action types only) for the action log —
+        # captured BEFORE the position-validity filter so suppressed firings
+        # remain visible to the simulation's Action log.
+        self.last_fired = [r[0] for r in results]
+
+        # Position-validity filter (state-aware resolution): you cannot close or
+        # move a stop when flat, and cannot open while already holding. Without
+        # this, a CLOSE firing every tick starves OPENs and the position never
+        # opens. The Position would reject these anyway, but resolution must not
+        # spend the tick's single action slot on an action the position can't act on.
+        if position_state == POSITION_STATE_WAIT:
+            candidates = [r for r in results if r[0] in _OPEN_ACTIONS]
+        else:
+            candidates = [r for r in results if r[0] not in _OPEN_ACTIONS]
+
         # Resolve conflicts
-        return self._resolve(results)
+        return self._resolve(candidates)
 
     def _resolve(self, results: list) -> tuple:
         """Apply conflict resolution to collected strategy results.

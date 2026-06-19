@@ -159,23 +159,22 @@ class ChartRenderer:
         label: str = "",
         subplot: str = "price",
         size: int | None = None,
+        hovertext: list | None = None,
     ) -> None:
-        """Add a marker (Scatter) trace to the given subplot (price by default)."""
+        """Add a marker (Scatter) trace to the given subplot (price by default).
+
+        When *hovertext* is supplied (one entry per point), it is shown on hover
+        instead of the default x/y readout.
+        """
         row = fig._subplot_rows[subplot]
         marker = {"symbol": marker_symbol, "color": color}
         if size is not None:
             marker["size"] = size
-        fig.add_trace(
-            go.Scatter(
-                x=times,
-                y=prices,
-                mode="markers",
-                name=label,
-                marker=marker,
-            ),
-            row=row,
-            col=1,
-        )
+        scatter_kwargs = dict(x=times, y=prices, mode="markers", name=label, marker=marker)
+        if hovertext is not None:
+            scatter_kwargs["text"] = hovertext
+            scatter_kwargs["hoverinfo"] = "text"
+        fig.add_trace(go.Scatter(**scatter_kwargs), row=row, col=1)
 
     def draw_level(
         self,
