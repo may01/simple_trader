@@ -142,7 +142,13 @@ class Stock_Binance(StockInterface):
 
             for tf in requested_tfs:
                 if tf == base_min:
-                    df_tf = base_df[["open", "high", "low", "close", "volume"]].copy()
+                    # Keep taker_base_vol alongside OHLCV so LiveData can derive
+                    # {tf}_buy_volume for the volume indicators (the resample
+                    # branch preserves it too).
+                    base_cols = ["open", "high", "low", "close", "volume"]
+                    if "taker_base_vol" in base_df.columns:
+                        base_cols.append("taker_base_vol")
+                    df_tf = base_df[base_cols].copy()
                 else:
                     df_tf = self._resample_to_tf(base_df, base_min, tf)
 
@@ -365,7 +371,9 @@ class Stock_Binance(StockInterface):
                 return True
             filters = {f["filterType"]: f for f in symbol_info.get("filters", [])}
             lot = filters.get("LOT_SIZE")
-            notional = filters.get("MIN_NOTIONAL")
+            # Binance renamed the MIN_NOTIONAL filter to NOTIONAL; accept either
+            # so the live mainnet symbol (NOTIONAL) is not flagged invalid.
+            notional = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL")
             if lot is None or notional is None:
                 return True
             min_qty = float(lot["minQty"])

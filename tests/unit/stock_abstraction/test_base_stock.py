@@ -310,6 +310,28 @@ class TestResampleToTf:
         assert "close" in result.columns
         assert "volume" in result.columns
 
+    def test_resample_preserves_taker_base_vol(self):
+        """taker_base_vol must be summed through resampling (needed for
+        buy_volume in the live indicator path)."""
+        idx = pd.date_range("2024-01-01", periods=6, freq="1min")
+        df = pd.DataFrame(
+            {
+                "open": [1.0] * 6,
+                "high": [2.0] * 6,
+                "low": [0.5] * 6,
+                "close": [1.5] * 6,
+                "volume": [100.0] * 6,
+                "taker_base_vol": [10.0] * 6,
+            },
+            index=idx,
+        )
+        s = StockInterface()
+        result = s._resample_to_tf(df, 1, 3)
+        assert "taker_base_vol" in result.columns
+        # Two 3-min candles, each summing three 10.0 source values.
+        assert result["taker_base_vol"].iloc[0] == 30.0
+        assert result["taker_base_vol"].iloc[1] == 30.0
+
     def test_resample_single_candle_unchanged(self):
         """Single candle should resample to itself."""
         idx = pd.date_range("2024-01-01", periods=1, freq="1min")

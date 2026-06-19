@@ -185,6 +185,24 @@ class TestGetCandlesHistory:
             for col in ["open", "high", "low", "close", "volume"]:
                 assert col in df.columns, f"TF {tf} missing column '{col}'"
 
+    def test_candles_history_preserves_taker_base_vol(self, env_vars):
+        """taker_base_vol must survive both the base-min select and the resample
+        path, so LiveData.build_candles can derive {tf}_buy_volume for the
+        volume indicators. tf=1 hits the base-min branch; tf=5 the resample
+        branch. Regression for KeyError('1_buy_volume') on the live path."""
+        with patch("stocks.binance_stock.Client") as mock_cls:
+            mock_client = MagicMock()
+            mock_cls.return_value = mock_client
+            mock_client.get_historical_klines.return_value = _mock_klines(200)
+            s = Stock_Binance()
+            result = s.get_candles_history([1, 5], "link")
+        for tf in [1, 5]:
+            assert "taker_base_vol" in result[tf].columns, (
+                f"TF {tf} dropped taker_base_vol"
+            )
+            # Real signal, not all-zero: each source candle has taker_base_vol=50.
+            assert result[tf]["taker_base_vol"].sum() > 0
+
     def test_candles_history_float_columns(self, env_vars):
         """Numeric columns must be float64."""
         with patch("stocks.binance_stock.Client") as mock_cls:

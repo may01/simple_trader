@@ -280,6 +280,9 @@ class StockInterface:
             'low': 'min',
             'close': 'last',
             'volume': 'sum',
+            # taker_base_vol must survive resampling: LiveData derives
+            # {tf}_buy_volume from it for the volume indicators.
+            'taker_base_vol': 'sum',
         }
 
         # Build a resample rule: "5min", "1h", etc.

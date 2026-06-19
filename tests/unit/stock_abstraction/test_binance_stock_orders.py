@@ -256,6 +256,18 @@ def test_is_invalid_amount_info_fails(stock):
     assert result is True
 
 
+def test_is_invalid_amount_accepts_notional_filter(stock):
+    # Binance renamed MIN_NOTIONAL -> NOTIONAL (minNotional field). A valid
+    # amount under the NOTIONAL filter must pass. Regression: mainnet LINKUSDT
+    # ships NOTIONAL, so MIN_NOTIONAL-only lookup flagged every order invalid.
+    stock.client.get_symbol_info.return_value = {"filters": [
+        {"filterType": "LOT_SIZE", "minQty": "0.01", "maxQty": "9000", "stepSize": "0.01"},
+        {"filterType": "NOTIONAL", "minNotional": "5.0"},
+    ]}
+    # 5.0 qty * 8.0 price = 40 notional > 2*5; qty 5.0 > 2*0.01.
+    assert stock.is_invalid_amount(5.0, 8.0) is False
+
+
 # ------------------------------------------------------------------
 # funds()
 # ------------------------------------------------------------------
