@@ -69,12 +69,14 @@ class HistoryDashboard:
         days: int | None,
         tfs: list | None,
         subplots: list | None = None,
+        overlays: list | None = None,
         show_actions: bool = False,
     ) -> list:
         """Return one dcc.Graph per selected TF, ascending TF order. Never raises.
 
-        *subplots* is the shared oscillator-subplot selection applied to every
-        TF's figure. ``None`` keeps all subplots; ``[]`` hides them all.
+        *subplots* is the shared oscillator-subplot selection and *overlays*
+        the shared price-overlay-group selection, both applied to every TF's
+        figure. ``None`` keeps all; ``[]`` hides them all.
         *show_actions* overlays the latest simulation's actions on each chart.
         """
         try:
@@ -84,7 +86,7 @@ class HistoryDashboard:
             for tf in sorted(int(t) for t in tfs):
                 fig = self.viewer.build_window_figure(
                     pd.Timestamp(start_date), int(days), tf=tf, subplots=subplots,
-                    show_actions=show_actions,
+                    overlays=overlays, show_actions=show_actions,
                 )
                 graphs.append(
                     dcc.Graph(id={"type": "tf-chart", "tf": tf}, figure=fig)
@@ -112,6 +114,8 @@ class HistoryDashboard:
         tfs = self.viewer.available_tfs()
         initial = [self.tf] if self.tf in tfs else tfs[:1]
         subplot_names = self.viewer.available_subplots()
+        overlay_names = self.viewer.available_overlays()
+        default_overlays = self.viewer.default_overlays()
         day_opts = self._day_options()
         # Prefer a 7-day window; for shorter datasets show the full span.
         default_days = 7 if 7 in day_opts else day_opts[-1]
@@ -154,6 +158,14 @@ class HistoryDashboard:
                         ),
                         dcc.Checklist(
                             id="overlays",
+                            options=[
+                                {"label": ov, "value": ov} for ov in overlay_names
+                            ],
+                            value=default_overlays,
+                            inline=True,
+                        ),
+                        dcc.Checklist(
+                            id="actions",
                             options=[{"label": "actions", "value": "actions"}],
                             value=[],  # off by default
                             inline=True,
@@ -172,12 +184,15 @@ class HistoryDashboard:
                 Input("timeframes", "value"),
                 Input("subplots", "value"),
                 Input("overlays", "value"),
+                Input("actions", "value"),
             ],
         )
-        def update(start_date, days, tfs_selected, subplots_selected, overlays_selected):  # type: ignore[return]
+        def update(start_date, days, tfs_selected, subplots_selected,
+                   overlays_selected, actions_selected):  # type: ignore[return]
             return self._render_groups(
                 start_date, days, tfs_selected, subplots_selected,
-                show_actions=bool(overlays_selected and "actions" in overlays_selected),
+                overlays=overlays_selected,
+                show_actions=bool(actions_selected and "actions" in actions_selected),
             )
 
         return app

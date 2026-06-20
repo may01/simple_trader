@@ -131,17 +131,24 @@ class DataViewer:
 
     _DEFAULT_INDICATORS = ["rsi_14", "cci_14"]
 
-    # Price-axis overlays drawn on every window figure (skip-if-absent).
-    # Bollinger variants share one colour per variant; EMAs get distinct
-    # colours; SAR renders as markers, never a connected line.
-    _PRICE_OVERLAYS = [
-        "bb_upper_20_2", "bb_middle_20_2", "bb_lower_20_2",
-        "bb_upper_10_15", "bb_lower_10_15",
-        "bb_upper_20_3", "bb_lower_20_3",
-        "ema_7", "ema_14", "ema_25", "ema_50", "ema_100",
-        "sar_002_02",
-        "tgt_long", "sl_long", "tgt_short", "sl_short",
-    ]
+    # Toggleable price-axis overlay groups (skip-if-absent). Each group is one
+    # dashboard checkbox; its value is the list of field base names it draws.
+    # A Bollinger group ("bb_x_...") bundles the band pair/triple that share a
+    # colour; "ema" bundles every EMA line; "sar" renders as markers. Order
+    # drives checkbox order. Targets/stop-losses are always drawn (see below).
+    _OVERLAY_GROUPS = {
+        "bb_x_20_2": ["bb_upper_20_2", "bb_middle_20_2", "bb_lower_20_2"],
+        "bb_x_10_15": ["bb_upper_10_15", "bb_lower_10_15"],
+        "bb_x_20_3": ["bb_upper_20_3", "bb_lower_20_3"],
+        "ema": ["ema_7", "ema_14", "ema_25", "ema_50", "ema_100"],
+        "sar": ["sar_002_02"],
+    }
+
+    # Overlay groups unchecked on first load (still drawable via their toggle).
+    _DEFAULT_OVERLAYS_OFF = {"bb_x_10_15", "bb_x_20_3", "sar"}
+
+    # Target/stop-loss overlays — always drawn, never toggleable.
+    _TARGET_OVERLAYS = ["tgt_long", "sl_long", "tgt_short", "sl_short"]
 
     _OVERLAY_COLORS = {
         "bb_upper_20_2": "royalblue", "bb_middle_20_2": "royalblue",
@@ -354,6 +361,28 @@ class DataViewer:
                 subplots.append(sp)
         return subplots
 
+    def available_overlays(self) -> list[str]:
+        """Price-overlay group names whose backing columns exist in the wide df.
+
+        Order follows ``_OVERLAY_GROUPS``. A group is included when any of its
+        fields exists for at least one available TF, so the list is
+        TF-independent and usable as one control for all TFs.
+        """
+        tfs = self.available_tfs()
+        cols = set(self.full_data.df.columns)
+        return [
+            group
+            for group, fields in self._OVERLAY_GROUPS.items()
+            if any(f"{tf}_{f}" in cols for tf in tfs for f in fields)
+        ]
+
+    def default_overlays(self) -> list[str]:
+        """Overlay groups checked on first load — available minus the off set."""
+        return [
+            g for g in self.available_overlays()
+            if g not in self._DEFAULT_OVERLAYS_OFF
+        ]
+
     def build_window_figure(
         self,
         start: pd.Timestamp,
@@ -362,6 +391,7 @@ class DataViewer:
         tf: int | None = None,
         subplots: list[str] | None = None,
         show_actions: bool = False,
+        overlays: list[str] | None = None,
     ) -> go.Figure:
         """Build a figure for a date window of the wide DataFrame.
 
@@ -379,7 +409,10 @@ class DataViewer:
             subplots: Subplot names (see ``available_subplots()``) to keep;
                 indicators routed to any other subplot are dropped. ``None``
                 keeps everything; ``[]`` leaves only price and volume.
-                Price-axis indicators and overlays are never filtered.
+                Price-axis indicators are never filtered by this.
+            overlays: Price-overlay group names (see ``available_overlays()``)
+                to draw. ``None`` draws every group; ``[]`` draws none.
+                Target/stop-loss overlays are always drawn regardless.
         """
         tf = self.tf if tf is None else int(tf)
         start = pd.Timestamp(start)
@@ -409,7 +442,7 @@ class DataViewer:
                 if _indicator_subplot(i) is None or _indicator_subplot(i) in allowed
             ]
         fig = self._build_figure(df_slice, indicators, tf=tf, range_row=True)
-        self._draw_price_overlays(fig, df_slice, tf)
+        self._draw_price_overlays(fig, df_slice, tf, overlays)
         self._draw_rsi_class_markers(fig, window, tf)
         self._draw_label_markers(fig, window, tf)
         if show_actions:
@@ -675,10 +708,21 @@ class DataViewer:
         fig: go.Figure,
         df_slice: pd.DataFrame,
         tf: int,
+        overlays: list[str] | None = None,
     ) -> None:
-        """Draw Bollinger/EMA/SAR overlays on the price subplot. Skip-if-absent."""
+        """Draw Bollinger/EMA/SAR overlays on the price subplot. Skip-if-absent.
+
+        *overlays* selects which toggleable groups to draw (``None`` = all,
+        ``[]`` = none); target/stop-loss overlays are always drawn.
+        """
+        if overlays is None:
+            groups = list(self._OVERLAY_GROUPS)
+        else:
+            groups = [g for g in overlays if g in self._OVERLAY_GROUPS]
+        names = [f for g in groups for f in self._OVERLAY_GROUPS[g]]
+        names += self._TARGET_OVERLAYS
         times = list(df_slice.index)
-        for name in self._PRICE_OVERLAYS:
+        for name in names:
             col = f"{tf}_{name}"
             if col not in df_slice.columns:
                 continue
