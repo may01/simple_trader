@@ -29,6 +29,7 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
 
 from nn.device import resolve_device
 from nn.nn_model_spec import (
@@ -40,6 +41,41 @@ from nn.nn_model_spec import (
 
 # Per-target-kind head widths (per horizon).
 _HEAD_WIDTH = {"direction": 3, "label": 1, "regression": 1}
+
+
+class _EpochStats:
+    """Row-weighted accumulator for one epoch over minibatches.
+
+    Loss and per-target loss are weighted by batch row count, so the epoch
+    aggregate equals the full-batch mean when there is a single step. Accuracy
+    accumulates raw correct/count across batches.
+    """
+
+    def __init__(self) -> None:
+        self._loss_sum = 0.0
+        self._rows = 0
+        self._correct = 0.0
+        self._count = 0.0
+        self._per_target_sum: dict = {}
+
+    def add(self, loss, per_target, correct, count, rows) -> None:
+        self._loss_sum += loss * rows
+        self._rows += rows
+        self._correct += correct
+        self._count += count
+        for key, value in per_target.items():
+            self._per_target_sum[key] = self._per_target_sum.get(key, 0.0) + value * rows
+
+    def loss(self) -> float:
+        return self._loss_sum / self._rows if self._rows else 0.0
+
+    def accuracy(self) -> float:
+        return self._correct / self._count if self._count else 0.0
+
+    def per_target(self) -> dict:
+        if not self._rows:
+            return {}
+        return {key: value / self._rows for key, value in self._per_target_sum.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -305,10 +341,13 @@ class NNModel:
         ``spec.class_weight``. ``epoch_callback(epoch, metrics)`` may return a
         truthy stop signal (Optuna pruning) to end training early.
         """
-        self.build()
-
+        # Seed BEFORE build() so weight initialisation is reproducible too —
+        # not only the DataLoader shuffle. (Was seeded after build, leaving init
+        # dependent on ambient RNG state.)
         if self.spec.seed is not None:
             torch.manual_seed(self.spec.seed)
+
+        self.build()
 
         X_train, y_train, X_val, y_val = self._split_dataset(dataset)
         # Capture the normalisation manifest + feature_cols for self-contained
@@ -380,14 +419,29 @@ class NNModel:
     def _run_training(
         self, X_train, y_train, X_val, y_val, epoch_callback, device
     ) -> dict:
+        """Minibatched training: GPU holds one batch, not the whole split.
+
+        Tensors stay on CPU in the DataLoader; each batch is moved to ``device``
+        per step, so resident GPU memory scales with ``spec.batch_size`` rather
+        than dataset size. Loss/accuracy/per-target are row-weighted means over
+        batches, so a single-step epoch (``batch_size >= rows``) reproduces the
+        old full-batch numbers exactly.
+        """
         model = self.model
-        Xtr = torch.tensor(X_train, dtype=torch.float32, device=device)
-        ytr = torch.tensor(y_train, dtype=torch.float32, device=device)
-        Xva = torch.tensor(X_val, dtype=torch.float32, device=device)
-        yva = torch.tensor(y_val, dtype=torch.float32, device=device)
+
+        train_loader = self._make_loader(
+            X_train, y_train, shuffle=bool(getattr(self.spec, "shuffle_train", True))
+        )
+        # Validation is NEVER shuffled (order-invariant metrics, deterministic).
+        val_loader = self._make_loader(X_val, y_val, shuffle=False)
 
         optimizer = self._make_optimizer(model)
-        class_weights = self._class_weights(ytr)
+
+        # Class weights computed ONCE over the full train labels (global), not
+        # per batch — keeps the 'balanced' weighting stable across batch sizes.
+        full_ytr = torch.tensor(y_train, dtype=torch.float32, device=device)
+        class_weights = self._class_weights(full_ytr)
+        del full_ytr
 
         best_val = float("inf")
         epochs_no_improve = 0
@@ -396,30 +450,34 @@ class NNModel:
 
         for epoch in range(self.spec.epochs):
             model.train()
-            optimizer.zero_grad()
-            logits = model.head_logits(Xtr)
-            loss, per_target_tr = self._combined_loss(logits, ytr, class_weights)
-            loss.backward()
-            optimizer.step()
-
-            train_loss = float(loss.item())
-            train_acc = self._overall_accuracy(logits, ytr)
+            tr = _EpochStats()
+            for xb, yb in train_loader:
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
+                optimizer.zero_grad()
+                logits = model.head_logits(xb)
+                loss, per_target = self._combined_loss(logits, yb, class_weights)
+                loss.backward()
+                optimizer.step()
+                tr.add(float(loss.item()), per_target, *self._accuracy_counts(logits, yb), xb.shape[0])
 
             model.eval()
+            va = _EpochStats()
             with torch.no_grad():
-                val_logits = model.head_logits(Xva)
-                val_loss_t, per_target_va = self._combined_loss(
-                    val_logits, yva, class_weights
-                )
-                val_loss = float(val_loss_t.item())
-                val_acc = self._overall_accuracy(val_logits, yva)
+                for xb, yb in val_loader:
+                    xb = xb.to(device, non_blocking=True)
+                    yb = yb.to(device, non_blocking=True)
+                    logits = model.head_logits(xb)
+                    loss, per_target = self._combined_loss(logits, yb, class_weights)
+                    va.add(float(loss.item()), per_target, *self._accuracy_counts(logits, yb), xb.shape[0])
 
+            val_loss = va.loss()
             metrics = {
-                "loss": train_loss,
-                "accuracy": train_acc,
+                "loss": tr.loss(),
+                "accuracy": tr.accuracy(),
                 "val_loss": val_loss,
-                "val_accuracy": val_acc,
-                "per_target": self._merge_per_target(per_target_tr, per_target_va),
+                "val_accuracy": va.accuracy(),
+                "per_target": self._merge_per_target(tr.per_target(), va.per_target()),
             }
 
             if epoch_callback is not None:
@@ -439,6 +497,30 @@ class NNModel:
 
         self.is_trained = True
         return metrics
+
+    def _make_loader(self, X, y, *, shuffle: bool) -> DataLoader:
+        """Build a DataLoader over CPU tensors for one split.
+
+        num_workers=0: tensors are already materialised in RAM, so worker
+        processes add only fork overhead. When shuffling, a generator seeded by
+        ``spec.seed`` makes the per-epoch order reproducible.
+        """
+        ds = TensorDataset(
+            torch.tensor(np.asarray(X, dtype=np.float32), dtype=torch.float32),
+            torch.tensor(np.asarray(y, dtype=np.float32), dtype=torch.float32),
+        )
+        generator = None
+        if shuffle and self.spec.seed is not None:
+            generator = torch.Generator()
+            generator.manual_seed(int(self.spec.seed))
+        return DataLoader(
+            ds,
+            batch_size=max(int(self.spec.batch_size), 1),
+            shuffle=shuffle,
+            drop_last=False,
+            num_workers=0,
+            generator=generator,
+        )
 
     def _make_optimizer(self, model: nn.Module):
         name = self.spec.optimizer.lower()
@@ -508,11 +590,12 @@ class NNModel:
 
         return total, per_target
 
-    def _overall_accuracy(self, logits_list, y) -> float:
-        """Mean accuracy over classification heads (direction/label).
+    def _accuracy_counts(self, logits_list, y) -> tuple[float, float]:
+        """Return (correct, count) over classification heads (direction/label).
 
         Direction → argmax match; label → (sigmoid>0.5) match. Regression heads
-        do not contribute. Returns 0.0 when there are no classification heads.
+        do not contribute. Returned as raw counts so batches accumulate before
+        the ratio is taken.
         """
         correct = 0.0
         count = 0.0
@@ -530,6 +613,11 @@ class NNModel:
                 correct += float((pred == target_y).float().sum().item())
                 count += float(target_y.numel())
             offset += width
+        return correct, count
+
+    def _overall_accuracy(self, logits_list, y) -> float:
+        """Mean accuracy over classification heads. Returns 0.0 when none."""
+        correct, count = self._accuracy_counts(logits_list, y)
         return correct / count if count > 0 else 0.0
 
     @staticmethod

@@ -156,7 +156,7 @@ class NNModelSpec:
       Targets      — targets (output heads)
       Learning     — loss_fn, optimizer, learning_rate, weight_decay,
                      batch_size, epochs, validation_split, val_strategy,
-                     early_stopping_patience, class_weight
+                     early_stopping_patience, class_weight, shuffle_train
       Runtime      — device, seed  (excluded from spec_hash)
 
     spec_hash (property) — sha256 content-address; callers use [:8] for labels.
@@ -190,6 +190,7 @@ class NNModelSpec:
     val_strategy: str = "time_holdout"
     early_stopping_patience: int | None = 10
     class_weight: str = "balanced"
+    shuffle_train: bool = True
 
     # --- Runtime (excluded from spec_hash) ---
     device: str = "auto"

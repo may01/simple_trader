@@ -521,3 +521,113 @@ def test_split_dataset_fallback_when_splits_json_absent(tmp_path):
     model = NNModel(_direction_spec())
     # Should complete without error — fallback to time-holdout.
     model.train(dataset, epoch_callback=lambda e, m: None)
+
+
+# ---------------------------------------------------------------------------
+# Minibatched training (Task 13): GPU memory scales with batch, not dataset
+# ---------------------------------------------------------------------------
+
+
+def _count_optimizer_steps(monkeypatch) -> dict:
+    """Wrap NNModel._make_optimizer so the returned optimizer counts step()."""
+    counter = {"steps": 0}
+    real_make = NNModel._make_optimizer
+
+    def counting_make(self, model):
+        opt = real_make(self, model)
+        real_step = opt.step
+
+        def step(*args, **kwargs):
+            counter["steps"] += 1
+            return real_step(*args, **kwargs)
+
+        opt.step = step
+        return opt
+
+    monkeypatch.setattr(NNModel, "_make_optimizer", counting_make)
+    return counter
+
+
+def test_steps_per_epoch_equals_ceil_rows_over_batch(tmp_path, monkeypatch):
+    """One optimizer step per minibatch: ceil(n_train / batch_size) per epoch."""
+    import math
+
+    spec = _direction_spec(batch_size=8, epochs=1, early_stopping_patience=None)
+    d = tmp_path / "ds"
+    d.mkdir()
+    dataset = _write_dataset(str(d), spec, n=60)  # train rows = round(60*0.6) = 36
+
+    counter = _count_optimizer_steps(monkeypatch)
+    NNModel(spec).train(dataset, epoch_callback=lambda e, m: None)
+
+    assert counter["steps"] == math.ceil(36 / 8)  # 5, not 1 (full-batch)
+
+
+def test_batch_ge_rows_is_single_step(tmp_path, monkeypatch):
+    """batch_size >= n_train → one step/epoch (parity with old full-batch)."""
+    spec = _direction_spec(batch_size=1000, epochs=1, early_stopping_patience=None)
+    d = tmp_path / "ds"
+    d.mkdir()
+    dataset = _write_dataset(str(d), spec, n=60)
+
+    counter = _count_optimizer_steps(monkeypatch)
+    NNModel(spec).train(dataset, epoch_callback=lambda e, m: None)
+
+    assert counter["steps"] == 1
+
+
+def test_minibatch_training_reduces_train_loss(tmp_path):
+    """Over many epochs the minibatched loop drives train loss down (the model
+    learns/memorises the train split) — proves gradients actually flow per batch."""
+    spec = _direction_spec(batch_size=8, epochs=40, early_stopping_patience=None)
+    d = tmp_path / "ds"
+    d.mkdir()
+    dataset = _write_dataset(str(d), spec, n=60)
+
+    losses: list = []
+    NNModel(spec).train(dataset, epoch_callback=lambda e, m: losses.append(m["loss"]))
+
+    assert losses[-1] < losses[0]
+
+
+def test_training_deterministic_same_seed(tmp_path):
+    """Same seed + shuffle_train=True → identical per-epoch loss across two runs
+    (seeded weight init AND seeded batch shuffle)."""
+    spec = _direction_spec(
+        batch_size=8, epochs=3, seed=123, shuffle_train=True,
+        early_stopping_patience=None,
+    )
+    d = tmp_path / "ds"
+    d.mkdir()
+    dataset = _write_dataset(str(d), spec, n=60)
+
+    def run() -> list:
+        losses: list = []
+        NNModel(spec).train(dataset, epoch_callback=lambda e, m: losses.append(m["loss"]))
+        return losses
+
+    assert run() == run()
+
+
+def test_class_weights_computed_once_over_full_train(tmp_path, monkeypatch):
+    """Balanced class weights are derived ONCE from the full train labels, not
+    per batch and not per epoch."""
+    spec = _direction_spec(
+        batch_size=8, epochs=2, class_weight="balanced",
+        early_stopping_patience=None,
+    )
+    d = tmp_path / "ds"
+    d.mkdir()
+    dataset = _write_dataset(str(d), spec, n=60)  # n_train = 36
+
+    seen_rows: list = []
+    real = NNModel._class_weights
+
+    def spy(self, y):
+        seen_rows.append(int(y.shape[0]))
+        return real(self, y)
+
+    monkeypatch.setattr(NNModel, "_class_weights", spy)
+    NNModel(spec).train(dataset, epoch_callback=lambda e, m: None)
+
+    assert seen_rows == [36]  # once, full train rows — not per-batch(8) / per-epoch
