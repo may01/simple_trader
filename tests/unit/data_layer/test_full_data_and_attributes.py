@@ -170,14 +170,18 @@ class TestDataAttributes:
         assert "mean" in entry
         assert "std" in entry
 
-    def test_get_stats_returns_mean_std(self, wide_df_with_rsi, patched_stats_folder):
-        """get_stats() returns (mean, std) tuple for a known column."""
+    def test_get_stats_returns_robust_quad(self, wide_df_with_rsi, patched_stats_folder):
+        """get_stats() returns the robust (q01, q99, mean, std) tuple."""
         da = DataAttributes()
         feature_cols = ["15_rsi_ma8"]
         da.compute_nn_stats(wide_df_with_rsi, feature_cols)
-        mean, std = da.get_stats("15_rsi_ma8")
+        q01, q99, mean, std = da.get_stats("15_rsi_ma8")
+        assert isinstance(q01, float)
+        assert isinstance(q99, float)
         assert isinstance(mean, float)
         assert isinstance(std, float)
+        assert q01 <= q99
+        assert std >= 1e-8
 
     def test_get_stats_raises_on_unknown_col(self):
         """get_stats() raises KeyError for a column not in column_stats."""

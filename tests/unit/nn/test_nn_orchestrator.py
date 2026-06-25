@@ -54,7 +54,8 @@ def mock_checkpoint_manager(tmp_path):
 def mock_data_attributes():
     """Mock DataAttributes with stats."""
     da = MagicMock()
-    da.get_stats.side_effect = lambda col: (0.5, 1.0)  # mean=0.5, std=1.0
+    # Robust stats: (q01, q99, mean, std) — wide band so values never clip.
+    da.get_stats.side_effect = lambda col: (-1e9, 1e9, 0.5, 1.0)
     return da
 
 

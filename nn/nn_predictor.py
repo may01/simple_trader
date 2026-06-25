@@ -128,9 +128,10 @@ class NNPredictor:
                 )
                 fvalue = 0.0
 
-            # Normalize: (value - mean) / std
+            # Robust winsorised z-score: clip raw to [q01, q99], standardise,
+            # then clamp to [-4, +4] (same policy as compute_nn_stats).
             try:
-                mean, std = self.data_attributes.get_stats(col)
+                q01, q99, mean, std = self.data_attributes.get_stats(col)
             except (KeyError, AttributeError):
                 logger.warning(
                     f"NNPredictor: no stats for column '{col}'; using raw value"
@@ -141,7 +142,9 @@ class NNPredictor:
             if std == 0.0:
                 feature_vector.append(fvalue)
             else:
-                feature_vector.append((fvalue - mean) / std)
+                xc = min(max(fvalue, q01), q99)
+                z = (xc - mean) / std
+                feature_vector.append(min(max(z, -4.0), 4.0))
 
         last_idx = len(df) - 1
 

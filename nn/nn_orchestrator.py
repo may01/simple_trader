@@ -182,17 +182,21 @@ class NNOrchestrator:
             probs_neutral = np.full(n, np.nan)
             probs_down = np.full(n, np.nan)
 
-            # Build feature matrix — normalize per column
+            # Build feature matrix — robust winsorised z-score per column:
+            # clip raw to [q01, q99], standardise, clamp to [-4, +4]. NaNs pass
+            # through (rows with any NaN feature are masked out below).
             feature_matrix = np.full((n, len(feature_cols_for_tf)), np.nan, dtype="float32")
             for j, col in enumerate(feature_cols_for_tf):
                 if col not in df.columns:
                     continue
                 values = df[col].values.astype("float64")
-                mean, std = data_attributes.get_stats(col)
+                q01, q99, mean, std = data_attributes.get_stats(col)
                 if std == 0:
                     feature_matrix[:, j] = values
                 else:
-                    feature_matrix[:, j] = (values - mean) / std
+                    clipped = np.clip(values, q01, q99)
+                    z = (clipped - mean) / std
+                    feature_matrix[:, j] = np.clip(z, -4.0, 4.0)
 
             # Identify rows where ALL features are non-NaN
             valid_mask = ~np.isnan(feature_matrix).any(axis=1)

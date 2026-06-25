@@ -15,7 +15,8 @@ class DataAttributes:
     Two types of stats are managed:
     - ``rsi_classification.json``: RSI mean/std per TF, used by classification fields.
     - ``diff_stats.pkl``: Price diff mean/std per TF, used by target fields.
-    - ``column_stats``: per-column mean/std for NN feature normalisation (in-memory).
+    - ``column_stats``: per-column robust winsorised stats
+      ``{q01, q99, mean, std}`` for NN feature normalisation (in-memory).
     """
 
     _STAT_TFS: list[int] = [15, 60, 240, 1440]
@@ -250,7 +251,20 @@ class DataAttributes:
     # ------------------------------------------------------------------
 
     def compute_nn_stats(self, df: pd.DataFrame, feature_cols: list) -> None:
-        """Compute mean/std for each feature column using only closed-candle rows.
+        """Compute robust winsorised z-score stats per feature column.
+
+        This is the single global normalisation layer for NN features. For each
+        column (closed-candle rows only) it stores four values:
+
+        - ``q01 = x.quantile(0.01)``, ``q99 = x.quantile(0.99)`` on the RAW column
+        - ``xw = x.clip(q01, q99)`` — winsorise to the 1st–99th percentile band
+        - ``mean = xw.mean()``, ``std = max(xw.std(), 1e-8)``
+
+        Winsorising before estimating ``mean``/``std`` ties the scale to the
+        central mass so fat-tail spikes cannot inflate ``std``. The apply sites
+        clip raw to ``[q01, q99]``, z-score with these stats, then clamp to
+        ``[-4, +4]``. Stats are estimated on the train split only and reused
+        verbatim at val/holdout/live — no leakage, never recomputed.
 
         The TF is parsed from the column name prefix (e.g. ``"15_nn_rsi_ma8"``
         → tf=15).  Only rows where ``{tf}_is_closed == True`` are used.
@@ -274,13 +288,21 @@ class DataAttributes:
                 else:
                     series = df[col].dropna()
 
+            q01 = float(series.quantile(0.01))
+            q99 = float(series.quantile(0.99))
+            winsorised = series.clip(q01, q99)
             self.column_stats[col] = {
-                "mean": float(series.mean()),
-                "std": float(series.std()),
+                "q01": q01,
+                "q99": q99,
+                "mean": float(winsorised.mean()),
+                "std": max(float(winsorised.std()), 1e-8),
             }
 
     def get_stats(self, col: str) -> tuple:
-        """Return ``(mean, std)`` for *col*.
+        """Return ``(q01, q99, mean, std)`` for *col*.
+
+        These four values drive the robust apply path: clip raw to
+        ``[q01, q99]`` → ``(x - mean) / std`` → clamp to ``[-4, +4]``.
 
         Raises:
             KeyError: If *col* is not in ``column_stats``.
@@ -288,7 +310,12 @@ class DataAttributes:
         if col not in self.column_stats:
             raise KeyError(f"Column '{col}' not found in column_stats")
         entry = self.column_stats[col]
-        return float(entry["mean"]), float(entry["std"])
+        return (
+            float(entry["q01"]),
+            float(entry["q99"]),
+            float(entry["mean"]),
+            float(entry["std"]),
+        )
 
     # ------------------------------------------------------------------
     # Persistence

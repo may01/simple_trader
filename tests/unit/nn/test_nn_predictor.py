@@ -38,16 +38,18 @@ def mock_data_attributes():
     """Create a mock DataAttributes with predefined stats."""
     attr = MagicMock()
 
-    # Mock get_stats to return (mean, std) for feature columns
+    # Mock get_stats to return robust (q01, q99, mean, std) for feature columns.
+    # Bands are wide enough that the test values never clip, so the winsorised
+    # z-score reduces to (value - mean) / std for these inputs.
     def get_stats_impl(col):
         stats_map = {
-            "15_col1": (100.0, 10.0),
-            "15_col2": (50.0, 5.0),
-            "60_col1": (100.0, 10.0),
-            "60_col2": (50.0, 5.0),
-            "15_col_zero_std": (100.0, 0.0),  # std=0 case
+            "15_col1": (-1e9, 1e9, 100.0, 10.0),
+            "15_col2": (-1e9, 1e9, 50.0, 5.0),
+            "60_col1": (-1e9, 1e9, 100.0, 10.0),
+            "60_col2": (-1e9, 1e9, 50.0, 5.0),
+            "15_col_zero_std": (-1e9, 1e9, 100.0, 0.0),  # std=0 case
         }
-        return stats_map.get(col, (0.0, 1.0))
+        return stats_map.get(col, (-1e9, 1e9, 0.0, 1.0))
 
     attr.get_stats = get_stats_impl
     return attr
@@ -200,6 +202,33 @@ def test_compute_uses_zero_when_std_is_zero(
         models, mock_data_attributes, ["15_col_zero_std"]
     )
 
+    predictor.compute(dp, 15)
+
+    assert model.run.call_count == 1
+
+
+def test_compute_winsorises_and_clamps(mock_data_point):
+    """A value far beyond q99 clips to q99 then clamps the z-score at +4.0."""
+    dp, dfs = mock_data_point
+
+    # narrow band [q01,q99]=[0,10], mean=5, std=1 → after clip to q99=10,
+    # z=(10-5)/1=5 → clamped to +4.0
+    attr = MagicMock()
+    attr.get_stats = lambda col: (0.0, 10.0, 5.0, 1.0)
+
+    dp.get = lambda col, tf, shift=0: {("15_col1", 15, 0): 1000.0}.get((col, tf, shift))
+
+    model = MagicMock(spec=NNModel)
+    model.run = MagicMock()
+
+    def run_side_effect(features):
+        np.testing.assert_array_almost_equal(features, [4.0])
+        return np.array([0.5, 0.3, 0.2])
+
+    model.run.side_effect = run_side_effect
+
+    models = {"15": model}
+    predictor = NNPredictor(models, attr, ["15_col1"])
     predictor.compute(dp, 15)
 
     assert model.run.call_count == 1
