@@ -111,6 +111,7 @@ class NNOrchestrator:
         data_attributes: DataAttributes,
         spec: Optional[NNModelSpec] = None,
         epoch_callback: Optional[Callable[[str, int, dict], object]] = None,
+        promote: bool = True,
     ) -> dict:
         """Train one NNModel per group; return {group_key: final_metrics}.
 
@@ -124,6 +125,14 @@ class NNOrchestrator:
 
         ``epoch_callback`` is ``(group_key, epoch, metrics)``; it is WRAPPED to
         adapt NNModel's ``(epoch, metrics)`` callback (injecting group_key).
+
+        ``promote`` is threaded into ``CheckpointManager.save``. The default
+        ``True`` preserves the STANDALONE single-shot behaviour: a one-off
+        ``train()`` (no TrainingLoop) force-promotes each group's ``_best.pt``.
+        The TrainingLoop passes ``promote=False`` so per-trial training saves
+        an epoch checkpoint WITHOUT force-promoting ``_best.pt``; the loop's
+        holdout gate (``_maybe_promote``) is then the SOLE promoter, keeping
+        saved weights and ``best.json`` from diverging across trials.
 
         Standalone single-shot: no TrainingLoop. ``mode='by_indicator'`` defers
         to ``dataset.groups`` (raises NotImplementedError) per the brief.
@@ -149,12 +158,20 @@ class NNOrchestrator:
                 model_name=group_key,
                 mode="max",
             )
+            if not promote:
+                # Loop-driven trial: the TrainingLoop's holdout gate is the SOLE
+                # promoter (it owns ``_best.pt``). Neutralise this manager's
+                # auto-promote gate so a per-trial ``val_accuracy`` improvement
+                # cannot silently overwrite ``_best.pt`` behind the loop's back
+                # (which would diverge from ``best.json``). We still write the
+                # epoch checkpoint below.
+                cm.best_metric = float("inf")
             cm.save(
                 model,
                 metrics,
                 epoch=spec.epochs,
                 manifest=group_ds.manifest,
-                promote=True,
+                promote=promote,
             )
 
             self.trained_models[group_key] = model

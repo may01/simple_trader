@@ -273,10 +273,17 @@ class TrainingLoop:
         self._maybe_promote(spec, holdout, trial_id)
 
     def _train_with_oom_retry(self, spec, df, data_attributes, prune_cb) -> dict:
-        """Train; on CUDA OOM retry ONCE on CPU before letting it propagate."""
+        """Train; on CUDA OOM retry ONCE on CPU before letting it propagate.
+
+        ``promote=False`` so per-trial training saves an epoch checkpoint but
+        does NOT force-promote ``_best.pt``. The loop's holdout gate
+        (``_maybe_promote``) is the SOLE promoter, so a worse later trial can
+        never overwrite the genuinely-best ``_best.pt`` and diverge from
+        ``best.json``.
+        """
         try:
             return self.orchestrator.train(
-                df, data_attributes, spec, epoch_callback=prune_cb
+                df, data_attributes, spec, epoch_callback=prune_cb, promote=False
             )
         except RuntimeError as exc:
             if not self._is_cuda_oom(exc):
@@ -287,7 +294,7 @@ class TrainingLoop:
             )
             cpu_spec = dataclasses.replace(spec, device="cpu")
             return self.orchestrator.train(
-                df, data_attributes, cpu_spec, epoch_callback=prune_cb
+                df, data_attributes, cpu_spec, epoch_callback=prune_cb, promote=False
             )
 
     def _maybe_promote(self, spec: NNModelSpec, holdout: dict, trial_id: str) -> None:

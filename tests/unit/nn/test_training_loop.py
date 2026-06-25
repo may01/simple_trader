@@ -15,6 +15,7 @@ synthetic dataset; targeted tests use fakes to isolate caps / failure / degrade
 
 from __future__ import annotations
 
+import copy
 import os
 from unittest.mock import MagicMock
 
@@ -26,7 +27,9 @@ optuna = pytest.importorskip("optuna")  # skip whole file in the base image
 
 from indicators import DataAttributes
 from indicators.labels import _fmt
+from nn.checkpoint_manager import CheckpointManager
 from nn.experiment_tracker import ExperimentTracker
+from nn.nn_model import NNModel
 from nn.nn_model_spec import LayerSpec, NNModelSpec, TargetSpec
 from nn.nn_orchestrator import NNOrchestrator
 from nn.training_loop import RunResult, TrainingLoop
@@ -393,7 +396,7 @@ def test_same_seed_yields_same_suggested_params():
     def make_loop(sink):
         orch, tracker = _fake_orch_tracker()
 
-        def _record_spec(df, da, spec, epoch_callback=None):
+        def _record_spec(df, da, spec, epoch_callback=None, promote=True):
             sink.append(spec)
             return {"all": {"val_accuracy": 0.5, "loss": 0.2}}
 
@@ -436,3 +439,107 @@ def test_min_mode_creates_minimize_study(real_setup, data_attributes, tmp_path):
     loop = TrainingLoop(orch, tracker_min, None, SEARCH_CONFIG)
     result = loop.run(make_wide_df(), data_attributes)
     assert isinstance(result, RunResult)
+
+
+# =====================================================================
+# Promotion gate — saved _best.pt weights must NEVER diverge from best.json
+# =====================================================================
+
+
+def _flat_state(state_dict) -> np.ndarray:
+    """Flatten a model state_dict into one 1-D float array for comparison."""
+    parts = [np.asarray(v.detach().cpu().numpy()).ravel() for v in state_dict.values()]
+    return np.concatenate(parts) if parts else np.array([])
+
+
+def test_worse_last_trial_does_not_overwrite_best_pt(real_setup, data_attributes):
+    """The promotion gate must gate the SAVED weights, not just best.json.
+
+    Runs two trials where the LAST trial scores WORSE on holdout than the first.
+    The incumbent is therefore trial 0. After the run we RELOAD ``all_best.pt``
+    from disk and assert its weights + metric match the INCUMBENT (trial 0), NOT
+    the last trial.
+
+    FAILS on the old force-promote code: ``orchestrator.train(promote=True)``
+    overwrites ``all_best.pt`` with the LAST trial's weights every call, so disk
+    diverges from ``best.json`` (which the holdout gate keeps on trial 0).
+    PASSES after the fix: the loop trains with ``promote=False`` and the holdout
+    gate (``_maybe_promote``) is the sole promoter.
+    """
+    orch, tracker, _, ckpt = real_setup
+
+    # Capture each trial's trained-model weights right after training, before the
+    # next trial overwrites ``trained_models['all']``.
+    trial_states: list[np.ndarray] = []
+    real_train = orch.train
+
+    def capturing_train(*args, **kwargs):
+        result = real_train(*args, **kwargs)
+        model = orch.trained_models["all"]
+        trial_states.append(_flat_state(model.model.state_dict()))
+        return result
+
+    orch.train = capturing_train
+
+    cfg = dict(SEARCH_CONFIG)
+    cfg["max_rounds"] = 1
+    cfg["trials_per_round"] = 2
+
+    loop = TrainingLoop(orch, tracker, None, cfg)
+
+    # Force a STRICTLY DECREASING holdout sequence: trial 0 best, trial 1 worse.
+    holdout_scores = iter([0.90, 0.10])
+
+    def fake_holdout(spec, df, da):
+        s = next(holdout_scores)
+        return {"holdout_score": s, "score": s, "n_rows": 10, "per_target": {}}
+
+    loop.evaluate_on_holdout = fake_holdout
+
+    loop.run(make_wide_df(), data_attributes)
+
+    # Sanity: two distinct trials were trained with distinguishable weights
+    # (different architecture and/or different parameter values).
+    assert len(trial_states) == 2
+    distinguishable = (
+        trial_states[0].shape != trial_states[1].shape
+        or not np.array_equal(trial_states[0], trial_states[1])
+    )
+    assert distinguishable, "trials produced identical weights; cannot distinguish incumbent"
+
+    # best.json points at the incumbent = trial 0 (holdout 0.90).
+    incumbent = tracker.best("all")
+    assert incumbent is not None
+    inc_holdout = incumbent["holdout"]
+    inc_score = inc_holdout.get("holdout_score", inc_holdout.get("score"))
+    assert inc_score == pytest.approx(0.90)
+
+    # RELOAD all_best.pt from disk and compare against the captured weights.
+    reloaded = NNModel(loop.base_spec)
+    cm = CheckpointManager(ckpt, model_name="all", mode="max")
+    loaded = cm.load_best(reloaded)
+    assert loaded is not None, "no all_best.pt on disk"
+    best_state = _flat_state(reloaded.model.state_dict())
+
+    # The promoted weights on disk must equal the INCUMBENT (trial 0), not the
+    # worse LAST trial — and best.json must agree with the saved weights.
+    assert best_state.shape == trial_states[0].shape, (
+        "all_best.pt holds the LAST trial's architecture, not the incumbent's"
+    )
+    np.testing.assert_array_equal(
+        best_state,
+        trial_states[0],
+        err_msg="all_best.pt diverged from best.json (holds the worse last trial)",
+    )
+
+    # And the saved bundle's metric is the incumbent's holdout, not the last's.
+    best_metric = reloaded.metrics.get("holdout_score") if hasattr(reloaded, "metrics") else None
+    if best_metric is None:
+        # Fall back to reading the bundle directly.
+        import torch
+
+        bundle = torch.load(
+            os.path.join(ckpt, "all_best.pt"), map_location="cpu", weights_only=False
+        )
+        best_metric = bundle["metrics"].get("holdout_score")
+    assert best_metric == pytest.approx(0.90)
