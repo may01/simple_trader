@@ -1,0 +1,56 @@
+# nn_spec.yaml — default NNModelSpec for simple_trader Phase-11 NN module.
+#
+# Consumed by: NNModelSpec.from_yaml("configs/nn_spec.yaml")
+# All fields are optional except name; absent keys take dataclass defaults.
+#
+# Indicator bare names (no {tf}_ prefix) — Task 03 adds the timeframe prefix.
+# Profit-label columns are named like 15_plong_n1_m1_x0p3 (float 0.3 → 0p3).
+
+name: nn_default
+
+timeframes: [15, 60]
+
+indicators:
+  - rsi_14
+  - logret
+  - range_atr
+  - ema_50_minus_close
+  - macd_12_26_9_slope
+  - vol_regime
+
+history_points: 32
+
+grouping:
+  mode: single
+
+layers:
+  - kind: dense
+    units: 128
+  - kind: dense
+    units: 64
+
+activation: relu
+dropout: 0.1
+
+targets:
+  - name: dir15
+    kind: direction
+    horizons: [1]
+    label_tf: 15
+    label_m: 1.0
+    label_x: 0.3
+    strict: false
+
+loss_fn: auto
+optimizer: adam
+learning_rate: 0.001
+weight_decay: 0.0
+batch_size: 32
+epochs: 50
+validation_split: 0.2
+val_strategy: time_holdout
+early_stopping_patience: 10
+class_weight: balanced
+
+device: auto
+seed: 0
