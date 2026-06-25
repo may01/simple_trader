@@ -40,20 +40,20 @@ services:
     env_file: ${NN_TRAIN_ENV:-configs/nn_train_dataset.env}
     volumes:
       - .:/code
-      - simple_trader_vol:/trader_data:ro
+      # RW: training writes its progress file (shared/training_state.pkl) under
+      # /trader_data and never mutates df_with_indicators.pkl. Weights go to _long.
+      # See DECISIONS-LOG D8.
+      - simple_trader_vol:/trader_data
       - simple_trader_vol_long:/trader_data_long
     environment:
       NN_DEVICE: ${NN_DEVICE:-auto}
       NN_DATA_ROOT: ${NN_DATA_ROOT:-/trader_data}
       NN_ARTEFACT_ROOT: ${NN_ARTEFACT_ROOT:-/trader_data_long}
       NUM_WORKERS: ${NUM_WORKERS:-4}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # GPU is OPT-IN (CPU by default so the service starts on a host with no GPU/driver).
+    # On a GPU host: `docker compose -f docker-compose.yml -f docker-compose.gpu.yml run nn-train`.
+    # A hard `deploy.resources.reservations.devices` here would fail the nvidia prestart
+    # hook on a driverless host. See DECISIONS-LOG D10.
 
   simulate-nn:
     build:
@@ -63,7 +63,10 @@ services:
     env_file: ${NN_TRAIN_ENV:-configs/nn_train_dataset.env}
     volumes:
       - .:/code
-      - simple_trader_vol:/trader_data:ro
+      # infer writes the additive df_with_nn.pkl beside df_with_indicators.pkl
+      # (never mutates df_with_indicators.pkl), so the data volume is RW here.
+      # Training (nn-train) keeps /trader_data RO. See DECISIONS-LOG D8.
+      - simple_trader_vol:/trader_data
       - simple_trader_vol_long:/trader_data_long
     environment:
       NN_DEVICE: ${NN_DEVICE:-auto}
@@ -72,13 +75,7 @@ services:
       NUM_WORKERS: ${NUM_WORKERS:-4}
       NN_INFER_DATASET: ${NN_INFER_DATASET:-}
       NN_INFER_CHECKPOINT: ${NN_INFER_CHECKPOINT:-best}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # GPU opt-in via docker-compose.gpu.yml (see nn-train note + DECISIONS-LOG D10).
 
   live:
     image: simple_trader

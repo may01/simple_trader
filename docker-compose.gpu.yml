@@ -1,0 +1,27 @@
+# GPU override for the NN training/inference services.
+#
+# The base docker-compose.yml runs nn-train / simulate-nn CPU-only so they start
+# on any host (no GPU/driver required). On a GPU host, layer this file to request
+# the NVIDIA device:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml run --rm nn-train
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml run --rm simulate-nn
+#
+# resolve_device("auto") then picks CUDA automatically (nn/device.py). See DECISIONS-LOG D10.
+services:
+  nn-train:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+  simulate-nn:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
