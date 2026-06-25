@@ -17,7 +17,8 @@
 FROM simple_trader
 
 # Add NN-training extras that must not appear in the always-on trading image.
-RUN pip install --no-cache-dir optuna==4.3.0
+# anthropic: required by NNStrategist default client (LLM search steering).
+RUN pip install --no-cache-dir optuna==4.3.0 anthropic
 
 # Source code is mounted at /code via compose volume — NOT copied into image.
 # PYTHONPATH and WORKDIR are inherited from simple_trader base.
