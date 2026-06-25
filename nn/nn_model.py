@@ -47,7 +47,7 @@ _HEAD_WIDTH = {"direction": 3, "label": 1, "regression": 1}
 # ---------------------------------------------------------------------------
 
 
-def _spec_to_dict(spec: NNModelSpec) -> dict:
+def spec_to_dict(spec: NNModelSpec) -> dict:
     """Plain-dict form of a spec (nested dataclasses → dicts)."""
     return asdict(spec)
 
@@ -614,7 +614,7 @@ class NNModel:
             raise RuntimeError("model has not been built yet")
         bundle = {
             "state_dict": self.model.state_dict(),
-            "spec": _spec_to_dict(self.spec),
+            "spec": spec_to_dict(self.spec),
             "manifest": self.manifest,
             "feature_cols": self.feature_cols,
         }

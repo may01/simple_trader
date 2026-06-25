@@ -19,7 +19,7 @@ from pathlib import Path
 
 import torch
 
-from nn.nn_model import NNModel
+from nn.nn_model import NNModel, spec_to_dict
 
 
 class CheckpointManager:
@@ -40,6 +40,9 @@ class CheckpointManager:
             mode: "max" (higher is better) or "min" (lower is better).
             metric: Key in the metrics dict used for auto-promote comparison.
         """
+        if mode not in ("max", "min"):
+            raise ValueError(f"mode must be 'max' or 'min', got {mode!r}")
+
         self.checkpoint_dir = checkpoint_dir
         self.model_name = model_name
         self.mode = mode
@@ -47,6 +50,16 @@ class CheckpointManager:
         self.best_metric = float("-inf") if mode == "max" else float("+inf")
 
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
+
+        # Reconstruct best_metric from an existing _best.pt so that a restarted
+        # manager never overwrites a good checkpoint on the first save.
+        best_path = os.path.join(checkpoint_dir, f"{model_name}_best.pt")
+        if os.path.isfile(best_path):
+            try:
+                bundle = torch.load(best_path, map_location="cpu", weights_only=False)
+                self.best_metric = bundle["metrics"][self.metric]
+            except Exception:
+                pass  # corrupt file or missing key → keep the -inf/+inf default
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -71,17 +84,12 @@ class CheckpointManager:
 
     def _build_bundle(self, model: NNModel, metrics: dict, manifest: dict) -> dict:
         """Collect the self-contained checkpoint bundle from the model."""
-        # model.save_model writes to a file; we need the dict directly.
-        # Re-use the same fields save_model uses (state_dict, spec, manifest,
-        # feature_cols) and add metrics.
-        from nn.nn_model import _spec_to_dict
-
         if model.model is None:
             raise RuntimeError("model has not been built yet")
 
         return {
             "state_dict": model.model.state_dict(),
-            "spec": _spec_to_dict(model.spec),
+            "spec": spec_to_dict(model.spec),
             "manifest": manifest,
             "feature_cols": model.feature_cols,
             "metrics": metrics,

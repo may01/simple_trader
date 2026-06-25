@@ -656,13 +656,44 @@ def test_mode_min_promotes_on_lower_value(trained_model, temp_checkpoint_dir):
 
 
 def test_best_metric_reconstructable_after_restart(trained_model, temp_checkpoint_dir):
-    """Verify the stored metrics in _best.pt can restore best_metric on restart."""
-    import torch
+    """A second CheckpointManager on the same dir reads best_metric from _best.pt.
 
-    cm = CheckpointManager(temp_checkpoint_dir)
-    cm.save(trained_model, {"val_accuracy": 0.88}, epoch=1, manifest=SAMPLE_MANIFEST)
+    After restart, a worse model must NOT overwrite _best.pt.
+    """
+    # First manager: save a good model and promote it to _best.pt
+    cm1 = CheckpointManager(temp_checkpoint_dir)
+    cm1.save(trained_model, {"val_accuracy": 0.88}, epoch=1, manifest=SAMPLE_MANIFEST)
+    assert cm1.best_metric == 0.88
 
-    # Simulate restart: new manager reads from the stored bundle
     best_path = os.path.join(temp_checkpoint_dir, "model_best.pt")
+    stat_before = os.stat(best_path)
+
+    # Second manager on the same dir: must reconstruct best_metric = 0.88
+    cm2 = CheckpointManager(temp_checkpoint_dir)
+    assert cm2.best_metric == 0.88, (
+        f"Restarted manager should read best_metric=0.88 from _best.pt, got {cm2.best_metric}"
+    )
+
+    # Save a WORSE model (no promote=True) — _best.pt must NOT be overwritten
+    time.sleep(0.01)
+    cm2.save(trained_model, {"val_accuracy": 0.50}, epoch=2, manifest=SAMPLE_MANIFEST)
+    stat_after = os.stat(best_path)
+    assert stat_after.st_mtime == stat_before.st_mtime, (
+        "_best.pt must not be overwritten by a worse model after manager restart"
+    )
+
+    # Verify _best.pt still holds the original metric
+    import torch
     bundle = torch.load(best_path, weights_only=False)
     assert bundle["metrics"]["val_accuracy"] == 0.88
+
+
+# ---------------------------------------------------------------------------
+# 35. Invalid mode raises ValueError
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_mode_raises(temp_checkpoint_dir):
+    """CheckpointManager with mode other than 'max'/'min' must raise ValueError."""
+    with pytest.raises(ValueError, match="mode"):
+        CheckpointManager(temp_checkpoint_dir, mode="foo")
