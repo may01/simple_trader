@@ -8,7 +8,8 @@ def test_compose_file_has_all_services():
     with open(os.path.join(PROJECT_ROOT, "docker-compose.yml")) as f:
         cfg = yaml.safe_load(f)
     services = set(cfg["services"].keys())
-    required = {"graber","ohlc_gen","simulate","prepare-nn-data","nn-train","simulate-nn","live","view-sim","view-full","view-live"}
+    # prepare-nn-data removed in phase-11 (NN grouping is internal to NNOrchestrator.train)
+    required = {"graber","ohlc_gen","simulate","nn-train","simulate-nn","live","view-sim","view-full","view-live"}
     assert required == services
 
 
