@@ -293,9 +293,11 @@ class Trainer:
         from helpers import wide_df_path  # lazy
         from nn.nn_orchestrator import NNOrchestrator  # lazy
 
-        # Default dataset = the dir CONTAINING df_with_indicators.pkl.
-        dataset = os.getenv("NN_INFER_DATASET", os.path.dirname(wide_df_path()))
-        checkpoint_id = os.getenv("NN_INFER_CHECKPOINT", "best")
+        # Default dataset = the dir CONTAINING df_with_indicators.pkl. Compose sets
+        # NN_INFER_DATASET to an EMPTY string by default, so treat empty as unset
+        # (`os.getenv(..., default)` would otherwise return "" and skip the default).
+        dataset = os.getenv("NN_INFER_DATASET") or os.path.dirname(wide_df_path())
+        checkpoint_id = os.getenv("NN_INFER_CHECKPOINT") or "best"
 
         orch = NNOrchestrator.from_trainer(self.pair, self)
         result = orch.run_inference_dataset(
