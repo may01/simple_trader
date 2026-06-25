@@ -1,0 +1,45 @@
+# nn_search.yaml — search_config for the agentic NN TrainingLoop (Phase-11).
+#
+# Consumed by: Trainer._run_train_nn() in NN_TRAIN_MODE=search (the default),
+# which loads this with yaml.safe_load and hands it to TrainingLoop. Turns
+# nn_train into a "search for a better model": Optuna samples/prunes numeric
+# knobs within `search_space`, an optional NNStrategist (LLM) steers scope.
+#
+# MODEST defaults — fast, bounded, reproducible. Scale rounds/trials/caps up for
+# a real investigation. Per-run caps stop the loop at the FIRST cap reached.
+#
+# Cap overrides (read from env in Trainer when present, else the value here):
+#   NN_MAX_ROUNDS, NN_TRIALS_PER_ROUND, NN_MAX_WALL_CLOCK_S, NN_MAX_COMPUTE
+# study_name / strategist toggle are owned by the Trainer (NN_STUDY /
+# NN_STRATEGIST), NOT this file.
+
+# How many propose -> Optuna study -> review rounds to run.
+max_rounds: 2
+
+# Optuna trials per round (each trial = one concrete spec trained + scored).
+trials_per_round: 3
+
+# Optuna sampler + pruner (the loop reads these names).
+sampler: tpe
+pruner: median
+
+# Per-run caps. Whichever is hit first stops the loop regardless of the
+# strategist. max_compute = total trials across all rounds; null = unbounded
+# (bounded only by max_rounds * trials_per_round and the wall-clock cap).
+max_wall_clock_s: 1800
+max_compute: null
+
+# Promotion margin: minimum holdout improvement over the incumbent to promote.
+# 0.0 = any strict improvement promotes (>= comparison in the tracker).
+margin: 0.0
+
+# Seed for reproducibility (spec.seed + Optuna TPE sampler seed).
+seed: 0
+
+# Numeric search space — hard bounds Optuna samples within (and the clamp limits
+# the strategist cannot exceed). [lo, hi] per knob.
+search_space:
+  lr: [1.0e-4, 1.0e-2]
+  depth: [1, 3]
+  units: [16, 64]
+  dropout: [0.0, 0.3]

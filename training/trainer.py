@@ -245,11 +245,23 @@ class Trainer:
         }
 
     def _run_train_nn(self) -> None:
-        """Train the NN via NNOrchestrator.from_trainer (nn/, Phase 11).
+        """Train the NN (nn/, Phase 11).
+
+        Two modes, selected by ``NN_TRAIN_MODE`` (default ``"search"``):
+
+        - ``"search"`` (default): NN training is a *search for a better model*.
+          The agentic ``TrainingLoop`` (Optuna sampling/pruning + an OPTIONAL
+          ``NNStrategist`` LLM) trains many candidate specs and promotes the best
+          on a time-ordered holdout via the ``ExperimentTracker``. This is the
+          "investigation" capability.
+        - ``"single"``: the PROVEN single-shot path — one ``orch.train`` over the
+          base spec with a group-keyed epoch callback. Kept reachable so the
+          minimal training behaviour is always available.
 
         The orchestrator owns all architecture/grouping/timeframe/target
-        knowledge (configs/nn_spec.yaml). Trainer only loads the dataset df +
-        DataAttributes and pickles group-keyed epoch progress.
+        knowledge (configs/nn_spec.yaml); the search_config (configs/nn_search.yaml)
+        owns the search caps + numeric bounds. All NN imports stay lazy so the
+        base image (no optuna) can import this module and run non-NN RUN_TYPEs.
         """
         import pandas as pd  # lazy
         from helpers import data_attributes_path, shared_folder, wide_df_path  # lazy
@@ -260,6 +272,21 @@ class Trainer:
         data_attributes = DataAttributes.load(data_attributes_path())
 
         orch = NNOrchestrator.from_trainer(self.pair, self)
+
+        mode = os.getenv("NN_TRAIN_MODE", "search").strip().lower()
+        if mode == "single":
+            self._run_train_nn_single(orch, df, data_attributes)
+        else:
+            self._run_train_nn_search(orch, df, data_attributes)
+
+    def _run_train_nn_single(self, orch, df, data_attributes) -> None:
+        """Single-shot NN training (NN_TRAIN_MODE=single): one orch.train pass.
+
+        Preserves the proven behaviour: train the base spec once with a
+        group-keyed epoch callback that pickles
+        ``{"phase": "nn_train", "group", "epoch", "metrics"}`` progress.
+        """
+        from helpers import shared_folder  # lazy
 
         shared = shared_folder()
         os.makedirs(shared, exist_ok=True)
@@ -281,6 +308,116 @@ class Trainer:
         train_metrics = orch.train(df, data_attributes, epoch_callback=epoch_callback)
 
         self.metadata["train_nn"] = train_metrics or {}
+
+    def _run_train_nn_search(self, orch, df, data_attributes) -> None:
+        """Agentic NN search (NN_TRAIN_MODE=search, the default).
+
+        Wires the hybrid ``TrainingLoop`` (Optuna + optional ``NNStrategist``):
+        resolve the search_config (configs/nn_search.yaml), construct an
+        ExperimentTracker over ``{nn_artefact_root(pair)}/tracking``, build the
+        loop, and ``loop.run(df, data_attributes)``. The loop OWNS orchestration;
+        it never derives/mutates ``study_name`` (resolved here).
+
+        Everything is guarded so a degenerate result never crashes nn_train.
+        """
+        from helpers import shared_folder  # lazy
+        from nn.device import nn_artefact_root  # lazy
+        from nn.experiment_tracker import ExperimentTracker  # lazy
+        from nn.training_loop import TrainingLoop  # lazy (optuna stays inside run)
+
+        search_config = self._load_nn_search_config()
+
+        # study_name: NN_STUDY override, else "{pair}_{spec_hash[:8]}". The tracker
+        # OWNS the name; we validate it as a filesystem-safe slug before disk I/O.
+        study_name = os.getenv("NN_STUDY") or (
+            f"{self.pair}_{orch.base_spec.spec_hash[:8]}"
+        )
+        if any(sep in study_name for sep in ("/", "\\", os.sep)) or study_name in (
+            "",
+            ".",
+            "..",
+        ):
+            raise ValueError(
+                f"NN_STUDY must be a filesystem-safe slug (no path separators); "
+                f"got {study_name!r}"
+            )
+
+        tracking_dir = f"{nn_artefact_root(self.pair)}/tracking"
+        margin = float(search_config.get("margin", 0.0) or 0.0)
+        tracker = ExperimentTracker(
+            tracking_dir,
+            study_name,
+            metric="holdout_score",
+            margin=margin,
+            mode="max",
+        )
+
+        # Strategist OFF by default (pure-Optuna); enable via NN_STRATEGIST.
+        strategist = None
+        if os.getenv("NN_STRATEGIST", "").strip().lower() in ("1", "true", "on"):
+            from nn.nn_strategist import NNStrategist  # lazy (anthropic optional)
+
+            strategist = NNStrategist(
+                search_config=search_config.get("search_space", {})
+            )
+
+        loop = TrainingLoop(
+            orchestrator=orch,
+            tracker=tracker,
+            strategist=strategist,
+            search_config=search_config,
+        )
+        result = loop.run(df, data_attributes)
+
+        # Final summary state (guarded — a degenerate result must not crash).
+        try:
+            best = tracker.best() or {}
+        except Exception:  # noqa: BLE001 — never let summary I/O abort the run
+            best = {}
+
+        shared = shared_folder()
+        os.makedirs(shared, exist_ok=True)
+        state_path = shared + "training_state.pkl"
+        with open(state_path, "wb") as f:
+            pickle.dump(
+                {"phase": "nn_train", "study": study_name, "best": best},
+                f,
+            )
+
+        self.metadata["train_nn"] = {
+            "mode": "search",
+            "study_name": study_name,
+            "best": best,
+            "n_trials": int(getattr(result, "trials_run", 0) or 0),
+            "rounds_run": int(getattr(result, "rounds_run", 0) or 0),
+        }
+
+    def _load_nn_search_config(self) -> dict:
+        """Load configs/nn_search.yaml and apply trivial env cap overrides.
+
+        Env caps (when set) override the file: NN_MAX_ROUNDS,
+        NN_TRIALS_PER_ROUND, NN_MAX_WALL_CLOCK_S, NN_MAX_COMPUTE, NN_SEED.
+        """
+        import yaml  # lazy
+
+        path = os.path.join(self.config_path, "nn_search.yaml")
+        with open(path) as f:
+            cfg = yaml.safe_load(f) or {}
+
+        def _override(key: str, env: str, cast):
+            raw = os.getenv(env)
+            if raw not in (None, ""):
+                try:
+                    cfg[key] = cast(raw)
+                except (TypeError, ValueError):
+                    pass
+
+        _override("max_rounds", "NN_MAX_ROUNDS", int)
+        _override("trials_per_round", "NN_TRIALS_PER_ROUND", int)
+        _override("max_wall_clock_s", "NN_MAX_WALL_CLOCK_S", float)
+        _override("max_compute", "NN_MAX_COMPUTE", int)
+        _override("seed", "NN_SEED", int)
+        return cfg
 
     def _run_infer_nn(self) -> None:
         """Run NN inference over a dataset folder (Phase 11).

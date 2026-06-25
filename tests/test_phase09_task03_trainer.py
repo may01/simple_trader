@@ -833,11 +833,14 @@ class TestRunSimulateRealSignatures:
         assert orch_cls.call_args.kwargs["fee"] == 0.002
 
 
-class TestRunTrainNNRealWiring:
-    """_run_train_nn builds the orchestrator via NNOrchestrator.from_trainer
-    (no feature_cols / checkpoint_dir / tfs / load_nn_config). The epoch
-    callback is group-keyed (group_key, epoch, metrics) and pickles a
-    {"phase": "nn_train", "group": ..., "epoch": ..., "metrics": ...} state."""
+class TestRunTrainNNSingleMode:
+    """NN_TRAIN_MODE=single preserves the OLD single-shot behaviour.
+
+    _run_train_nn builds the orchestrator via NNOrchestrator.from_trainer and
+    calls orch.train(...) directly with a group-keyed epoch callback that pickles
+    a {"phase": "nn_train", "group": ..., "epoch": ..., "metrics": ...} state.
+    The TrainingLoop is NOT used on this path.
+    """
 
     @contextmanager
     def _injected(self, tmp_path):
@@ -848,11 +851,16 @@ class TestRunTrainNNRealWiring:
         mock_orch_cls = MagicMock()
         mock_orch_cls.from_trainer.return_value = mock_orch_instance
 
+        # If the loop is (incorrectly) reached, this MagicMock lets us assert it
+        # was NOT constructed/run on the single-shot path.
+        mock_loop_cls = MagicMock()
+
         mock_indicators_mod = MagicMock()
         mock_indicators_mod.DataAttributes.load.return_value = MagicMock()
 
         mods = {
             "nn.nn_orchestrator": MagicMock(NNOrchestrator=mock_orch_cls),
+            "nn.training_loop": MagicMock(TrainingLoop=mock_loop_cls),
             "indicators": mock_indicators_mod,
         }
         saved = {k: sys.modules.get(k) for k in mods}
@@ -862,7 +870,7 @@ class TestRunTrainNNRealWiring:
                  patch("helpers.data_attributes_path", return_value="/data/attrs.pkl"), \
                  patch("helpers.shared_folder", return_value=str(tmp_path) + "/"), \
                  patch("pandas.read_pickle", return_value=MagicMock()):
-                yield (mock_orch_cls, mock_orch_instance)
+                yield (mock_orch_cls, mock_orch_instance, mock_loop_cls)
         finally:
             for key, original in saved.items():
                 if original is None:
@@ -870,23 +878,27 @@ class TestRunTrainNNRealWiring:
                 else:
                     sys.modules[key] = original
 
-    def test_train_nn_constructs_orchestrator_from_trainer(self, monkeypatch, tmp_path):
-        _set_env(monkeypatch, {"RUN_TYPE": "nn_train"})
+    def test_single_mode_constructs_orchestrator_from_trainer(
+        self, monkeypatch, tmp_path
+    ):
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train", "NN_TRAIN_MODE": "single"})
         import importlib
         import training.trainer as mod
         importlib.reload(mod)
 
-        with self._injected(tmp_path) as (orch_cls, orch_instance):
+        with self._injected(tmp_path) as (orch_cls, orch_instance, loop_cls):
             t = mod.Trainer(config_path="configs/")
             t._run_train_nn()
 
         orch_cls.from_trainer.assert_called_once_with(t.pair, t)
         orch_instance.train.assert_called_once()
+        # The TrainingLoop is NOT used on the single-shot path.
+        loop_cls.assert_not_called()
         # No legacy NNOrchestrator(checkpoint_dir=..., feature_cols=...) call.
         orch_cls.assert_not_called()
 
-    def test_train_nn_metadata_is_group_keyed(self, monkeypatch, tmp_path):
-        _set_env(monkeypatch, {"RUN_TYPE": "nn_train"})
+    def test_single_mode_metadata_is_group_keyed(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train", "NN_TRAIN_MODE": "single"})
         import importlib
         import training.trainer as mod
         importlib.reload(mod)
@@ -897,13 +909,13 @@ class TestRunTrainNNRealWiring:
 
         assert t.metadata["train_nn"] == {"all": {"loss": 0.1}}
 
-    def test_train_nn_epoch_callback_is_group_keyed(self, monkeypatch, tmp_path):
-        _set_env(monkeypatch, {"RUN_TYPE": "nn_train"})
+    def test_single_mode_epoch_callback_is_group_keyed(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train", "NN_TRAIN_MODE": "single"})
         import importlib
         import training.trainer as mod
         importlib.reload(mod)
 
-        with self._injected(tmp_path) as (_, orch_instance):
+        with self._injected(tmp_path) as (_, orch_instance, __):
             mod.Trainer(config_path="configs/")._run_train_nn()
             cb = orch_instance.train.call_args.kwargs["epoch_callback"]
             cb("all", 3, {"loss": 0.5})  # contract: (group_key, epoch, metrics)
@@ -917,6 +929,276 @@ class TestRunTrainNNRealWiring:
         assert state["epoch"] == 3
         assert state["metrics"] == {"loss": 0.5}
         assert "tf" not in state
+
+
+class TestRunTrainNNSearchMode:
+    """NN_TRAIN_MODE=search (the DEFAULT) runs the agentic TrainingLoop.
+
+    _run_train_nn builds the orchestrator via from_trainer, resolves a
+    search_config (configs/nn_search.yaml), constructs an ExperimentTracker and a
+    TrainingLoop, and calls loop.run(df, data_attributes). study_name defaults to
+    "{pair}_{spec_hash[:8]}" and NN_STUDY overrides it; NN_STRATEGIST toggles the
+    strategist arg between None and an NNStrategist.
+    """
+
+    @contextmanager
+    def _injected(self, tmp_path, spec_hash="abcdef0123456789", best=None):
+        import sys
+
+        if best is None:
+            best = {"all": {"holdout": {"holdout_score": 0.7}}}
+
+        # Orchestrator with a base_spec exposing a spec_hash.
+        mock_base_spec = MagicMock()
+        mock_base_spec.spec_hash = spec_hash
+        mock_orch_instance = MagicMock()
+        mock_orch_instance.base_spec = mock_base_spec
+        mock_orch_cls = MagicMock()
+        mock_orch_cls.from_trainer.return_value = mock_orch_instance
+
+        # ExperimentTracker — best() returns a summary-able incumbent map.
+        mock_tracker_instance = MagicMock()
+        mock_tracker_instance.best.return_value = best
+        mock_tracker_cls = MagicMock(return_value=mock_tracker_instance)
+
+        # TrainingLoop — run() returns a RunResult-like object.
+        mock_result = MagicMock()
+        mock_result.best = best
+        mock_result.study_name = "study-x"
+        mock_result.rounds_run = 2
+        mock_result.trials_run = 6
+        mock_loop_instance = MagicMock()
+        mock_loop_instance.run.return_value = mock_result
+        mock_loop_cls = MagicMock(return_value=mock_loop_instance)
+
+        # NNStrategist — constructor captured so we can assert it is/ isn't used.
+        mock_strategist_instance = MagicMock()
+        mock_strategist_cls = MagicMock(return_value=mock_strategist_instance)
+
+        # device.nn_artefact_root(pair) → a tracking root.
+        mock_device_mod = MagicMock()
+        mock_device_mod.nn_artefact_root.return_value = str(tmp_path / "artefacts")
+
+        mock_indicators_mod = MagicMock()
+        mock_indicators_mod.DataAttributes.load.return_value = MagicMock()
+
+        mods = {
+            "nn.nn_orchestrator": MagicMock(NNOrchestrator=mock_orch_cls),
+            "nn.experiment_tracker": MagicMock(
+                ExperimentTracker=mock_tracker_cls
+            ),
+            "nn.training_loop": MagicMock(TrainingLoop=mock_loop_cls),
+            "nn.nn_strategist": MagicMock(NNStrategist=mock_strategist_cls),
+            "nn.device": mock_device_mod,
+            "indicators": mock_indicators_mod,
+        }
+        saved = {k: sys.modules.get(k) for k in mods}
+        sys.modules.update(mods)
+        try:
+            with patch("helpers.wide_df_path", return_value="/data/wide.pkl"), \
+                 patch("helpers.data_attributes_path", return_value="/data/attrs.pkl"), \
+                 patch("helpers.shared_folder", return_value=str(tmp_path) + "/"), \
+                 patch("pandas.read_pickle", return_value=MagicMock()):
+                yield {
+                    "orch_cls": mock_orch_cls,
+                    "orch": mock_orch_instance,
+                    "tracker_cls": mock_tracker_cls,
+                    "tracker": mock_tracker_instance,
+                    "loop_cls": mock_loop_cls,
+                    "loop": mock_loop_instance,
+                    "strategist_cls": mock_strategist_cls,
+                    "result": mock_result,
+                }
+        finally:
+            for key, original in saved.items():
+                if original is None:
+                    sys.modules.pop(key, None)
+                else:
+                    sys.modules[key] = original
+
+    def test_search_mode_is_default(self, monkeypatch, tmp_path):
+        """No NN_TRAIN_MODE env → the loop path runs (search is the default)."""
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train"})
+        monkeypatch.delenv("NN_TRAIN_MODE", raising=False)
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as m:
+            mod.Trainer(config_path="configs/")._run_train_nn()
+
+        m["loop_cls"].assert_called_once()
+        m["loop"].run.assert_called_once()
+        # Single-shot orch.train is NOT called directly by the search path.
+        m["orch"].train.assert_not_called()
+
+    def test_search_mode_constructs_tracker_and_loop(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train", "NN_TRAIN_MODE": "search"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as m:
+            t = mod.Trainer(config_path="configs/")
+            t._run_train_nn()
+
+        m["orch_cls"].from_trainer.assert_called_once_with(t.pair, t)
+        m["tracker_cls"].assert_called_once()
+        m["loop_cls"].assert_called_once()
+        # loop.run is called with (df, data_attributes).
+        assert m["loop"].run.call_count == 1
+        # TrainingLoop constructed with orchestrator/tracker/strategist/search_config.
+        loop_kwargs = m["loop_cls"].call_args.kwargs
+        assert loop_kwargs["orchestrator"] is m["orch"]
+        assert loop_kwargs["tracker"] is m["tracker"]
+        assert isinstance(loop_kwargs["search_config"], dict)
+
+    def test_default_study_name_derivation(self, monkeypatch, tmp_path):
+        """study_name defaults to f"{pair}_{spec_hash[:8]}"."""
+        _set_env(
+            monkeypatch,
+            {"RUN_TYPE": "nn_train", "NN_TRAIN_MODE": "search", "PAIR": "link_usdt"},
+        )
+        monkeypatch.delenv("NN_STUDY", raising=False)
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path, spec_hash="deadbeefcafef00d") as m:
+            mod.Trainer(config_path="configs/")._run_train_nn()
+
+        # Tracker constructed with the default study name.
+        args, kwargs = m["tracker_cls"].call_args
+        # ExperimentTracker(tracking_dir, study_name, metric=..., margin=..., mode=...)
+        study_name = kwargs.get("study_name", args[1] if len(args) > 1 else None)
+        assert study_name == "link_usdt_deadbeef"
+
+    def test_nn_study_env_overrides_study_name(self, monkeypatch, tmp_path):
+        """NN_STUDY env overrides the derived default."""
+        _set_env(
+            monkeypatch,
+            {
+                "RUN_TYPE": "nn_train",
+                "NN_TRAIN_MODE": "search",
+                "NN_STUDY": "my_custom_study",
+            },
+        )
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as m:
+            mod.Trainer(config_path="configs/")._run_train_nn()
+
+        args, kwargs = m["tracker_cls"].call_args
+        study_name = kwargs.get("study_name", args[1] if len(args) > 1 else None)
+        assert study_name == "my_custom_study"
+
+    def test_invalid_study_name_with_separator_is_rejected(
+        self, monkeypatch, tmp_path
+    ):
+        """A study_name containing a path separator is rejected early."""
+        _set_env(
+            monkeypatch,
+            {
+                "RUN_TYPE": "nn_train",
+                "NN_TRAIN_MODE": "search",
+                "NN_STUDY": "bad/name",
+            },
+        )
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path):
+            with pytest.raises(ValueError):
+                mod.Trainer(config_path="configs/")._run_train_nn()
+
+    def test_strategist_off_by_default(self, monkeypatch, tmp_path):
+        """No NN_STRATEGIST → strategist arg is None (pure-Optuna)."""
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train", "NN_TRAIN_MODE": "search"})
+        monkeypatch.delenv("NN_STRATEGIST", raising=False)
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as m:
+            mod.Trainer(config_path="configs/")._run_train_nn()
+
+        loop_kwargs = m["loop_cls"].call_args.kwargs
+        assert loop_kwargs["strategist"] is None
+        m["strategist_cls"].assert_not_called()
+
+    def test_strategist_on_when_env_set(self, monkeypatch, tmp_path):
+        """NN_STRATEGIST=1 → an NNStrategist is constructed and passed in."""
+        _set_env(
+            monkeypatch,
+            {
+                "RUN_TYPE": "nn_train",
+                "NN_TRAIN_MODE": "search",
+                "NN_STRATEGIST": "1",
+            },
+        )
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as m:
+            mod.Trainer(config_path="configs/")._run_train_nn()
+
+        m["strategist_cls"].assert_called_once()
+        loop_kwargs = m["loop_cls"].call_args.kwargs
+        assert loop_kwargs["strategist"] is m["strategist_cls"].return_value
+
+    def test_search_mode_writes_training_state_summary(self, monkeypatch, tmp_path):
+        """A final training_state.pkl summary is written for the search path."""
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train", "NN_TRAIN_MODE": "search"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path):
+            mod.Trainer(config_path="configs/")._run_train_nn()
+
+        state_path = str(tmp_path) + "/training_state.pkl"
+        assert os.path.exists(state_path)
+        with open(state_path, "rb") as f:
+            state = pickle.load(f)
+        assert state["phase"] == "nn_train"
+        assert "study" in state
+        assert "best" in state
+
+    def test_search_mode_sets_light_metadata(self, monkeypatch, tmp_path):
+        """metadata['train_nn'] is a light summary (study_name + best)."""
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train", "NN_TRAIN_MODE": "search"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path) as m:
+            t = mod.Trainer(config_path="configs/")
+            t._run_train_nn()
+
+        meta = t.metadata["train_nn"]
+        assert isinstance(meta, dict)
+        assert "study_name" in meta
+
+    def test_search_mode_degenerate_result_does_not_crash(
+        self, monkeypatch, tmp_path
+    ):
+        """An empty tracker.best()/RunResult must not crash the handler."""
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train", "NN_TRAIN_MODE": "search"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path, best={}) as m:
+            m["result"].best = {}
+            m["tracker"].best.return_value = {}
+            t = mod.Trainer(config_path="configs/")
+            t._run_train_nn()  # must not raise
+
+        assert "train_nn" in t.metadata
 
 
 class TestStrategyFactoryPicklable:
