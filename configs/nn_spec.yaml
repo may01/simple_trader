@@ -16,7 +16,9 @@ indicators:
   - range_atr
   - ema_50_minus_close
   - macd_12_26_9_slope
-  - vol_regime
+  # vol_regime omitted from the verification spec: its window (200) exceeded
+  # INDICATOR_WINDOW_ROWS=105 in the prepare slice → all-NaN. Field default
+  # fixed to <=105 (see DECISIONS-LOG D11); re-recalc to populate it, then re-add.
 
 history_points: 8
 
