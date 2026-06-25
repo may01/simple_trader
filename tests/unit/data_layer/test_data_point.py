@@ -262,3 +262,26 @@ class TestWideDataPoint:
         wdp = WideDataPoint(df, bad_ts)
         with pytest.raises(KeyError):
             wdp.get("open", tf=1, shift=0)
+
+    def test_get_nn_res_resolves_bare_column(self):
+        """nn_res_* columns carry no {tf}_ prefix — looked up by the bare name.
+
+        The same value is returned for any tf (timeframe-agnostic), unlike
+        ordinary indicators which resolve as '{tf}_{col}'.
+        """
+        df, ts = _make_wide_df()
+        df["nn_res_dir15_prob_up"] = [float(i) / 10 for i in range(len(df))]
+        wdp = WideDataPoint(df, ts)
+
+        # Bare column name resolution (NOT '15_nn_res_dir15_prob_up').
+        assert wdp.get("nn_res_dir15_prob_up", tf=15) == df.loc[ts, "nn_res_dir15_prob_up"]
+        # Same value for any tf — column is shared across timeframes.
+        assert wdp.get("nn_res_dir15_prob_up", tf=60) == df.loc[ts, "nn_res_dir15_prob_up"]
+
+    def test_get_nn_res_shift_resolves_bare_column(self):
+        """shift>0 for an nn_res_* column also resolves the bare name."""
+        df, ts = _make_wide_df()
+        df["nn_res_dir15_prob_up"] = [float(i) for i in range(len(df))]
+        wdp = WideDataPoint(df, ts)
+        # tf=1 closed rows are indices 0..8; shift=1 → last closed row (index 8).
+        assert wdp.get("nn_res_dir15_prob_up", tf=1, shift=1) == df["nn_res_dir15_prob_up"].iloc[8]

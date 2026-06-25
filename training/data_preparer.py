@@ -6,9 +6,12 @@
 #       → base indicators (momentum/trend/volatility/oscillators/volume/price_derivatives/trend_flags/nn_features)
 #       → base attributes (rsi_classification.json, diff_stats.pkl)
 #       → class indicators (classification, targets — only TFs [15,60,240,1440])
-#       → merge df_with_nn.pkl (if present)
 #       → nn attributes (column_stats for normalization)
 #       → save df_with_indicators.pkl + data_attributes.pkl
+#
+# df_with_indicators.pkl is single-writer: nn_res_* result columns are NEVER
+# merged here. They reach consumers only via the load-time join of the additive
+# df_with_nn.pkl (data.join_nn_results).
 
 from __future__ import annotations
 
@@ -146,7 +149,10 @@ class DataPreparer:
         config_path:            Path to indicators_config.yaml.
         output_path:            Path for df_with_indicators.pkl (plain DataFrame).
         attributes_output_path: Path for data_attributes.pkl.
-        nn_output_path:         Path to df_with_nn.pkl; checked by _merge_nn_output().
+        nn_output_path:         Path where the NN inference batch writes df_with_nn.pkl.
+                                Retained for the Trainer wiring contract; prepare()
+                                NEVER merges it (df_with_indicators.pkl is single-writer).
+                                nn_res_* reach consumers via data.join_nn_results only.
     """
 
     def __init__(
@@ -179,10 +185,13 @@ class DataPreparer:
           5. Compute class indicators (classification + targets; only TFs [15,60,240,1440])
           6. Trim warmup rows (drop everything before data_start_ms)
           7. Compute lookahead profit labels (labels: config section)
-          8. Merge df_with_nn.pkl columns (left-join on index; no-op if absent)
-          9. Compute NN normalisation stats → data_attributes
-         10. Save wide_df atomically to output_path
-         11. Save data_attributes to attributes_output_path
+          8. Compute NN normalisation stats → data_attributes
+          9. Save wide_df atomically to output_path
+         10. Save data_attributes to attributes_output_path
+
+        NN result columns (nn_res_*) are NOT merged here — df_with_indicators.pkl
+        stays single-writer. nn_res_* reach consumers only via the load-time
+        join (data.join_nn_results) of the additive, disposable df_with_nn.pkl.
 
         Args:
             raw_data_path:  Path to graber_data.pkl.
@@ -223,18 +232,15 @@ class DataPreparer:
         # future rows inside the simulation window, never warmup history)
         self._compute_profit_labels(wide_df)
 
-        # Step 8 — optional NN output merge
-        self._merge_nn_output(wide_df)
-
-        # Step 9 — NN normalisation stats
+        # Step 8 — NN normalisation stats
         data_attributes = self._compute_nn_attributes(wide_df)
 
-        # Step 10 — atomic save of wide_df
+        # Step 9 — atomic save of wide_df
         tmp_out = self.output_path + ".tmp"
         wide_df.to_pickle(tmp_out)
         os.rename(tmp_out, self.output_path)
 
-        # Step 11 — save DataAttributes
+        # Step 10 — save DataAttributes
         data_attributes.save(self.attributes_output_path)
 
     # ------------------------------------------------------------------
@@ -380,26 +386,6 @@ class DataPreparer:
                         df, tf, spec.n, spec.m, spec.x, spec.l, spec.y,
                         atr_period=spec.atr_period, ma_length=spec.ma_length,
                     )
-
-    def _merge_nn_output(self, df: pd.DataFrame) -> None:
-        """Left-join columns from df_with_nn.pkl onto df (in place).
-
-        If nn_output_path does not exist this method is a no-op.
-
-        Args:
-            df: Wide DataFrame.  New columns from df_with_nn.pkl are added;
-                existing columns are NOT overwritten.
-        """
-        if not os.path.exists(self.nn_output_path):
-            return
-
-        nn_df: pd.DataFrame = pd.read_pickle(self.nn_output_path)
-
-        # Add only columns that are not already in df
-        new_cols = [c for c in nn_df.columns if c not in df.columns]
-        if new_cols:
-            joined = df.join(nn_df[new_cols], how="left")
-            df[new_cols] = joined[new_cols]
 
     def _compute_nn_attributes(self, df: pd.DataFrame) -> "DataAttributes":
         """Compute NN normalisation stats and return a populated DataAttributes.

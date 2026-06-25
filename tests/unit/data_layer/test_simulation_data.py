@@ -172,3 +172,55 @@ def test_step_min_5_reduces_steps(monkeypatch, sim_pkl):
     # (only those that land on 5-min boundaries in the df)
     assert sim5.steps < sim1.steps
     assert sim5.steps > 0
+
+
+# ---------------------------------------------------------------------------
+# NN result columns — consumer-side load-time join (Task 12)
+# ---------------------------------------------------------------------------
+
+def test_init_surfaces_nn_res_when_present(monkeypatch, sim_pkl):
+    """SimulationData left-joins df_with_nn.pkl from the dataset dir at load."""
+    pkl_path, sim_df = sim_pkl
+    monkeypatch.setattr("data._wide_df_path_for_pair", lambda p: str(pkl_path))
+
+    nn_df = pd.DataFrame(
+        {"nn_res_dir15_prob_up": np.linspace(0.0, 1.0, len(sim_df.index))},
+        index=sim_df.index,
+    )
+    nn_df.to_pickle(str(pkl_path.parent / "df_with_nn.pkl"))
+
+    begin_ts = int(sim_df.index[0].timestamp())
+    end_ts = int(sim_df.index[-1].timestamp())
+    sim = SimulationData("btc_usdt", begin_ts, end_ts, 1)
+
+    assert "nn_res_dir15_prob_up" in sim._df.columns
+    # The wide-df index columns are untouched.
+    assert "1_close" in sim._df.columns
+
+
+def test_init_noop_when_nn_absent(monkeypatch, sim_pkl):
+    """No df_with_nn.pkl → construction succeeds, no nn_res_* columns appear."""
+    sim = _make_sim(monkeypatch, sim_pkl)
+    assert not any(c.startswith("nn_res_") for c in sim._df.columns)
+
+
+def test_data_point_reads_nn_res_bare(monkeypatch, sim_pkl):
+    """A WideDataPoint from SimulationData reads nn_res_* via the bare column."""
+    pkl_path, sim_df = sim_pkl
+    monkeypatch.setattr("data._wide_df_path_for_pair", lambda p: str(pkl_path))
+
+    nn_df = pd.DataFrame(
+        {"nn_res_dir15_prob_up": np.linspace(0.0, 1.0, len(sim_df.index))},
+        index=sim_df.index,
+    )
+    nn_df.to_pickle(str(pkl_path.parent / "df_with_nn.pkl"))
+
+    begin_ts = int(sim_df.index[0].timestamp())
+    end_ts = int(sim_df.index[-1].timestamp())
+    sim = SimulationData("btc_usdt", begin_ts, end_ts, 1)
+
+    dp = sim.get()
+    # nn_res_* is timeframe-agnostic — same value for any tf, no {tf}_ prefix.
+    val = dp.get("nn_res_dir15_prob_up", tf=15)
+    assert val == pytest.approx(0.0)
+    assert dp.get("nn_res_dir15_prob_up", tf=60) == pytest.approx(0.0)

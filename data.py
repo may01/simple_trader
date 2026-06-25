@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 
 import pandas as pd
@@ -74,7 +75,11 @@ class LiveDataPoint(DataPoint):
     # ------------------------------------------------------------------
 
     def get(self, col: str, tf: int, shift: int = 0) -> float:
-        """Return ``ohlc[tf][f"{tf}_{col}"].iloc[-1 - shift]``.
+        """Return ``ohlc[tf][name].iloc[-1 - shift]``.
+
+        ``name`` is the bare column for NN result columns ("nn_res_*", which are
+        timeframe-agnostic and carry no "{tf}_" prefix) and ``f"{tf}_{col}"``
+        otherwise (data-class.md §2).
 
         Returns float('nan') when shift >= len(df) (not enough history).
 
@@ -83,7 +88,8 @@ class LiveDataPoint(DataPoint):
         """
         if tf not in self._ohlc:
             raise KeyError(f"tf={tf} not in LiveDataPoint")
-        df = self._ohlc[tf][f"{tf}_{col}"]
+        name = col if col.startswith("nn_res_") else f"{tf}_{col}"
+        df = self._ohlc[tf][name]
         if shift >= len(df):
             return float("nan")
         return float(df.iloc[-1 - shift])
@@ -126,8 +132,13 @@ class WideDataPoint(DataPoint):
         shift=N  → value at the Nth-last row where "{tf}_is_closed" == True,
                    considering only rows up to and including ts.
                    Returns float('nan') when not enough history.
+
+        NN result columns ("nn_res_*") are timeframe-agnostic — they carry no
+        "{tf}_" prefix and are looked up by their bare column name regardless of
+        the requested tf (data-class.md §2/§8). The is_closed shift logic still
+        uses the requested tf's candle boundaries.
         """
-        full_col = f"{tf}_{col}"
+        full_col = col if col.startswith("nn_res_") else f"{tf}_{col}"
 
         if shift == 0:
             # Precondition: self._ts must be present in self._df.index.
@@ -246,25 +257,26 @@ class LiveData:
         dp = data.item.get_data_point()    # access current OHLC + indicators
     """
 
-    def __init__(self, nn_predictor=None) -> None:
-        import os
+    def __init__(self) -> None:
         pair = os.environ.get("PAIR", "")
         # Derive coin from PAIR, e.g. "link_usdt" → "link"
         self.coin = pair.split("_")[0] if "_" in pair else pair
         self.candles = CANDLES
-        self.nn_predictor = nn_predictor
         self.ohlc: dict[int, pd.DataFrame] = {}
 
     def build_candles(self, time_point: int = 0) -> None:
-        """Fetch candles, rename to {tf}_* columns, compute indicators."""
+        """Fetch candles, rename to {tf}_* columns, compute indicators.
+
+        After enriching the per-tf frames, left-joins the timeframe-agnostic
+        ``nn_res_*`` columns from the live dataset's ``df_with_nn.pkl`` (produced
+        by the same batch ``run_inference`` for live/backtest parity). The join
+        is absence-safe: if the artifact is missing, ``nn_res_*`` are simply
+        absent and reads fall back to the caller's default. The cadence of when
+        the live artifact is (re)produced is out of scope here.
+        """
         raw: dict[int, pd.DataFrame] = stock_holder.item.get_candles_history(
             self.candles, self.coin, time_point
         )
-
-        # First loop: rename columns, compute indicators, store enriched dfs.
-        # Track (point, tf) pairs so nn_predictor can be called after ALL
-        # Indicators.compute calls complete.
-        points: dict[int, LiveDataPoint] = {}
 
         for tf, df in raw.items():
             # Rename OHLCV columns to {tf}_{col} convention
@@ -294,13 +306,28 @@ class LiveData:
             # Store the enriched (mutated) DataFrame
             self.ohlc[tf] = renamed_df
 
-            # Track point for nn_predictor pass below
-            points[tf] = point
+        # Left-join nn_res_* columns onto each per-tf frame (absence-safe no-op
+        # when the live df_with_nn.pkl is absent). The columns are timeframe-
+        # agnostic and shared across all tfs.
+        dataset_dir = self._live_dataset_dir()
+        if dataset_dir is not None:
+            for tf in self.ohlc:
+                self.ohlc[tf] = join_nn_results(self.ohlc[tf], dataset_dir)
 
-        # Second pass: call nn_predictor AFTER all Indicators.compute calls complete.
-        if self.nn_predictor is not None:
-            for tf, point in points.items():
-                self.nn_predictor.compute(point, tf)
+    @staticmethod
+    def _live_dataset_dir() -> "str | None":
+        """Return the directory holding the live dataset's df_with_nn.pkl.
+
+        Derived from the same env-based dataset folder used by the rest of the
+        data layer. Returns None when the required env is not set (e.g. unit
+        tests that exercise build_candles without a configured dataset), in
+        which case the nn join is skipped entirely.
+        """
+        try:
+            from helpers import dataset_folder  # lazy — avoids circular dep
+            return dataset_folder()
+        except KeyError:
+            return None
 
     def get_data_point(self) -> "LiveDataPoint":
         """Return LiveDataPoint wrapping the current self.ohlc."""
@@ -328,11 +355,50 @@ def _wide_df_path_for_pair(pair: str) -> str:
     Reads ROOT_FOLDER, DATA_ROOT, DATA_SET_NAME from env and combines with
     the pair argument — does NOT mutate os.environ["PAIR"].
     """
-    import os
     from helpers import root_folder  # local import — avoids circular dep at module level
     data_root = os.environ["DATA_ROOT"]
     data_set_name = os.environ["DATA_SET_NAME"]
     return f"{root_folder()}/{data_root}/{data_set_name}_{pair}/df_with_indicators.pkl"
+
+
+def join_nn_results(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join {dataset_dir}/df_with_nn.pkl (timeframe-agnostic nn_res_* columns)
+    onto ``df`` on the shared 1-min DatetimeIndex, and return the joined frame.
+
+    The NN inference batch (NNOrchestrator.run_inference / Trainer.infer_nn)
+    writes a separate, additive ``df_with_nn.pkl`` next to each dataset's
+    ``df_with_indicators.pkl`` containing ONLY ``nn_res_*`` columns. Consumers
+    merge it in at construction; the canonical ``df_with_indicators.pkl`` stays
+    single-writer (DataPreparer) and is never mutated.
+
+    Absence-safe: if ``df_with_nn.pkl`` does not exist, returns ``df`` unchanged
+    (no-op) — the ``nn_res_*`` columns simply do not appear, and reads return
+    the caller's default via ``DataPoint.get(col, tf, default=...)``.
+
+    The join never overwrites existing ``df`` columns (only columns absent from
+    ``df`` are taken from the pickle), and it does NOT mutate
+    ``df_with_indicators.pkl`` on disk.
+
+    Args:
+        df:          The consumer's wide frame (1-min DatetimeIndex).
+        dataset_dir: Directory containing df_with_nn.pkl (and df_with_indicators.pkl).
+
+    Returns:
+        ``df`` with ``nn_res_*`` columns left-joined on the index, or ``df``
+        unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_nn.pkl")
+    if not os.path.exists(path):
+        return df
+
+    nn_df: pd.DataFrame = pd.read_pickle(path)
+
+    # Take only columns not already present so the join never clobbers existing
+    # df columns (the pickle is nn_res_*-only by construction, but guard anyway).
+    new_cols = [c for c in nn_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(nn_df[new_cols], how="left")
 
 
 class SimulationData:
@@ -358,6 +424,10 @@ class SimulationData:
         from logs import log_warning  # local import — avoids circular dep
         path = _wide_df_path_for_pair(pair)
         self._df: pd.DataFrame = pd.read_pickle(path)
+        # Left-join nn_res_* columns from the dataset's df_with_nn.pkl (the dir
+        # holding df_with_indicators.pkl). Absence-safe no-op; never mutates the
+        # single-writer df_with_indicators.pkl.
+        self._df = join_nn_results(self._df, os.path.dirname(path))
 
         begin = pd.Timestamp(begin_ts, unit="s", tz="UTC")
         end = pd.Timestamp(end_ts, unit="s", tz="UTC")
@@ -445,19 +515,24 @@ class FullData:
         self._df = df
 
     def get(self, tf: int) -> pd.DataFrame:
-        """Return all closed-candle rows for *tf*, keeping only ``{tf}_*`` columns.
+        """Return all closed-candle rows for *tf*, keeping ``{tf}_*`` columns plus
+        any timeframe-agnostic ``nn_res_*`` result columns (joined at load).
 
         Args:
             tf: Timeframe in minutes.
 
         Returns:
             DataFrame with 1-min timestamps at candle close (the DatetimeIndex of
-            closed rows) and only columns prefixed with ``f"{tf}_"``.
+            closed rows) and columns prefixed with ``f"{tf}_"`` or ``"nn_res_"``
+            (the latter shared across all timeframes; data-class.md §8).
         """
         closed_col = f"{tf}_is_closed"
         mask = self._df[closed_col] == True  # noqa: E712 — explicit bool comparison
         closed_rows = self._df[mask]
-        tf_cols = [c for c in closed_rows.columns if c.startswith(f"{tf}_")]
+        tf_cols = [
+            c for c in closed_rows.columns
+            if c.startswith(f"{tf}_") or c.startswith("nn_res_")
+        ]
         return closed_rows[tf_cols]
 
     def get_candle(self, tf: int, open_time: pd.Timestamp) -> pd.Series:
@@ -485,15 +560,18 @@ def get_stock_data(pair: str) -> pd.DataFrame:
     """Load graber_data.pkl for *pair* and build a wide DataFrame.
 
     Reads the pickle produced by the data grabber, renames short column names
-    (o→open, h→high, l→low, c→close, v→volume), then delegates to
-    _build_wide_df() to add all per-TF columns.
+    (o→open, h→high, l→low, c→close, v→volume), delegates to _build_wide_df()
+    to add all per-TF columns, then left-joins the dataset's timeframe-agnostic
+    ``nn_res_*`` columns (absence-safe). The joined frame is what callers wrap in
+    ``FullData`` so ``FullData.get(tf)`` surfaces ``nn_res_*`` while ``FullData``
+    stays a thin view.
     """
-    import os
     from helpers import root_folder  # local import avoids circular deps at module level
 
     data_root = os.environ["DATA_ROOT"]
     data_set_name = os.environ["DATA_SET_NAME"]
-    path = f"{root_folder()}/{data_root}/{data_set_name}_{pair}/graber_data.pkl"
+    dataset_dir = f"{root_folder()}/{data_root}/{data_set_name}_{pair}"
+    path = f"{dataset_dir}/graber_data.pkl"
 
     raw: pd.DataFrame = pd.read_pickle(path)
 
@@ -509,4 +587,5 @@ def get_stock_data(pair: str) -> pd.DataFrame:
     if actual_rename:
         raw = raw.rename(columns=actual_rename)
 
-    return _build_wide_df(raw)
+    wide_df = _build_wide_df(raw)
+    return join_nn_results(wide_df, dataset_dir)

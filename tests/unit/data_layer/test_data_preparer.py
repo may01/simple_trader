@@ -136,47 +136,25 @@ class TestLoadRawData:
 
 
 # ===========================================================================
-# 2. _merge_nn_output — no-op when file absent
+# 2. Single-writer invariant — prepare() never merges nn_res_* (Task 12)
 # ===========================================================================
 
-class TestMergeNnOutput:
-    """Tests for DataPreparer._merge_nn_output."""
+class TestSingleWriterInvariant:
+    """df_with_indicators.pkl stays single-writer: nn_res_* come ONLY from the
+    consumer-side join (data.join_nn_results), never from prepare()."""
 
-    def _make_preparer(self, nn_output_path: str):
+    def _make_preparer(self, output_path: str):
         dp_mod = _import_data_preparer_with_mocks()
         return dp_mod.DataPreparer(
             config_path="configs/indicators_config.yaml",
-            output_path="/tmp/test_dp_out.pkl",
+            output_path=output_path,
             attributes_output_path="/tmp/test_dp_attrs.pkl",
-            nn_output_path=nn_output_path,
         )
 
-    def test_merge_nn_output_noop_when_absent(self, tmp_path):
-        """_merge_nn_output does nothing when nn_output_path does not exist."""
-        absent_path = str(tmp_path / "does_not_exist.pkl")
-        dp = self._make_preparer(absent_path)
-
-        wide_df = _make_wide_df()
-        cols_before = set(wide_df.columns)
-        dp._merge_nn_output(wide_df)
-
-        assert set(wide_df.columns) == cols_before
-
-    def test_merge_nn_output_merges_columns_when_present(self, tmp_path):
-        """_merge_nn_output left-joins columns from df_with_nn.pkl onto df."""
-        idx = pd.date_range("2024-01-01", periods=5, freq="1min", tz="UTC")
-
-        # nn_df has same index plus extra column
-        nn_df = pd.DataFrame({"nn_pred": [0.1, 0.2, 0.3, 0.4, 0.5]}, index=idx)
-        nn_path = str(tmp_path / "df_with_nn.pkl")
-        nn_df.to_pickle(nn_path)
-
-        dp = self._make_preparer(nn_path)
-
-        wide_df = _make_wide_df(5)
-        dp._merge_nn_output(wide_df)
-
-        assert "nn_pred" in wide_df.columns
+    def test_merge_nn_output_method_removed(self, tmp_path):
+        """DataPreparer no longer carries a _merge_nn_output method."""
+        dp = self._make_preparer(str(tmp_path / "out.pkl"))
+        assert not hasattr(dp, "_merge_nn_output")
 
 
 # ===========================================================================
@@ -218,7 +196,6 @@ class TestPreparePipeline:
         dp._compute_base_attributes = lambda df: call_order.append("base_attributes")
         dp._compute_class_indicators = lambda df, start_ts=None: call_order.append("class_indicators")
         dp._compute_profit_labels = lambda df: call_order.append("profit_labels")
-        dp._merge_nn_output = lambda df: call_order.append("merge_nn")
         dp._compute_nn_attributes = lambda df: (call_order.append("nn_attributes"), mock_data_attrs)[1]
 
         dp.prepare(raw_pkl)
@@ -230,7 +207,6 @@ class TestPreparePipeline:
             "base_attributes",
             "class_indicators",
             "profit_labels",
-            "merge_nn",
             "nn_attributes",
         ]
         assert call_order == expected, f"Got: {call_order}"
@@ -272,7 +248,6 @@ class TestAtomicSave:
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
         dp._compute_profit_labels = lambda df: None
-        dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: mock_data_attrs
 
         dp.prepare(raw_pkl)
@@ -465,7 +440,6 @@ class TestWarmupTrim:
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
         dp._compute_profit_labels = lambda df: seen.setdefault("index", df.index)
-        dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: MagicMock()
 
         dp.prepare(raw_pkl, data_start_ms=data_start_ms)
@@ -491,7 +465,6 @@ class TestWarmupTrim:
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
         dp._compute_profit_labels = lambda df: None
-        dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: mock_data_attrs
 
         dp.prepare(raw_pkl, data_start_ms=data_start_ms)
@@ -521,7 +494,6 @@ class TestWarmupTrim:
             lambda df, start_ts=None: received.setdefault("class", start_ts)
         )
         dp._compute_profit_labels = lambda df: None
-        dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: MagicMock()
 
         dp.prepare(raw_pkl, data_start_ms=data_start_ms)
@@ -542,7 +514,6 @@ class TestWarmupTrim:
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
         dp._compute_profit_labels = lambda df: None
-        dp._merge_nn_output = lambda df: None
         dp._compute_nn_attributes = lambda df: MagicMock()
 
         dp.prepare(raw_pkl)

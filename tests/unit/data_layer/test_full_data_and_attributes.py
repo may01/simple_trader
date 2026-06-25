@@ -62,11 +62,31 @@ class TestFullData:
         assert result["5_is_closed"].all()
 
     def test_get_returns_only_tf_columns(self, wide_df):
-        """All returned column names must start with the tf prefix."""
+        """All returned column names must start with the tf prefix or nn_res_."""
         fd = FullData(wide_df)
         result = fd.get(tf=5)
         for col in result.columns:
-            assert col.startswith("5_"), f"Column '{col}' does not start with '5_'"
+            assert col.startswith("5_") or col.startswith("nn_res_"), (
+                f"Column '{col}' does not start with '5_' or 'nn_res_'"
+            )
+
+    def test_get_includes_nn_res_columns(self, wide_df):
+        """nn_res_* result columns survive the per-tf filter (timeframe-agnostic)."""
+        df = wide_df.copy()
+        df["nn_res_dir15_prob_up"] = np.linspace(0.0, 1.0, len(df))
+        fd = FullData(df)
+        result = fd.get(tf=5)
+        assert "nn_res_dir15_prob_up" in result.columns
+        # Only closed tf=5 rows are returned, and nn_res_ values come along.
+        assert result["5_is_closed"].all()
+
+    def test_get_excludes_other_tf_columns(self, wide_df):
+        """nn_res_ inclusion must not leak other timeframes' indicator columns."""
+        df = wide_df.copy()
+        df["nn_res_dir15_prob_up"] = np.linspace(0.0, 1.0, len(df))
+        fd = FullData(df)
+        result = fd.get(tf=5)
+        assert not any(c.startswith("15_") for c in result.columns)
 
     def test_get_tf5_closes_at_minute_4(self, wide_df):
         """For tf=5, every closed-candle timestamp has minute in {4, 9, 14, 19, 24, 29, ...}."""

@@ -5,7 +5,6 @@ import sys
 
 import pandas as pd
 import pytest
-from unittest.mock import MagicMock
 
 from indicators import Indicators
 
@@ -120,43 +119,39 @@ class TestGetDataPoint:
         assert value == value, "Expected a real float, got NaN"  # NaN check
 
 
-class TestNnPredictorOrdering:
-    def test_nn_predictor_called_after_indicators(self, monkeypatch):
-        """nn_predictor.compute() must be called only AFTER all Indicators.compute() calls."""
+class TestNoArgConstruction:
+    def test_live_data_constructs_with_no_args(self, monkeypatch):
+        """LiveData() takes no arguments and exposes no nn_predictor attribute.
+
+        Per Task 12 the per-tick NNPredictor is removed; LiveData no longer
+        accepts or stores an nn_predictor.
+        """
+        monkeypatch.setenv("PAIR", "link_usdt")
+        import data
+        live = data.LiveData()
+        assert not hasattr(live, "nn_predictor")
+
+    def test_live_data_rejects_nn_predictor_kwarg(self, monkeypatch):
+        """The removed nn_predictor parameter is gone (passing it raises)."""
+        monkeypatch.setenv("PAIR", "link_usdt")
+        import data
+        with pytest.raises(TypeError):
+            data.LiveData(nn_predictor=object())
+
+
+class TestBuildCandlesNnJoin:
+    def test_build_candles_surfaces_nn_res_when_present(self, monkeypatch, tmp_path):
+        """build_candles left-joins nn_res_* from the live df_with_nn.pkl (absence-safe)."""
         mock = _make_mock_binance(monkeypatch)
         monkeypatch.setattr("data.stock_holder.item", mock)
 
-        call_order = []
-
-        mock_nn = MagicMock()
-        mock_nn.compute.side_effect = lambda dp, tf: call_order.append(("nn", tf))
-
-        original_compute = Indicators.compute
-
-        def tracked_compute(dp, tf):
-            call_order.append(("ind", tf))
-            original_compute(dp, tf)
-
-        monkeypatch.setattr(Indicators, "compute", tracked_compute)
-
         import data
-        live = data.LiveData(nn_predictor=mock_nn)
-        live.build_candles()
+        live = data.LiveData()
+        live.build_candles()  # populates live.ohlc with no nn artifact present
 
-        # Verify we have both indicator and nn calls recorded
-        ind_indices = [i for i, (kind, _) in enumerate(call_order) if kind == "ind"]
-        nn_indices = [i for i, (kind, _) in enumerate(call_order) if kind == "nn"]
-
-        assert ind_indices, "No Indicators.compute calls recorded"
-        assert nn_indices, "No nn_predictor.compute calls recorded"
-
-        last_ind = max(ind_indices)
-        first_nn = min(nn_indices)
-        assert last_ind < first_nn, (
-            f"nn_predictor.compute was called before all Indicators.compute calls finished: "
-            f"last ind at position {last_ind}, first nn at position {first_nn}. "
-            f"call_order={call_order}"
-        )
+        # Absent artifact → no nn_res_* columns, construction still succeeds.
+        for tf, df in live.ohlc.items():
+            assert not any(c.startswith("nn_res_") for c in df.columns)
 
 
 class TestItemSingleton:
