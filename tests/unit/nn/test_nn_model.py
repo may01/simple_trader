@@ -475,3 +475,49 @@ def test_load_rebuilds_from_embedded_spec_into_fresh_model(trained_model):
 def test_save_model_raises_when_not_built(small_model):
     with pytest.raises(RuntimeError):
         small_model.save_model("/tmp/should_not_exist_task05.pt")
+
+
+# ---------------------------------------------------------------------------
+# _split_dataset: narrow except — unexpected errors must propagate
+# ---------------------------------------------------------------------------
+
+
+def test_split_dataset_propagates_unexpected_exception(tmp_path):
+    """An unexpected exception from dataset.split() must NOT be swallowed.
+
+    The broad ``except Exception: pass`` was narrowed to only catch
+    FileNotFoundError and ValueError (the genuine "no splits.json" and
+    "unknown split name" cases).  Any other exception — e.g. RuntimeError
+    from corrupt data — must bubble up so callers see the real failure.
+    """
+    d = tmp_path / "ds"
+    d.mkdir()
+    dataset = _write_dataset(str(d), _direction_spec())
+
+    # Monkeypatch dataset.split to raise an unexpected RuntimeError.
+    def _boom(name):
+        raise RuntimeError("boom — unexpected error from split path")
+
+    dataset.split = _boom
+
+    model = NNModel(_direction_spec())
+    with pytest.raises(RuntimeError, match="boom"):
+        model.train(dataset)
+
+
+def test_split_dataset_fallback_when_splits_json_absent(tmp_path):
+    """A dataset with no splits.json must still train via the time-holdout
+    fallback (FileNotFoundError from split() is the expected "no splits" signal
+    and must NOT prevent training).
+    """
+    d = tmp_path / "ds"
+    d.mkdir()
+    dataset = _write_dataset(str(d), _direction_spec())
+
+    # Remove splits.json so dataset.split() raises FileNotFoundError.
+    import os as _os
+    _os.remove(os.path.join(str(d), "splits.json"))
+
+    model = NNModel(_direction_spec())
+    # Should complete without error — fallback to time-holdout.
+    model.train(dataset, epoch_callback=lambda e, m: None)

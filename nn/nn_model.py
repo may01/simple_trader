@@ -349,7 +349,10 @@ class NNModel:
                     self._flatten(X_va),
                     y_va.astype(np.float32),
                 )
-        except Exception:
+        except (FileNotFoundError, ValueError):
+            # FileNotFoundError: splits.json is absent (in-memory / no-splits dataset).
+            # ValueError: split name not found in splits.json.
+            # Any other exception (corrupt data, shape mismatch, etc.) propagates.
             pass
 
         # Fallback: time-holdout over the full tensor set.
