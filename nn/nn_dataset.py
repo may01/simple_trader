@@ -667,6 +667,68 @@ class NNDataset:
             )
         raise ValueError(f"unknown group key {group_key!r}")
 
+    # ------------------------------------------------------------------
+    # Inference feature matrix (parity with training — D6)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def build_inference_matrix(
+        cls,
+        df: pd.DataFrame,
+        feature_cols_by_tf: dict[str, list[str]],
+        history_points: int,
+        normalization: dict[str, dict],
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Build a normalised multi-TF lookback matrix from ANY ``df``.
+
+        This is the inference twin of ``_materialise``: it reuses the SAME
+        ``_build_tf_block`` window builder and the SAME clip→z→clamp formula so
+        that the features fed to ``run_batch`` are byte-for-byte comparable to
+        the training tensors — but it normalises with the GIVEN ``normalization``
+        stats (the checkpoint's bundled TRAIN stats), never stats recomputed
+        from ``df`` (leakage guard).
+
+        Args:
+            df: A wide frame carrying the ``{tf}_is_closed`` and feature columns.
+            feature_cols_by_tf: ``{tf_str: [cols]}`` in the SAME order the
+                checkpoint was trained with (manifest['feature_cols']).
+            history_points: Lookback depth used at training time.
+            normalization: ``{col: {q01, q99, mean, std}}`` training stats.
+
+        Returns:
+            ``(X, valid_mask)`` where ``X`` is
+            ``(rows, history_points, n_features)`` float32 (timeframes
+            concatenated along the feature axis in ``feature_cols_by_tf`` key
+            order — matching ``tensors()``) and ``valid_mask`` is a
+            ``(rows,)`` bool array True where NO feature in the window is NaN.
+            Rows that are NaN are left in place (caller masks their output);
+            no rows are dropped, so ``X`` stays aligned to ``df.index``.
+        """
+        n_rows = len(df)
+        # Stable timeframe order: numeric ascending, mirroring spec.timeframes.
+        tf_keys = sorted(feature_cols_by_tf.keys(), key=lambda k: int(k))
+
+        blocks: list[np.ndarray] = []
+        for tf_key in tf_keys:
+            feature_cols = feature_cols_by_tf[tf_key]
+            block = _build_tf_block(df, int(tf_key), feature_cols, history_points)
+            # Apply the training normalisation (clip→z→clamp) per column.
+            for fi, col in enumerate(feature_cols):
+                st = normalization[col]
+                x = block[:, :, fi]
+                xc = np.clip(x, st["q01"], st["q99"])
+                z = (xc - st["mean"]) / st["std"]
+                block[:, :, fi] = np.clip(z, -4.0, 4.0)
+            blocks.append(block)
+
+        if blocks:
+            X = np.concatenate(blocks, axis=2).astype(np.float32)
+        else:
+            X = np.empty((n_rows, history_points, 0), dtype=np.float32)
+
+        valid_mask = ~np.isnan(X).any(axis=(1, 2))
+        return X, valid_mask
+
 
 # ---------------------------------------------------------------------------
 # Robust winsorised stats (mirrors DataAttributes.compute_nn_stats formula)

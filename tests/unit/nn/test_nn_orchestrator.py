@@ -1,24 +1,31 @@
-"""Tests for NNOrchestrator: train and inference modes for NN pipeline."""
+"""Tests for NNOrchestrator: grouping train + tf-agnostic batch inference.
+
+Phase-11 surface (task 08):
+  - __init__(checkpoint_dir, dataset_dir, base_spec)
+  - from_trainer(pair, trainer) — pair-scoped factory
+  - train(df, data_attributes, spec=None, epoch_callback=None) -> {group: metrics}
+  - run_inference(df, data_attributes, spec=None) -> nn_res_* DataFrame | empty
+
+The per-TF ``{tf}_nn_prob_*`` design and ``data_attributes.get_stats``
+inference-normalisation are gone: a single multi-TF NNDataset is built ONCE,
+rows are partitioned by ``spec.grouping`` (single → one group "all"), and
+inference normalises via the checkpoint's BUNDLED manifest (leakage guard),
+emitting timeframe-agnostic ``nn_res_*`` columns only.
+"""
+
+from __future__ import annotations
 
 import os
-import tempfile
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from indicators import DataAttributes
+from indicators.labels import _fmt
+from nn.nn_model_spec import GroupingSpec, NNModelSpec, TargetSpec
 from nn.nn_orchestrator import NNOrchestrator
-
-# Interim skip (Phase-11 Task 05): every test here drives the OLD
-# NNModel(input_size, hidden_size, num_classes) + train(X, y) API, which Task 05
-# replaced with the spec-driven NNModel(spec) + train(NNDataset). NNOrchestrator
-# itself is reworked to the spec-driven API in Task 08, which rewrites these
-# tests and removes this skip.
-pytestmark = pytest.mark.skip(
-    reason="NNModel migrated to spec-driven (task 05); NNOrchestrator + these "
-    "tests are reworked in task 08"
-)
 
 
 # =====================================================================
@@ -26,85 +33,77 @@ pytestmark = pytest.mark.skip(
 # =====================================================================
 
 
-@pytest.fixture
-def mock_nn_model():
-    """Mock NNModel that simulates train/inference behavior."""
-    model = MagicMock()
-    model.train.return_value = {
-        "loss": 0.5,
-        "accuracy": 0.75,
-        "val_loss": 0.6,
-        "val_accuracy": 0.7,
-    }
-    model.run_batch.return_value = np.array([
-        [0.1, 0.8, 0.1],
-        [0.2, 0.3, 0.5],
-        [0.6, 0.2, 0.2],
-    ])
-    model.is_trained = True
-    return model
+def _label_suffix(n: int, m: float, x: float) -> str:
+    return f"n{_fmt(n)}_m{_fmt(m)}_x{_fmt(x)}"
+
+
+def make_wide_df(rows: int = 240, seed: int = 0) -> pd.DataFrame:
+    """Small synthetic wide frame with 15/60 closed flags, features, labels.
+
+    Mirrors the NNDataset test fixture so a REAL dataset can be built/trained.
+    """
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2024-01-01", periods=rows, freq="1min")
+    df = pd.DataFrame(index=idx)
+    pos = np.arange(rows)
+
+    df["15_is_closed"] = (pos + 1) % 15 == 0
+    df["60_is_closed"] = (pos + 1) % 60 == 0
+
+    df["15_logret"] = (pos.astype(float) * 0.001) - 0.01
+    df["15_rsi_14"] = 50.0 + (pos.astype(float) % 30)
+    df["60_logret"] = (pos.astype(float) * 0.002) - 0.02
+    df["60_rsi_14"] = 40.0 + (pos.astype(float) % 20)
+
+    df["15_close"] = 100.0 + np.cumsum(rng.normal(0, 0.1, rows))
+    df["60_close"] = 100.0 + np.cumsum(rng.normal(0, 0.2, rows))
+
+    suf = _label_suffix(1, 1.0, 0.3)
+    df[f"15_plong_{suf}"] = np.where(pos % 3 == 0, 1.0, 0.0)
+    df[f"15_pshort_{suf}"] = np.where(pos % 3 == 1, 1.0, 0.0)
+    return df
+
+
+def small_spec(**overrides) -> NNModelSpec:
+    """A minimal but real spec (grouping=single, one direction target)."""
+    spec = NNModelSpec(
+        name="t",
+        timeframes=[15],
+        indicators=["logret", "rsi_14"],
+        history_points=4,
+        layers=[],
+        targets=[
+            TargetSpec(
+                name="dir15",
+                kind="direction",
+                horizons=[1],
+                label_tf=15,
+                label_m=1.0,
+                label_x=0.3,
+            )
+        ],
+        epochs=2,
+        validation_split=0.2,
+        val_strategy="time_holdout",
+        seed=0,
+    )
+    # one tiny dense layer so the network can build
+    from nn.nn_model_spec import LayerSpec
+
+    spec.layers = [LayerSpec(kind="dense", units=8)]
+    for k, v in overrides.items():
+        setattr(spec, k, v)
+    return spec
 
 
 @pytest.fixture
-def mock_checkpoint_manager(tmp_path):
-    """Mock CheckpointManager."""
-
-    def mock_cm_init(checkpoint_dir, model_name):
-        cm = MagicMock()
-        cm.checkpoint_dir = checkpoint_dir
-        cm.model_name = model_name
-        cm.save = MagicMock(return_value=f"{checkpoint_dir}/{model_name}_epoch99.pt")
-        cm.load_best = MagicMock(return_value=True)
-        return cm
-
-    return mock_cm_init
+def base_spec():
+    return small_spec()
 
 
 @pytest.fixture
-def mock_data_attributes():
-    """Mock DataAttributes with stats."""
-    da = MagicMock()
-    # Robust stats: (q01, q99, mean, std) — wide band so values never clip.
-    da.get_stats.side_effect = lambda col: (-1e9, 1e9, 0.5, 1.0)
-    return da
-
-
-@pytest.fixture
-def sample_df():
-    """Create a sample DataFrame with OHLC and indicator data."""
-    n = 100
-    data = {
-        "15_open": np.random.randn(n) + 100,
-        "15_high": np.random.randn(n) + 101,
-        "15_low": np.random.randn(n) + 99,
-        "15_close": np.random.randn(n) + 100,
-        "15_is_closed": [True] * (n - 1) + [False],
-        "15_rsi_14": np.random.uniform(30, 70, n),
-        "15_cci_14": np.random.uniform(-100, 100, n),
-        "15_target_direction": np.array([0, 1, 2] * (n // 3 + 1))[:n],
-        "60_open": np.random.randn(n) + 100,
-        "60_high": np.random.randn(n) + 101,
-        "60_low": np.random.randn(n) + 99,
-        "60_close": np.random.randn(n) + 100,
-        "60_is_closed": [True] * (n - 1) + [False],
-        "60_rsi_14": np.random.uniform(30, 70, n),
-        "60_cci_14": np.random.uniform(-100, 100, n),
-        "60_target_direction": np.array([0, 1, 2] * (n // 3 + 1))[:n],
-    }
-    return pd.DataFrame(data)
-
-
-@pytest.fixture
-def sample_df_with_nans():
-    """DataFrame with some NaN values in features."""
-    n = 50
-    data = {
-        "15_rsi_14": [np.nan] * 5 + list(np.random.uniform(30, 70, n - 5)),
-        "15_cci_14": list(np.random.uniform(-100, 100, n - 3)) + [np.nan] * 3,
-        "15_is_closed": [True] * (n - 1) + [False],
-        "15_target_direction": np.array([0, 1, 2] * (n // 3 + 1))[:n],
-    }
-    return pd.DataFrame(data)
+def data_attributes():
+    return DataAttributes()
 
 
 # =====================================================================
@@ -112,362 +111,362 @@ def sample_df_with_nans():
 # =====================================================================
 
 
-def test_init_creates_empty_trained_models():
-    """NNOrchestrator initializes with empty trained_models dict."""
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch.dict(os.environ, {}, clear=False) as env:
-            env.pop("NUM_WORKERS", None)
-            orch = NNOrchestrator(
-                checkpoint_dir=tmp_dir,
-                feature_cols=["15_rsi_14", "15_cci_14"],
-            )
-        assert orch.checkpoint_dir == tmp_dir
-        assert orch.feature_cols == ["15_rsi_14", "15_cci_14"]
-        assert orch.trained_models == {}
-        assert orch.num_workers == 4  # default
-
-
-def test_init_reads_num_workers_from_env():
-    """NNOrchestrator reads NUM_WORKERS from environment."""
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        with patch.dict(os.environ, {"NUM_WORKERS": "8"}):
-            orch = NNOrchestrator(
-                checkpoint_dir=tmp_dir,
-                feature_cols=["15_rsi_14"],
-            )
-            assert orch.num_workers == 8
-
-
-def test_init_defaults_num_workers_if_env_missing():
-    """NNOrchestrator defaults to 4 workers if env var absent."""
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        # Ensure NUM_WORKERS is not set
-        env_copy = os.environ.copy()
-        if "NUM_WORKERS" in env_copy:
-            del env_copy["NUM_WORKERS"]
-
-        with patch.dict(os.environ, env_copy, clear=True):
-            orch = NNOrchestrator(
-                checkpoint_dir=tmp_dir,
-                feature_cols=["15_rsi_14"],
-            )
-            assert orch.num_workers == 4
-
-
-# =====================================================================
-# Test: train()
-# =====================================================================
-
-
-@patch("nn.nn_orchestrator.CheckpointManager")
-@patch("nn.nn_orchestrator.NNModel")
-def test_train_returns_dict_with_tf_str_keys(mock_nn_class, mock_cm_class, sample_df, mock_data_attributes):
-    """train() returns dict with TF string keys and metric sub-dicts."""
-    mock_nn = MagicMock()
-    mock_nn.train.return_value = {
-        "loss": 0.5,
-        "accuracy": 0.75,
-        "val_loss": 0.6,
-        "val_accuracy": 0.7,
-    }
-    mock_nn_class.return_value = mock_nn
-
-    mock_cm = MagicMock()
-    mock_cm.save.return_value = "/tmp/model_15_best.pt"
-    mock_cm_class.return_value = mock_cm
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
+def test_init_stores_paths_and_spec(base_spec):
+    """__init__ stores checkpoint_dir/dataset_dir/base_spec; empty trained_models."""
+    env = os.environ.copy()
+    env.pop("NUM_WORKERS", None)
+    env.pop("AVAIABLE_THREADS", None)
+    with patch.dict(os.environ, env, clear=True):
         orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14"],
+            checkpoint_dir="/ckpts",
+            dataset_dir="/datasets",
+            base_spec=base_spec,
         )
-        result = orch.train(sample_df, mock_data_attributes, tfs=[15, 60])
+    assert orch.checkpoint_dir == "/ckpts"
+    assert orch.dataset_dir == "/datasets"
+    assert orch.base_spec is base_spec
+    assert orch.trained_models == {}
+    assert orch.num_workers == 4  # default
 
-        # Result should have string keys "15" and "60"
-        assert "15" in result or "60" in result
-        # Each TF result should have metric sub-dicts
-        for tf_key in result:
-            assert isinstance(result[tf_key], dict)
-            assert "loss" in result[tf_key]
-            assert "accuracy" in result[tf_key]
-            assert "val_loss" in result[tf_key]
-            assert "val_accuracy" in result[tf_key]
+
+def test_init_reads_num_workers_from_env(base_spec):
+    """NUM_WORKERS env overrides the default worker count."""
+    with patch.dict(os.environ, {"NUM_WORKERS": "8"}):
+        orch = NNOrchestrator("/c", "/d", base_spec)
+        assert orch.num_workers == 8
+
+
+def test_init_falls_back_to_available_threads(base_spec):
+    """NUM_WORKERS absent → AVAIABLE_THREADS is used."""
+    env = os.environ.copy()
+    env.pop("NUM_WORKERS", None)
+    env["AVAIABLE_THREADS"] = "6"
+    with patch.dict(os.environ, env, clear=True):
+        orch = NNOrchestrator("/c", "/d", base_spec)
+        assert orch.num_workers == 6
+
+
+def test_init_defaults_num_workers_if_env_missing(base_spec):
+    """Neither env var set → default 4."""
+    env = os.environ.copy()
+    env.pop("NUM_WORKERS", None)
+    env.pop("AVAIABLE_THREADS", None)
+    with patch.dict(os.environ, env, clear=True):
+        orch = NNOrchestrator("/c", "/d", base_spec)
+        assert orch.num_workers == 4
+
+
+# =====================================================================
+# Test: from_trainer
+# =====================================================================
+
+
+def test_from_trainer_builds_paths_and_workers(base_spec, tmp_path):
+    """from_trainer builds checkpoint_dir/dataset_dir from spec_hash + artefact
+    root and reads num_workers from trainer.available_threads()."""
+    trainer = MagicMock()
+    trainer.available_threads.return_value = 11
+
+    fake_root = tmp_path / "BTCUSDT" / "nn"
+
+    with patch(
+        "nn.nn_orchestrator.NNModelSpec.from_yaml", return_value=base_spec
+    ) as mock_from_yaml, patch(
+        "nn.device.nn_artefact_root", return_value=fake_root
+    ) as mock_root:
+        orch = NNOrchestrator.from_trainer("BTCUSDT", trainer)
+
+    mock_from_yaml.assert_called_once_with("configs/nn_spec.yaml")
+    mock_root.assert_called_once_with("BTCUSDT")
+    assert orch.base_spec is base_spec
+    assert orch.checkpoint_dir == f"{fake_root}/checkpoints/{base_spec.spec_hash}"
+    assert orch.dataset_dir == f"{fake_root}/datasets"
+    assert orch.num_workers == 11
+    trainer.available_threads.assert_called_once()
+
+
+# =====================================================================
+# Test: train()  (mocked NNDataset / NNModel / CheckpointManager)
+# =====================================================================
 
 
 @patch("nn.nn_orchestrator.CheckpointManager")
 @patch("nn.nn_orchestrator.NNModel")
-def test_train_skips_tf_with_missing_target_column(
-    mock_nn_class, mock_cm_class, sample_df, mock_data_attributes
+@patch("nn.nn_orchestrator.NNDataset")
+def test_train_builds_dataset_once_and_keys_by_group(
+    mock_ds_cls, mock_model_cls, mock_cm_cls, base_spec, data_attributes
 ):
-    """train() skips TF when target_direction column is missing and logs warning."""
-    mock_nn = MagicMock()
-    mock_nn.train.return_value = {
-        "loss": 0.5,
-        "accuracy": 0.75,
-        "val_loss": 0.6,
-        "val_accuracy": 0.7,
-    }
-    mock_nn_class.return_value = mock_nn
-    mock_cm_class.return_value = MagicMock()
+    """train() builds the NNDataset ONCE and returns a dict keyed by group string."""
+    dataset = MagicMock()
+    dataset.groups.return_value = ["all"]
+    group_view = MagicMock()
+    group_view.manifest = {"normalization": {}, "feature_cols": {}}
+    dataset.group.return_value = group_view
+    mock_ds_cls.build.return_value = dataset
 
-    # Remove target column for 60
-    df_no_target = sample_df.drop(columns=["60_target_direction"])
+    model = MagicMock()
+    model.train.return_value = {"val_accuracy": 0.7, "loss": 0.3}
+    mock_model_cls.return_value = model
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14", "60_rsi_14", "60_cci_14"],
-        )
-        result = orch.train(df_no_target, mock_data_attributes, tfs=[15, 60])
+    cm = MagicMock()
+    mock_cm_cls.return_value = cm
 
-        # Should have result for 15 but not 60
-        assert "15" in result
-        assert "60" not in result
+    orch = NNOrchestrator("/c", "/d", base_spec)
+    df = make_wide_df()
+    result = orch.train(df, data_attributes)
 
+    # Dataset built exactly once, under dataset_dir, with the resolved spec.
+    mock_ds_cls.build.assert_called_once()
+    _, kwargs = mock_ds_cls.build.call_args
+    assert kwargs.get("dataset_dir") == "/d"
 
-@patch("nn.nn_orchestrator.CheckpointManager")
-@patch("nn.nn_orchestrator.NNModel")
-def test_train_calls_epoch_callback(mock_nn_class, mock_cm_class, sample_df, mock_data_attributes):
-    """train() calls epoch_callback with (str(tf), epoch, metrics)."""
-    mock_nn = MagicMock()
-    mock_nn.train.return_value = {
-        "loss": 0.5,
-        "accuracy": 0.75,
-        "val_loss": 0.6,
-        "val_accuracy": 0.7,
-    }
-    mock_nn_class.return_value = mock_nn
-    mock_cm_class.return_value = MagicMock()
+    # Rows partitioned via spec.grouping; result keyed by group string.
+    dataset.groups.assert_called_once_with(base_spec.grouping)
+    assert set(result.keys()) == {"all"}
+    assert result["all"] == {"val_accuracy": 0.7, "loss": 0.3}
 
-    callback_calls = []
+    # One NNModel(spec).train(group_view) per group.
+    mock_model_cls.assert_called_once_with(base_spec)
+    model.train.assert_called_once()
+    assert model.train.call_args[0][0] is group_view
 
-    def test_callback(tf_str, epoch, metrics):
-        callback_calls.append((tf_str, epoch, metrics))
+    # CheckpointManager.save called with a manifest=.
+    cm.save.assert_called_once()
+    assert "manifest" in cm.save.call_args.kwargs
+    assert cm.save.call_args.kwargs["manifest"] is group_view.manifest
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14"],
-        )
-        orch.train(sample_df, mock_data_attributes, tfs=[15], epoch_callback=test_callback)
-
-        # The callback should have been called by NNModel.train()
-        # We verify it was passed correctly to model.train()
-        assert mock_nn.train.called
+    # Model stored under the group key.
+    assert orch.trained_models["all"] is model
 
 
 @patch("nn.nn_orchestrator.CheckpointManager")
 @patch("nn.nn_orchestrator.NNModel")
-def test_train_stores_model_in_trained_models(mock_nn_class, mock_cm_class, sample_df, mock_data_attributes):
-    """train() stores trained NNModel in trained_models keyed by string TF."""
-    mock_nn = MagicMock()
-    mock_nn.train.return_value = {
-        "loss": 0.5,
-        "accuracy": 0.75,
-        "val_loss": 0.6,
-        "val_accuracy": 0.7,
-    }
-    mock_nn_class.return_value = mock_nn
-    mock_cm_class.return_value = MagicMock()
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14"],
-        )
-        orch.train(sample_df, mock_data_attributes, tfs=[15])
-
-        # trained_models should have key "15" (string)
-        assert "15" in orch.trained_models
-        assert orch.trained_models["15"] is mock_nn
-
-
-@patch("nn.nn_orchestrator.CheckpointManager")
-@patch("nn.nn_orchestrator.NNModel")
-def test_train_uses_closed_candles_only(mock_nn_class, mock_cm_class, sample_df, mock_data_attributes):
-    """train() filters by is_closed column if present."""
-    mock_nn = MagicMock()
-    mock_nn.train.return_value = {
-        "loss": 0.5,
-        "accuracy": 0.75,
-        "val_loss": 0.6,
-        "val_accuracy": 0.7,
-    }
-    mock_nn_class.return_value = mock_nn
-    mock_cm_class.return_value = MagicMock()
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14"],
-        )
-        orch.train(sample_df, mock_data_attributes, tfs=[15])
-
-        # NNModel.train() should be called with data, but the last row should
-        # be excluded (it has is_closed=False)
-        assert mock_nn.train.called
-        X_arg, y_arg = mock_nn.train.call_args[0][:2]
-        # X_arg should have fewer rows than total closed rows
-        # (since the last row is not closed)
-        assert X_arg.shape[0] < len(sample_df)
-
-
-# =====================================================================
-# Test: run_inference()
-# =====================================================================
-
-
-@patch("nn.nn_orchestrator.CheckpointManager")
-@patch("nn.nn_orchestrator.NNModel")
-def test_run_inference_returns_only_nn_columns(mock_nn_class, mock_cm_class, sample_df, mock_data_attributes):
-    """run_inference() returns DataFrame with only NN columns."""
-    mock_nn = MagicMock()
-    mock_nn.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
-
-    mock_nn_class.return_value = mock_nn
-
-    mock_cm = MagicMock()
-    mock_cm.load_best.return_value = True
-    mock_cm_class.return_value = mock_cm
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14"],
-        )
-        result = orch.run_inference(sample_df, mock_data_attributes, tfs=[15])
-
-        # Result should only contain NN columns
-        expected_cols = {"15_nn_prob_up", "15_nn_prob_neutral", "15_nn_prob_down"}
-        assert set(result.columns) == expected_cols
-        # Result should not contain original df columns
-        assert "15_rsi_14" not in result.columns
-        assert "15_cci_14" not in result.columns
-
-
-@patch("nn.nn_orchestrator.CheckpointManager")
-@patch("nn.nn_orchestrator.NNModel")
-def test_run_inference_sets_nan_for_missing_features(
-    mock_nn_class, mock_cm_class, sample_df_with_nans, mock_data_attributes
+@patch("nn.nn_orchestrator.NNDataset")
+def test_train_wraps_epoch_callback_with_group_key(
+    mock_ds_cls, mock_model_cls, mock_cm_cls, base_spec, data_attributes
 ):
-    """run_inference() sets NaN for rows with NaN features."""
-    mock_nn = MagicMock()
-    mock_nn.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
+    """train() wraps the (group, epoch, metrics) callback into NNModel's
+    (epoch, metrics) callback, injecting the group key."""
+    dataset = MagicMock()
+    dataset.groups.return_value = ["all"]
+    gv = MagicMock()
+    gv.manifest = {"normalization": {}}
+    dataset.group.return_value = gv
+    mock_ds_cls.build.return_value = dataset
 
-    mock_nn_class.return_value = mock_nn
+    model = MagicMock()
+    model.train.return_value = {"val_accuracy": 0.5}
+    mock_model_cls.return_value = model
+    mock_cm_cls.return_value = MagicMock()
 
-    mock_cm = MagicMock()
-    mock_cm.load_best.return_value = True
-    mock_cm_class.return_value = mock_cm
+    seen = []
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14"],
-        )
-        result = orch.run_inference(sample_df_with_nans, mock_data_attributes, tfs=[15])
+    def cb(group_key, epoch, metrics):
+        seen.append((group_key, epoch, metrics))
 
-        # Result should have same length as input df
-        assert len(result) == len(sample_df_with_nans)
+    orch = NNOrchestrator("/c", "/d", base_spec)
+    orch.train(make_wide_df(), data_attributes, epoch_callback=cb)
 
-        # First 5 rows have NaN in 15_rsi_14, so NN cols should be NaN
-        # Last 3 rows have NaN in 15_cci_14, so NN cols should be NaN
-        assert result.iloc[0]["15_nn_prob_up"] is np.nan or pd.isna(result.iloc[0]["15_nn_prob_up"])
-
-
-@patch("nn.nn_orchestrator.CheckpointManager")
-@patch("nn.nn_orchestrator.NNModel")
-def test_run_inference_skips_tf_with_no_checkpoint(
-    mock_nn_class, mock_cm_class, sample_df, mock_data_attributes
-):
-    """run_inference() skips TF if load_best() returns False."""
-    mock_nn = MagicMock()
-    mock_cm = MagicMock()
-    mock_cm.load_best.return_value = False  # No checkpoint
-    mock_cm_class.return_value = mock_cm
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14"],
-        )
-        result = orch.run_inference(sample_df, mock_data_attributes, tfs=[15])
-
-        # Result should be empty (no TFs to process)
-        assert len(result.columns) == 0
-
-
-@patch("nn.nn_orchestrator.CheckpointManager")
-@patch("nn.nn_orchestrator.NNModel")
-def test_run_inference_preserves_index(mock_nn_class, mock_cm_class, sample_df, mock_data_attributes):
-    """run_inference() preserves index from input df."""
-    mock_nn = MagicMock()
-    mock_nn.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
-
-    mock_nn_class.return_value = mock_nn
-    mock_cm = MagicMock()
-    mock_cm.load_best.return_value = True
-    mock_cm_class.return_value = mock_cm
-
-    # Create df with custom index
-    df_custom = sample_df.copy()
-    df_custom.index = pd.date_range("2024-01-01", periods=len(sample_df))
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14"],
-        )
-        result = orch.run_inference(df_custom, mock_data_attributes, tfs=[15])
-
-        # Result should have same index as input
-        pd.testing.assert_index_equal(result.index, df_custom.index)
+    # The wrapped callback handed to NNModel.train is (epoch, metrics).
+    wrapped = model.train.call_args.kwargs["epoch_callback"]
+    wrapped(3, {"loss": 0.1})
+    assert seen == [("all", 3, {"loss": 0.1})]
 
 
 # =====================================================================
-# Test: integration-like (without mocks for some parts)
+# Test: run_inference()  (mocked load_best for absence + bundled-manifest)
 # =====================================================================
 
 
 @patch("nn.nn_orchestrator.CheckpointManager")
 @patch("nn.nn_orchestrator.NNModel")
-def test_train_and_inference_multiple_tfs(
-    mock_nn_class, mock_cm_class, sample_df, mock_data_attributes
+def test_run_inference_absence_safe_when_no_checkpoint(
+    mock_model_cls, mock_cm_cls, base_spec, data_attributes
 ):
-    """Integration test: train and infer on multiple TFs."""
-    mock_nn_15 = MagicMock()
-    mock_nn_15.train.return_value = {
-        "loss": 0.5,
-        "accuracy": 0.75,
-        "val_loss": 0.6,
-        "val_accuracy": 0.7,
+    """No best checkpoint for any group → empty df.index-aligned result."""
+    mock_model_cls.return_value = MagicMock()
+    cm = MagicMock()
+    cm.load_best.return_value = None  # no checkpoint
+    mock_cm_cls.return_value = cm
+
+    orch = NNOrchestrator("/c", "/d", base_spec)
+    df = make_wide_df(rows=30)
+    result = orch.run_inference(df, data_attributes)
+
+    assert list(result.columns) == []
+    pd.testing.assert_index_equal(result.index, df.index)
+
+
+@patch("nn.nn_orchestrator.NNDataset.build_inference_matrix")
+@patch("nn.nn_orchestrator.CheckpointManager")
+@patch("nn.nn_orchestrator.NNModel")
+def test_run_inference_normalises_via_bundled_manifest(
+    mock_model_cls, mock_cm_cls, mock_build_inf, base_spec, data_attributes
+):
+    """Inference builds its matrix from the checkpoint's BUNDLED manifest stats
+    (feature_cols/history_points/normalization), not from data_attributes."""
+    df = make_wide_df(rows=20)
+
+    bundled_norm = {"15_logret": {"q01": 0, "q99": 1, "mean": 0, "std": 1}}
+    bundled_fcols = {"15": ["15_logret", "15_rsi_14"]}
+    manifest = {
+        "normalization": bundled_norm,
+        "feature_cols": bundled_fcols,
+        "history_points": 4,
     }
-    mock_nn_15.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
 
-    mock_nn_60 = MagicMock()
-    mock_nn_60.train.return_value = {
-        "loss": 0.4,
-        "accuracy": 0.8,
-        "val_loss": 0.5,
-        "val_accuracy": 0.75,
+    model = MagicMock()
+    model.spec = base_spec
+    model.manifest = manifest
+    model.run_batch.return_value = np.tile([0.2, 0.5, 0.3], (len(df), 1))
+    mock_model_cls.return_value = model
+
+    cm = MagicMock()
+    cm.load_best.return_value = {"manifest": manifest, "feature_cols": bundled_fcols}
+    mock_cm_cls.return_value = cm
+
+    X = np.zeros((len(df), 4, 2), dtype=np.float32)
+    valid = np.ones(len(df), dtype=bool)
+    mock_build_inf.return_value = (X, valid)
+
+    # data_attributes must NOT be consulted for stats on the inference path.
+    da = MagicMock()
+
+    orch = NNOrchestrator("/c", "/d", base_spec)
+    orch.run_inference(df, da)
+
+    # build_inference_matrix called with the BUNDLED manifest pieces.
+    args, _ = mock_build_inf.call_args
+    assert args[1] == bundled_fcols           # feature_cols_by_tf
+    assert args[2] == 4                        # history_points
+    assert args[3] == bundled_norm             # normalization (bundled stats)
+    da.get_stats.assert_not_called()
+
+
+@patch("nn.nn_orchestrator.NNDataset.build_inference_matrix")
+@patch("nn.nn_orchestrator.CheckpointManager")
+@patch("nn.nn_orchestrator.NNModel")
+def test_run_inference_emits_only_nn_res_columns(
+    mock_model_cls, mock_cm_cls, mock_build_inf, base_spec, data_attributes
+):
+    """Output carries ONLY tf-agnostic nn_res_* columns, index==df.index,
+    and the input df is not mutated."""
+    df = make_wide_df(rows=20)
+    df_before = df.copy(deep=True)
+
+    manifest = {
+        "normalization": {},
+        "feature_cols": {"15": ["15_logret", "15_rsi_14"]},
+        "history_points": 4,
     }
-    mock_nn_60.run_batch.side_effect = lambda X: np.random.dirichlet([1, 1, 1], len(X))
+    model = MagicMock()
+    model.spec = base_spec
+    model.manifest = manifest
+    model.run_batch.return_value = np.tile([0.1, 0.7, 0.2], (len(df), 1))
+    mock_model_cls.return_value = model
 
-    # Return different mocks for different calls
-    mock_nn_class.side_effect = [mock_nn_15, mock_nn_60, mock_nn_15, mock_nn_60]
-    mock_cm_class.return_value = MagicMock()
+    cm = MagicMock()
+    cm.load_best.return_value = {"manifest": manifest, "feature_cols": None}
+    mock_cm_cls.return_value = cm
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        orch = NNOrchestrator(
-            checkpoint_dir=tmp_dir,
-            feature_cols=["15_rsi_14", "15_cci_14", "60_rsi_14", "60_cci_14"],
-        )
+    X = np.zeros((len(df), 4, 2), dtype=np.float32)
+    mock_build_inf.return_value = (X, np.ones(len(df), dtype=bool))
 
-        # Train both TFs
-        train_result = orch.train(sample_df, mock_data_attributes, tfs=[15, 60])
-        assert len(train_result) >= 1  # At least one TF trained
+    orch = NNOrchestrator("/c", "/d", base_spec)
+    result = orch.run_inference(df, MagicMock())
 
-        # Infer on both TFs
-        inference_result = orch.run_inference(sample_df, mock_data_attributes, tfs=[15, 60])
-        # Should have columns for both TFs
-        assert len(inference_result.columns) >= 3  # At least one set of 3 cols
+    expected = {
+        "nn_res_dir15_prob_up",
+        "nn_res_dir15_prob_neutral",
+        "nn_res_dir15_prob_down",
+    }
+    assert set(result.columns) == expected
+    assert all(c.startswith("nn_res_") for c in result.columns)
+    # No tf-prefixed legacy columns anywhere.
+    assert not any("_nn_prob_" in c for c in result.columns)
+    pd.testing.assert_index_equal(result.index, df.index)
+    # Input df untouched.
+    pd.testing.assert_frame_equal(df, df_before)
+
+
+# =====================================================================
+# Test: end-to-end on a small REAL df (train then infer)
+# =====================================================================
+
+
+def test_end_to_end_train_then_infer(tmp_path, data_attributes):
+    """Train a single-group model on a tiny real df, then run_inference on the
+    SAME df: assert ONLY nn_res_* columns, index equality, df not mutated."""
+    spec = small_spec()
+    ckpt_dir = str(tmp_path / "ckpts")
+    ds_dir = str(tmp_path / "datasets")
+
+    orch = NNOrchestrator(ckpt_dir, ds_dir, spec)
+
+    df = make_wide_df(rows=240)
+    df_before = df.copy(deep=True)
+
+    train_result = orch.train(df, data_attributes)
+    assert set(train_result.keys()) == {"all"}
+    assert "val_accuracy" in train_result["all"]
+
+    # Fresh orchestrator → forces a real load_best round-trip from disk.
+    orch2 = NNOrchestrator(ckpt_dir, ds_dir, spec)
+    result = orch2.run_inference(df, data_attributes)
+
+    assert len(result.columns) > 0
+    assert all(c.startswith("nn_res_") for c in result.columns), result.columns.tolist()
+    assert set(result.columns) == {
+        "nn_res_dir15_prob_up",
+        "nn_res_dir15_prob_neutral",
+        "nn_res_dir15_prob_down",
+    }
+    pd.testing.assert_index_equal(result.index, df.index)
+    # Input df not mutated.
+    pd.testing.assert_frame_equal(df, df_before)
+
+    # At least the warmed-up (post-lookback) rows produced finite probabilities.
+    finite_rows = result.dropna()
+    assert len(finite_rows) >= 1
+    # direction probs sum to ~1 on produced rows.
+    probs = finite_rows[
+        ["nn_res_dir15_prob_up", "nn_res_dir15_prob_neutral", "nn_res_dir15_prob_down"]
+    ].to_numpy()
+    np.testing.assert_allclose(probs.sum(axis=1), 1.0, rtol=1e-4, atol=1e-4)
+
+
+def test_end_to_end_inference_parity_with_training_windows(tmp_path, data_attributes):
+    """The inference feature matrix reuses the SAME window builder + bundled
+    stats as training (D6): build_inference_matrix on the train df reproduces the
+    normalised training tensors for the kept rows."""
+    from pathlib import Path
+
+    from nn.nn_dataset import NNDataset
+
+    spec = small_spec()
+    ds_dir = str(tmp_path / "datasets")
+    df = make_wide_df(rows=240)
+
+    ds = NNDataset.build(df, data_attributes, spec, dataset_dir=ds_dir)
+    X_train, _ = ds.tensors()
+
+    # Rebuild the matrix from the full df using the dataset's bundled manifest.
+    X_inf, valid = NNDataset.build_inference_matrix(
+        df,
+        ds.manifest["feature_cols"],
+        ds.manifest["history_points"],
+        ds.manifest["normalization"],
+    )
+
+    # Restrict the inference matrix to the kept (post-drop) training rows.
+    kept = pd.DatetimeIndex(
+        np.load(Path(ds.dataset_dir_path) / "index.npy", allow_pickle=True)
+    )
+    pos = {ts: i for i, ts in enumerate(df.index)}
+    kept_pos = [pos[ts] for ts in kept]
+    X_inf_kept = X_inf[kept_pos]
+
+    assert X_inf_kept.shape == X_train.shape
+    np.testing.assert_allclose(X_inf_kept, X_train, rtol=1e-5, atol=1e-6)
+    # Every kept training row is valid (no NaN) in the inference matrix.
+    assert valid[kept_pos].all()
