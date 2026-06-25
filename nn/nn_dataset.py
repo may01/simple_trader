@@ -698,15 +698,20 @@ class NNDataset:
         Returns:
             ``(X, valid_mask)`` where ``X`` is
             ``(rows, history_points, n_features)`` float32 (timeframes
-            concatenated along the feature axis in ``feature_cols_by_tf`` key
-            order — matching ``tensors()``) and ``valid_mask`` is a
+            concatenated along the feature axis in ``feature_cols_by_tf``
+            declaration order, which must match ``manifest["timeframes"]``
+            order — guaranteeing byte-parity with ``tensors()``) and
+            ``valid_mask`` is a
             ``(rows,)`` bool array True where NO feature in the window is NaN.
             Rows that are NaN are left in place (caller masks their output);
             no rows are dropped, so ``X`` stays aligned to ``df.index``.
         """
         n_rows = len(df)
-        # Stable timeframe order: numeric ascending, mirroring spec.timeframes.
-        tf_keys = sorted(feature_cols_by_tf.keys(), key=lambda k: int(k))
+        # Iterate in manifest declaration order (same order tensors() uses when
+        # concatenating per-TF blocks). Do NOT sort — for specs whose timeframes
+        # are non-ascending (e.g. [60, 15]) sorting would swap the feature
+        # channels and silently feed the model wrong inputs.
+        tf_keys = list(feature_cols_by_tf.keys())
 
         blocks: list[np.ndarray] = []
         for tf_key in tf_keys:

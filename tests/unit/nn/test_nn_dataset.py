@@ -559,3 +559,159 @@ class TestDefaultDatasetDir:
             ds = NNDataset.build(df, DataAttributes(), spec)
             expected = tmp_path / "data" / "BTCUSDT" / "nn" / "datasets"
             assert Path(ds.dataset_dir_path).parent == expected
+
+
+# ---------------------------------------------------------------------------
+# build_inference_matrix — TF-order parity with training tensors()
+# ---------------------------------------------------------------------------
+
+
+def make_wide_df_two_tf(rows: int = 300, seed: int = 42) -> pd.DataFrame:
+    """Wide DataFrame with 60 and 15 timeframes (non-ascending order).
+
+    Columns:
+      - 60_is_closed, 15_is_closed
+      - 60_logret, 15_logret          (feature; distinct per row)
+      - 15_plong_n1_m1_x0p3, 15_pshort_n1_m1_x0p3  (labels for target)
+    The 60 TF closes every 60th row; 15 TF every 15th.
+    """
+    idx = pd.date_range("2024-01-01", periods=rows, freq="1min")
+    df = pd.DataFrame(index=idx)
+    pos = np.arange(rows)
+    df["60_is_closed"] = ((pos + 1) % 60 == 0)
+    df["15_is_closed"] = ((pos + 1) % 15 == 0)
+    df["60_logret"] = pos.astype(float) * 0.003 - 0.05
+    df["15_logret"] = pos.astype(float) * 0.001 - 0.02
+    suf = _label_suffix(1, 1.0, 0.3)
+    df[f"15_plong_{suf}"] = np.where(pos % 3 == 0, 1.0, 0.0)
+    df[f"15_pshort_{suf}"] = np.where(pos % 3 == 1, 1.0, 0.0)
+    return df
+
+
+class TestInferenceMatrixTFOrderParity:
+    """Regression: build_inference_matrix must use manifest TF order, not sorted."""
+
+    def _build_spec_reversed(self):
+        """Spec with timeframes=[60, 15] — non-ascending order."""
+        return NNModelSpec(
+            name="rev",
+            timeframes=[60, 15],  # non-ascending: 60 first, then 15
+            indicators=["logret"],
+            history_points=3,
+            targets=[
+                TargetSpec(
+                    name="dir15",
+                    kind="direction",
+                    horizons=[1],
+                    label_tf=15,
+                    label_m=1.0,
+                    label_x=0.3,
+                )
+            ],
+            validation_split=0.2,
+            val_strategy="time_holdout",
+            seed=0,
+        )
+
+    def test_inference_matrix_column_blocks_follow_manifest_order(self, tmp_path):
+        """Feature channel blocks in inference matrix must match manifest TF order.
+
+        With timeframes=[60, 15], the first feature channel (axis-2 index 0)
+        must come from the 60-TF block and the second from the 15-TF block —
+        matching what tensors() produces for training.
+
+        This test FAILS if build_inference_matrix sorts keys (ascending=15,60)
+        and PASSES when it follows manifest["timeframes"] order (60,15).
+        """
+        df = make_wide_df_two_tf(rows=300)
+        spec = self._build_spec_reversed()
+        ds = NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+
+        # --- Training tensors (ground truth) ---
+        X_train, _ = ds.tensors()
+
+        # --- Inference matrix using the same full df ---
+        manifest = ds.manifest
+        assert manifest["timeframes"] == [60, 15], (
+            "spec declares [60, 15]; manifest must preserve that order"
+        )
+
+        X_inf, valid_mask = NNDataset.build_inference_matrix(
+            df,
+            feature_cols_by_tf=manifest["feature_cols"],
+            history_points=manifest["history_points"],
+            normalization=manifest["normalization"],
+        )
+
+        # --- Align: inference keeps ALL rows (no drop); training drops NaN rows ---
+        index_npy = np.load(
+            Path(ds.dataset_dir_path) / "index.npy", allow_pickle=True
+        )
+        kept_timestamps = pd.DatetimeIndex(index_npy)
+        all_idx = list(df.index)
+        kept_positions = [all_idx.index(ts) for ts in kept_timestamps]
+
+        X_inf_kept = X_inf[kept_positions]  # rows present in training tensors
+        # valid_mask must be True for all kept rows
+        assert valid_mask[kept_positions].all(), (
+            "some kept training rows are flagged invalid by build_inference_matrix"
+        )
+
+        # --- Byte-level parity: inference features == training features ---
+        np.testing.assert_array_equal(
+            X_inf_kept,
+            X_train,
+            err_msg=(
+                "build_inference_matrix produces different features than tensors() "
+                "for the same rows — TF concatenation order mismatch"
+            ),
+        )
+
+    def test_inference_matrix_first_channel_is_first_manifest_tf(self, tmp_path):
+        """The first feature channel in X must be from manifest['timeframes'][0].
+
+        With timeframes=[60, 15], channel-0 must be 60_logret values;
+        with timeframes=[15, 60], channel-0 must be 15_logret values.
+        This directly catches a sort-by-int regression (sorted gives [15,60]
+        regardless of manifest order).
+        """
+        df = make_wide_df_two_tf(rows=300)
+        spec = self._build_spec_reversed()
+        ds = NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+        manifest = ds.manifest
+
+        X_inf, _ = NNDataset.build_inference_matrix(
+            df,
+            feature_cols_by_tf=manifest["feature_cols"],
+            history_points=manifest["history_points"],
+            normalization=manifest["normalization"],
+        )
+
+        # The training tensors() block for TF 60 should match channel 0.
+        # Load just the 60-TF block as written to disk (normalised).
+        X_60 = np.load(Path(ds.dataset_dir_path) / "X_60.npy")  # (kept, h, 1)
+        X_15 = np.load(Path(ds.dataset_dir_path) / "X_15.npy")  # (kept, h, 1)
+
+        # The 60-TF block comes FIRST per manifest order [60, 15].
+        # tensors() concatenates [X_60, X_15] → channel 0 = 60, channel 1 = 15.
+        # For inference we use full df (no NaN-drop), but we can verify
+        # that for rows that survive the training drop the channel ordering matches.
+        index_npy = np.load(
+            Path(ds.dataset_dir_path) / "index.npy", allow_pickle=True
+        )
+        kept_timestamps = pd.DatetimeIndex(index_npy)
+        all_idx = list(df.index)
+        kept_positions = [all_idx.index(ts) for ts in kept_timestamps]
+
+        # channel 0 of inference (kept rows) == channel 0 of X_60 (training)
+        np.testing.assert_array_equal(
+            X_inf[kept_positions, :, 0:1],
+            X_60,
+            err_msg="channel-0 should be TF-60 (manifest order); got TF-15 instead",
+        )
+        # channel 1 of inference (kept rows) == channel 0 of X_15 (training)
+        np.testing.assert_array_equal(
+            X_inf[kept_positions, :, 1:2],
+            X_15,
+            err_msg="channel-1 should be TF-15 (manifest order); got TF-60 instead",
+        )
