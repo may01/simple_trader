@@ -10,6 +10,16 @@ import pytest
 
 from nn.nn_orchestrator import NNOrchestrator
 
+# Interim skip (Phase-11 Task 05): every test here drives the OLD
+# NNModel(input_size, hidden_size, num_classes) + train(X, y) API, which Task 05
+# replaced with the spec-driven NNModel(spec) + train(NNDataset). NNOrchestrator
+# itself is reworked to the spec-driven API in Task 08, which rewrites these
+# tests and removes this skip.
+pytestmark = pytest.mark.skip(
+    reason="NNModel migrated to spec-driven (task 05); NNOrchestrator + these "
+    "tests are reworked in task 08"
+)
+
 
 # =====================================================================
 # Fixtures

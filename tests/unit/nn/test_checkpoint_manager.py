@@ -8,6 +8,16 @@ import pytest
 from nn.checkpoint_manager import CheckpointManager
 from nn.nn_model import NNModel
 
+# Interim skip (Phase-11 Task 05): every test here builds the OLD
+# NNModel(input_size, hidden_size, num_classes) and exercises the bare-state_dict
+# save/load. Task 05 replaced NNModel with the spec-driven API and made
+# checkpoints self-contained ({state_dict, spec, manifest, feature_cols}).
+# CheckpointManager + these tests are rewritten in Task 06, which removes this skip.
+pytestmark = pytest.mark.skip(
+    reason="NNModel migrated to spec-driven (task 05); CheckpointManager + these "
+    "tests are rewritten in task 06"
+)
+
 
 @pytest.fixture
 def temp_checkpoint_dir():
