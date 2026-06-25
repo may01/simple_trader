@@ -29,7 +29,7 @@ from typing import Callable, Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 
 from nn.device import resolve_device
 from nn.nn_model_spec import (
@@ -349,14 +349,14 @@ class NNModel:
 
         self.build()
 
-        X_train, y_train, X_val, y_val = self._split_dataset(dataset)
+        train_view, val_view = self._split_dataset(dataset)
         # Capture the normalisation manifest + feature_cols for self-contained
         # checkpoints (leakage guard: stats are the TRAIN stats from the dataset).
         self._capture_manifest(dataset)
 
         try:
             return self._run_training(
-                X_train, y_train, X_val, y_val, epoch_callback, self.device
+                train_view, val_view, epoch_callback, self.device
             )
         except RuntimeError as exc:
             if self._is_cuda_oom(exc) and self.device.type == "cuda":
@@ -366,80 +366,66 @@ class NNModel:
                 self.model = None
                 self.build()
                 return self._run_training(
-                    X_train, y_train, X_val, y_val, epoch_callback, self.device
+                    train_view, val_view, epoch_callback, self.device
                 )
             raise
 
     # -- training internals --------------------------------------------
 
     def _split_dataset(self, dataset):
-        """Return (X_train, y_train, X_val, y_val) as float32 numpy arrays.
+        """Return ``(train_view, val_view)`` lazy NNDataset views.
 
-        Uses the dataset's own time-ordered splits when available; otherwise a
-        time-holdout split over the flattened tensors (no shuffle).
+        Uses the dataset's own time-ordered splits when present; otherwise a
+        time-holdout over the full row range (no shuffle). Views are mmap-backed
+        — no X tensor is materialised here.
         """
         try:
-            X_tr, y_tr = dataset.split("train").tensors()
-            X_va, y_va = dataset.split("val").tensors()
-            if len(X_tr) > 0 and len(X_va) > 0:
-                return (
-                    self._flatten(X_tr),
-                    y_tr.astype(np.float32),
-                    self._flatten(X_va),
-                    y_va.astype(np.float32),
-                )
+            train_view = dataset.split("train")
+            val_view = dataset.split("val")
+            tr_s, tr_e = train_view._row_range()
+            va_s, va_e = val_view._row_range()
+            if (tr_e - tr_s) > 0 and (va_e - va_s) > 0:
+                return train_view, val_view
         except (FileNotFoundError, ValueError):
             # FileNotFoundError: splits.json is absent (in-memory / no-splits dataset).
             # ValueError: split name not found in splits.json.
             # Any other exception (corrupt data, shape mismatch, etc.) propagates.
             pass
 
-        # Fallback: time-holdout over the full tensor set.
-        X, y = dataset.tensors()
-        X = self._flatten(X)
-        y = y.astype(np.float32)
-        n = len(X)
+        # Fallback: time-holdout over the full row range.
+        s, e = dataset._row_range()
+        n = e - s
         split = int(round(n * (1.0 - self.spec.validation_split)))
         split = min(max(split, 1), n - 1) if n > 1 else n
-        return X[:split], y[:split], X[split:], y[split:]
-
-    def _flatten(self, X: np.ndarray) -> np.ndarray:
-        """(rows, T, F) → (rows, T*F) when dense; pass through sequence shape.
-
-        We always feed _SpecNet the (rows, T, F) window for sequence models and a
-        flattened window for dense; _SpecNet's own _SqueezeFlatten handles dense,
-        so here we just normalise dims to (rows, T, F).
-        """
-        X = np.asarray(X, dtype=np.float32)
-        if X.ndim == 2:
-            # already (rows, T*F) → reshape to (rows, T, F)
-            X = X.reshape(X.shape[0], self.spec.history_points, self._n_features)
-        return X
+        return dataset._subview(s, s + split), dataset._subview(s + split, e)
 
     def _run_training(
-        self, X_train, y_train, X_val, y_val, epoch_callback, device
+        self, train_view, val_view, epoch_callback, device
     ) -> dict:
-        """Minibatched training: GPU holds one batch, not the whole split.
+        """Minibatched training over lazy, mmap-backed dataset views.
 
-        Tensors stay on CPU in the DataLoader; each batch is moved to ``device``
-        per step, so resident GPU memory scales with ``spec.batch_size`` rather
-        than dataset size. Loss/accuracy/per-target are row-weighted means over
-        batches, so a single-step epoch (``batch_size >= rows``) reproduces the
-        old full-batch numbers exactly.
+        Each batch's windows are gathered from the on-disk mmaps and moved to
+        ``device`` per step, so BOTH host RAM and GPU memory scale with
+        ``spec.batch_size``, not dataset size. Loss/accuracy/per-target are
+        row-weighted means over batches, so a single-step epoch
+        (``batch_size >= rows``) reproduces the old full-batch numbers exactly.
         """
         model = self.model
 
-        train_loader = self._make_loader(
-            X_train, y_train, shuffle=bool(getattr(self.spec, "shuffle_train", True))
+        train_loader = self._loader_for_view(
+            train_view, shuffle=bool(getattr(self.spec, "shuffle_train", True))
         )
         # Validation is NEVER shuffled (order-invariant metrics, deterministic).
-        val_loader = self._make_loader(X_val, y_val, shuffle=False)
+        val_loader = self._loader_for_view(val_view, shuffle=False)
 
         optimizer = self._make_optimizer(model)
 
         # Class weights computed ONCE over the full train labels (global), not
         # per batch — keeps the 'balanced' weighting stable across batch sizes.
-        full_ytr = torch.tensor(y_train, dtype=torch.float32, device=device)
+        # labels() loads only y (small); no X_{tf}.npy is materialised.
+        full_ytr = torch.tensor(
+            train_view.labels(), dtype=torch.float32, device=device
+        )
         class_weights = self._class_weights(full_ytr)
         del full_ytr
 
@@ -498,23 +484,21 @@ class NNModel:
         self.is_trained = True
         return metrics
 
-    def _make_loader(self, X, y, *, shuffle: bool) -> DataLoader:
-        """Build a DataLoader over CPU tensors for one split.
+    def _loader_for_view(self, view, *, shuffle: bool) -> DataLoader:
+        """Build a DataLoader over a view's lazy, mmap-backed dataset.
 
-        num_workers=0: tensors are already materialised in RAM, so worker
-        processes add only fork overhead. When shuffling, a generator seeded by
-        ``spec.seed`` makes the per-epoch order reproducible.
+        num_workers=0: each item is a cheap per-row mmap gather; worker
+        processes would only add fork overhead (memmaps pickle by path, so
+        NUM_WORKERS>0 is a valid later opt-in to overlap I/O). When shuffling, a
+        generator seeded by ``spec.seed`` makes the per-epoch order reproducible.
+        Shuffle random-accesses mmap rows — fine on SSD/NVMe.
         """
-        ds = TensorDataset(
-            torch.tensor(np.asarray(X, dtype=np.float32), dtype=torch.float32),
-            torch.tensor(np.asarray(y, dtype=np.float32), dtype=torch.float32),
-        )
         generator = None
         if shuffle and self.spec.seed is not None:
             generator = torch.Generator()
             generator.manual_seed(int(self.spec.seed))
         return DataLoader(
-            ds,
+            view.torch_dataset(),
             batch_size=max(int(self.spec.batch_size), 1),
             shuffle=shuffle,
             drop_last=False,

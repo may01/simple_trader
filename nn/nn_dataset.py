@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+import torch
 
 from indicators.labels import _fmt
 from nn.device import nn_artefact_root
@@ -313,6 +314,37 @@ def _dataset_hash(
 # ---------------------------------------------------------------------------
 # NNDataset
 # ---------------------------------------------------------------------------
+
+
+class _MmapWindowDataset:
+    """Map-style dataset that lazily gathers one row's multi-TF window.
+
+    Holds memory-mapped X_{tf}.npy / y.npy handles and a row range. __getitem__
+    reads ONE row's ``(history_points, n_features_tf)`` block from each TF mmap
+    and concatenates them along the feature axis (in the given timeframe order)
+    into ``(history_points, sum_tf n_features)``. Only the requested row leaves
+    the mmap, so a DataLoader over this keeps host RAM at O(batch + page cache),
+    independent of total row count. Tensors are already normalised float32 on
+    disk, so no transform happens here.
+    """
+
+    def __init__(self, x_mmaps, y_mmap, start: int, end: int) -> None:
+        self._x = x_mmaps
+        self._y = y_mmap
+        self._start = int(start)
+        self._n = int(end) - int(start)
+
+    def __len__(self) -> int:
+        return self._n
+
+    def __getitem__(self, i: int):
+        r = self._start + i
+        # np.concatenate allocates a fresh writable array; y needs an explicit
+        # copy (a same-dtype mmap slice would otherwise be non-writable).
+        x = np.concatenate([m[r] for m in self._x], axis=-1)
+        x = np.ascontiguousarray(x, dtype=np.float32)
+        y = np.array(self._y[r], dtype=np.float32)
+        return torch.from_numpy(x), torch.from_numpy(y)
 
 
 class NNDataset:
@@ -611,15 +643,16 @@ class NNDataset:
         """
         d = Path(self.dataset_dir_path)
         blocks = [
-            np.load(d / f"X_{tf}.npy") for tf in self.manifest["timeframes"]
+            np.load(d / f"X_{tf}.npy", mmap_mode="r")
+            for tf in self.manifest["timeframes"]
         ]
         X = np.concatenate(blocks, axis=2) if blocks else np.empty((0, 0, 0))
-        y = np.load(d / "y.npy")
+        y = np.load(d / "y.npy", mmap_mode="r")
         if self._row_slice is not None:
             s, e = self._row_slice
             X = X[s:e]
             y = y[s:e]
-        return X, y
+        return np.asarray(X), np.asarray(y)
 
     # ------------------------------------------------------------------
     # split
@@ -671,6 +704,52 @@ class NNDataset:
                 row_slice=self._row_slice,
             )
         raise ValueError(f"unknown group key {group_key!r}")
+
+    # ------------------------------------------------------------------
+    # Lazy mmap loading (host RAM O(batch), not O(rows)) — Task 14
+    # ------------------------------------------------------------------
+
+    def _row_range(self) -> tuple[int, int]:
+        """Absolute [start, end) rows for this view (full range if unsliced)."""
+        if self._row_slice is not None:
+            return self._row_slice
+        return (0, int(self.manifest["rows"]))
+
+    def _subview(self, start: int, end: int) -> "NNDataset":
+        """A view over an explicit absolute row range [start, end)."""
+        return NNDataset(
+            self.dataset_dir_path,
+            self.manifest,
+            self.cached,
+            row_slice=(int(start), int(end)),
+        )
+
+    def torch_dataset(self) -> _MmapWindowDataset:
+        """Lazy, mmap-backed map-style dataset over this view's rows.
+
+        Each X_{tf}.npy / y.npy is opened with ``mmap_mode='r'``; one row's
+        multi-TF window is assembled on access in ``manifest['timeframes']``
+        order. Host RAM stays O(batch + page cache), not O(rows). Consumed by a
+        DataLoader in NNModel training.
+        """
+        d = Path(self.dataset_dir_path)
+        x_mmaps = [
+            np.load(d / f"X_{tf}.npy", mmap_mode="r")
+            for tf in self.manifest["timeframes"]
+        ]
+        y_mmap = np.load(d / "y.npy", mmap_mode="r")
+        s, e = self._row_range()
+        return _MmapWindowDataset(x_mmaps, y_mmap, s, e)
+
+    def labels(self) -> np.ndarray:
+        """The y rows for this view (small: rows × target_width).
+
+        Opens only y.npy (via mmap) and materialises the slice — used for global
+        class weights without ever opening an X_{tf}.npy.
+        """
+        y_mmap = np.load(Path(self.dataset_dir_path) / "y.npy", mmap_mode="r")
+        s, e = self._row_range()
+        return np.asarray(y_mmap[s:e])
 
     # ------------------------------------------------------------------
     # Inference feature matrix (parity with training — D6)

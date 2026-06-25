@@ -631,3 +631,124 @@ def test_class_weights_computed_once_over_full_train(tmp_path, monkeypatch):
     NNModel(spec).train(dataset, epoch_callback=lambda e, m: None)
 
     assert seen_rows == [36]  # once, full train rows — not per-batch(8) / per-epoch
+
+
+# ---------------------------------------------------------------------------
+# Lazy mmap dataset (Task 14): host RAM O(batch), not O(rows)
+# ---------------------------------------------------------------------------
+
+
+def test_torch_dataset_byte_parity_with_tensors(tmp_path):
+    """torch_dataset() stacked over all rows == tensors()[0], incl. non-ascending
+    timeframe order (feature channels must follow manifest order, not sorted)."""
+    import torch
+
+    spec = _direction_spec(timeframes=[60, 15])  # non-ascending: order matters
+    d = tmp_path / "ds"
+    d.mkdir()
+    ds = _write_dataset(str(d), spec, n=40)
+
+    X_full, y_full = ds.tensors()
+    td = ds.torch_dataset()
+
+    assert len(td) == X_full.shape[0]
+    xs = torch.stack([td[i][0] for i in range(len(td))]).numpy()
+    ys = torch.stack([td[i][1] for i in range(len(td))]).numpy()
+    np.testing.assert_array_equal(xs, X_full)
+    np.testing.assert_array_equal(ys, y_full)
+
+
+def _spy_np_load(monkeypatch) -> list:
+    """Record (path, mmap_mode) for every np.load call (numpy module-level)."""
+    import numpy
+
+    calls: list = []
+    real = numpy.load
+
+    def spy(path, *args, **kwargs):
+        calls.append((str(path), kwargs.get("mmap_mode")))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(numpy, "load", spy)
+    return calls
+
+
+def test_X_opened_with_mmap(tmp_path, monkeypatch):
+    """torch_dataset() opens every X_{tf}.npy with mmap_mode='r' (never a full
+    resident load)."""
+    spec = _direction_spec(timeframes=[15, 60])
+    d = tmp_path / "ds"
+    d.mkdir()
+    ds = _write_dataset(str(d), spec, n=30)
+
+    calls = _spy_np_load(monkeypatch)
+    ds.torch_dataset()
+
+    x_calls = [(p, m) for (p, m) in calls if "X_" in p]
+    assert x_calls, "no X_{tf}.npy opened"
+    assert all(m == "r" for (_p, m) in x_calls)
+
+
+def test_labels_loads_y_only_not_X(tmp_path, monkeypatch):
+    """labels() reads y.npy only — never opens an X_{tf}.npy."""
+    spec = _direction_spec(timeframes=[15, 60])
+    d = tmp_path / "ds"
+    d.mkdir()
+    ds = _write_dataset(str(d), spec, n=30)
+
+    calls = _spy_np_load(monkeypatch)
+    y = ds.labels()
+
+    assert y.shape[0] == 30
+    assert not any("X_" in p for (p, _m) in calls)
+    assert any(p.endswith("y.npy") for (p, _m) in calls)
+
+
+def test_training_consumes_lazy_dataset_not_tensors(tmp_path, monkeypatch):
+    """Training routes through the lazy mmap dataset (train + val views) and
+    never materialises the full X via tensors()."""
+    from nn.nn_dataset import NNDataset
+
+    spec = _direction_spec(batch_size=8, epochs=1, early_stopping_patience=None)
+    d = tmp_path / "ds"
+    d.mkdir()
+    dataset = _write_dataset(str(d), spec, n=60)
+
+    td_calls = {"n": 0}
+    tn_calls = {"n": 0}
+    real_td = NNDataset.torch_dataset
+    real_tn = NNDataset.tensors
+
+    def spy_td(self):
+        td_calls["n"] += 1
+        return real_td(self)
+
+    def spy_tn(self):
+        tn_calls["n"] += 1
+        return real_tn(self)
+
+    monkeypatch.setattr(NNDataset, "torch_dataset", spy_td)
+    monkeypatch.setattr(NNDataset, "tensors", spy_tn)
+
+    model = NNModel(spec)
+    model.train(dataset, epoch_callback=lambda e, m: None)
+
+    assert model.is_trained
+    assert td_calls["n"] >= 2  # train view + val view
+    assert tn_calls["n"] == 0  # full-X materialisation gone from the train path
+
+
+def test_splits_json_absent_lazy_fallback(tmp_path):
+    """No splits.json → lazy time-holdout fallback still trains (parity with the
+    Task-13 fallback, now over the lazy dataset)."""
+    spec = _direction_spec(batch_size=8, epochs=2, early_stopping_patience=None)
+    d = tmp_path / "ds"
+    d.mkdir()
+    dataset = _write_dataset(str(d), spec, n=60)
+    os.remove(os.path.join(str(d), "splits.json"))
+
+    model = NNModel(spec)
+    metrics = model.train(dataset, epoch_callback=lambda e, m: None)
+
+    assert model.is_trained
+    assert "loss" in metrics and "val_loss" in metrics
