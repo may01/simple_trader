@@ -55,6 +55,22 @@ class Trainer:
         self.run_type: str = os.environ["RUN_TYPE"]
         self.metadata: dict = {}
 
+    @property
+    def pair(self) -> str:
+        """Trading pair (e.g. ``"link_usdt"``) from the PAIR env var."""
+        return os.environ["PAIR"]
+
+    def available_threads(self) -> int:
+        """Worker count for the NN orchestrator.
+
+        Reads NUM_WORKERS (fallback the misspelled-but-historical
+        AVAIABLE_THREADS, default 4). Consumed by
+        ``NNOrchestrator.from_trainer(pair, self)``.
+        """
+        return int(
+            os.environ.get("NUM_WORKERS", os.environ.get("AVAIABLE_THREADS", "4"))
+        )
+
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
@@ -69,8 +85,9 @@ class Trainer:
             "grab_data": self._run_grab_data,
             "prepare_data": self._run_prepare_data,
             "simulate": self._run_simulate,
-            "train_nn": self._run_train_nn,
-            "simulate_nn": self._run_simulate_nn,
+            "nn_train": self._run_train_nn,
+            "infer_nn": self._run_infer_nn,
+            "simulate_nn": self._run_infer_nn,  # legacy alias → infer_nn
         }
 
         if self.run_type == "full":
@@ -78,7 +95,7 @@ class Trainer:
             self._run_prepare_data()
             self._run_simulate()
             self._run_train_nn()
-            self._run_simulate_nn()
+            self._run_infer_nn()
             self._run_prepare_data()
             return
 
@@ -228,9 +245,13 @@ class Trainer:
         }
 
     def _run_train_nn(self) -> None:
-        """Train the neural network using NNOrchestrator (nn/, Phase 11)."""
+        """Train the NN via NNOrchestrator.from_trainer (nn/, Phase 11).
+
+        The orchestrator owns all architecture/grouping/timeframe/target
+        knowledge (configs/nn_spec.yaml). Trainer only loads the dataset df +
+        DataAttributes and pickles group-keyed epoch progress.
+        """
         import pandas as pd  # lazy
-        from config_loader import CANDLES as tfs, load_nn_config  # lazy
         from helpers import data_attributes_path, shared_folder, wide_df_path  # lazy
         from indicators import DataAttributes  # lazy
         from nn.nn_orchestrator import NNOrchestrator  # lazy
@@ -238,55 +259,63 @@ class Trainer:
         df = pd.read_pickle(wide_df_path())
         data_attributes = DataAttributes.load(data_attributes_path())
 
-        nn_cfg = load_nn_config(self.config_path + "indicators_config.yaml")
-        orch = NNOrchestrator(
-            checkpoint_dir=nn_cfg["checkpoint_dir"],
-            feature_cols=nn_cfg["feature_cols"],
-        )
+        orch = NNOrchestrator.from_trainer(self.pair, self)
 
         shared = shared_folder()
         os.makedirs(shared, exist_ok=True)
         state_path = shared + "training_state.pkl"
 
-        # Orchestrator contract: epoch_callback(tf_str, epoch, metrics)
-        def epoch_callback(tf_str: str, epoch: int, metrics: dict) -> None:
+        # Orchestrator contract (v3.0): epoch_callback(group_key, epoch, metrics).
+        def epoch_callback(group_key: str, epoch: int, metrics: dict) -> None:
             with open(state_path, "wb") as f:
                 pickle.dump(
-                    {"phase": "nn_train", "tf": tf_str, "epoch": epoch, **metrics}, f
+                    {
+                        "phase": "nn_train",
+                        "group": group_key,
+                        "epoch": epoch,
+                        "metrics": metrics,
+                    },
+                    f,
                 )
 
-        train_metrics = orch.train(df, data_attributes, tfs, epoch_callback=epoch_callback)
+        train_metrics = orch.train(df, data_attributes, epoch_callback=epoch_callback)
 
         self.metadata["train_nn"] = train_metrics or {}
 
-    def _run_simulate_nn(self) -> None:
-        """Run NN inference and save the result to nn_output_path atomically."""
-        import pandas as pd  # lazy
-        from config_loader import CANDLES as tfs, load_nn_config  # lazy
-        from helpers import data_attributes_path, wide_df_path  # lazy
-        from indicators import DataAttributes  # lazy
+    def _run_infer_nn(self) -> None:
+        """Run NN inference over a dataset folder (Phase 11).
+
+        The orchestrator loads df_with_indicators.pkl from the target dataset,
+        scores it, and atomically writes {dataset}/df_with_nn.pkl (absence-safe;
+        never mutates df_with_indicators.pkl). Trainer only resolves the dataset
+        dir + checkpoint id and records a light summary.
+        """
+        from helpers import wide_df_path  # lazy
         from nn.nn_orchestrator import NNOrchestrator  # lazy
 
-        df = pd.read_pickle(wide_df_path())
-        data_attributes = DataAttributes.load(data_attributes_path())
+        # Default dataset = the dir CONTAINING df_with_indicators.pkl.
+        dataset = os.getenv("NN_INFER_DATASET", os.path.dirname(wide_df_path()))
+        checkpoint_id = os.getenv("NN_INFER_CHECKPOINT", "best")
 
-        nn_cfg = load_nn_config(self.config_path + "indicators_config.yaml")
-        orch = NNOrchestrator(
-            checkpoint_dir=nn_cfg["checkpoint_dir"],
-            feature_cols=nn_cfg["feature_cols"],
+        orch = NNOrchestrator.from_trainer(self.pair, self)
+        result = orch.run_inference_dataset(
+            dataset_dir=dataset, checkpoint_id=checkpoint_id
         )
-        nn_df = orch.run_inference(df, data_attributes, tfs)
 
-        out_path = _nn_output_path()
-        os.makedirs(os.path.dirname(out_path), exist_ok=True)
-        tmp_path = out_path + ".tmp"
-        nn_df.to_pickle(tmp_path)
-        os.rename(tmp_path, out_path)
-
-        self.metadata["simulate_nn"] = {
-            "rows": len(nn_df),
-            "columns": list(nn_df.columns),
-        }
+        if result is None:
+            self.metadata["infer_nn"] = {
+                "dataset": dataset,
+                "checkpoint_id": checkpoint_id,
+                "written": False,
+            }
+        else:
+            self.metadata["infer_nn"] = {
+                "dataset": dataset,
+                "checkpoint_id": checkpoint_id,
+                "written": True,
+                "rows": len(result),
+                "columns": list(result.columns),
+            }
 
     # ------------------------------------------------------------------
     # Metadata helpers

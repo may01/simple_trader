@@ -19,8 +19,10 @@ Two modes, both called from ``Trainer``:
                           NN-columns-only DataFrame indexed by ``df.index``.
 
 ``run_inference`` is PURE: it returns the ``nn_res_*`` DataFrame and writes no
-files. The dataset-path resolution + atomic write of ``{dataset}/df_with_nn.pkl``
-is a thin Trainer wrapper added in task 11.
+files. ``run_inference_dataset`` (task 11) is the thin write-wrapper: it loads a
+dataset folder, calls ``run_inference``, and atomically writes
+``{dataset}/df_with_nn.pkl`` (absence-safe; never mutates
+``df_with_indicators.pkl``).
 """
 
 from __future__ import annotations
@@ -280,6 +282,52 @@ class NNOrchestrator:
             return pd.DataFrame(index=df.index)
 
         return pd.DataFrame(result_data, index=df.index)
+
+    # ------------------------------------------------------------------
+    # Dataset write-wrapper (D5)
+    # ------------------------------------------------------------------
+
+    def run_inference_dataset(
+        self, dataset_dir: str, checkpoint_id: str = "best"
+    ) -> Optional[pd.DataFrame]:
+        """Run inference over a dataset folder and atomically persist results.
+
+        Loads ``df_with_indicators.pkl`` (+ ``data_attributes.pkl`` if present)
+        from ``dataset_dir``, runs the PURE :meth:`run_inference`, and — only when
+        the result carries at least one ``nn_res_*`` column — atomically writes
+        ``{dataset_dir}/df_with_nn.pkl`` via a ``.tmp`` + ``os.replace`` swap.
+        ``df_with_indicators.pkl`` is NEVER mutated.
+
+        Absence-safe: a ``None`` result, or a result with no ``nn_res_*`` columns
+        (no promoted checkpoint), writes nothing and returns ``None``.
+
+        ``checkpoint_id`` selects which checkpoint set to score with; ``"best"``
+        (the only value wired today) routes through ``CheckpointManager.load_best``
+        inside :meth:`run_inference`. Non-``"best"`` ids are a reserved future hook
+        (named checkpoints) and currently fall through to the same ``best`` path.
+        """
+        df = pd.read_pickle(os.path.join(dataset_dir, "df_with_indicators.pkl"))
+
+        attrs_path = os.path.join(dataset_dir, "data_attributes.pkl")
+        data_attributes = (
+            DataAttributes.load(attrs_path)
+            if os.path.exists(attrs_path)
+            else DataAttributes()
+        )
+
+        result = self.run_inference(df, data_attributes)
+
+        if result is None or not any(
+            str(col).startswith("nn_res_") for col in result.columns
+        ):
+            # Absence-safe: no checkpoint / nothing to write.
+            return None
+
+        out_path = os.path.join(dataset_dir, "df_with_nn.pkl")
+        tmp_path = out_path + ".tmp"
+        result.to_pickle(tmp_path)
+        os.replace(tmp_path, out_path)
+        return result
 
     # ------------------------------------------------------------------
     # Inference helpers

@@ -435,6 +435,89 @@ def test_end_to_end_train_then_infer(tmp_path, data_attributes):
     np.testing.assert_allclose(probs.sum(axis=1), 1.0, rtol=1e-4, atol=1e-4)
 
 
+# =====================================================================
+# Test: run_inference_dataset()  (D5 atomic write-wrapper, task 11)
+# =====================================================================
+
+
+def _write_dataset(dataset_dir, df, data_attributes):
+    """Write df_with_indicators.pkl + data_attributes.pkl into dataset_dir."""
+    os.makedirs(dataset_dir, exist_ok=True)
+    df.to_pickle(os.path.join(dataset_dir, "df_with_indicators.pkl"))
+    data_attributes.save(os.path.join(dataset_dir, "data_attributes.pkl"))
+
+
+def test_run_inference_dataset_writes_df_with_nn(tmp_path, base_spec, data_attributes):
+    """When run_inference yields nn_res_* columns, the wrapper writes
+    {dataset_dir}/df_with_nn.pkl atomically and returns the result."""
+    dataset_dir = str(tmp_path / "ds")
+    df = make_wide_df(rows=20)
+    _write_dataset(dataset_dir, df, data_attributes)
+
+    nn_df = pd.DataFrame(
+        {"nn_res_dir15_prob_up": np.full(len(df), 0.5)}, index=df.index
+    )
+
+    orch = NNOrchestrator("/c", "/d", base_spec)
+    with patch.object(orch, "run_inference", return_value=nn_df) as mock_inf:
+        result = orch.run_inference_dataset(dataset_dir=dataset_dir)
+
+    # run_inference fed with the loaded df + data_attributes.
+    mock_inf.assert_called_once()
+    out_path = os.path.join(dataset_dir, "df_with_nn.pkl")
+    assert os.path.exists(out_path)
+    written = pd.read_pickle(out_path)
+    assert "nn_res_dir15_prob_up" in written.columns
+    pd.testing.assert_frame_equal(result, nn_df)
+
+
+def test_run_inference_dataset_absence_safe_writes_nothing(
+    tmp_path, base_spec, data_attributes
+):
+    """run_inference None or no nn_res_* columns → no df_with_nn.pkl, returns None."""
+    df = make_wide_df(rows=20)
+
+    # Case A: run_inference returns None
+    ds_a = str(tmp_path / "a")
+    _write_dataset(ds_a, df, data_attributes)
+    orch = NNOrchestrator("/c", "/d", base_spec)
+    with patch.object(orch, "run_inference", return_value=None):
+        assert orch.run_inference_dataset(dataset_dir=ds_a) is None
+    assert not os.path.exists(os.path.join(ds_a, "df_with_nn.pkl"))
+
+    # Case B: run_inference returns a frame with NO nn_res_* columns (absence)
+    ds_b = str(tmp_path / "b")
+    _write_dataset(ds_b, df, data_attributes)
+    empty = pd.DataFrame(index=df.index)  # no nn_res_* columns
+    with patch.object(orch, "run_inference", return_value=empty):
+        assert orch.run_inference_dataset(dataset_dir=ds_b) is None
+    assert not os.path.exists(os.path.join(ds_b, "df_with_nn.pkl"))
+
+
+def test_run_inference_dataset_never_mutates_indicators_pkl(
+    tmp_path, base_spec, data_attributes
+):
+    """df_with_indicators.pkl mtime is unchanged after run_inference_dataset."""
+    import time
+
+    dataset_dir = str(tmp_path / "ds")
+    df = make_wide_df(rows=20)
+    _write_dataset(dataset_dir, df, data_attributes)
+
+    indicators_path = os.path.join(dataset_dir, "df_with_indicators.pkl")
+    mtime_before = os.stat(indicators_path).st_mtime_ns
+    time.sleep(0.01)
+
+    nn_df = pd.DataFrame(
+        {"nn_res_dir15_prob_up": np.full(len(df), 0.5)}, index=df.index
+    )
+    orch = NNOrchestrator("/c", "/d", base_spec)
+    with patch.object(orch, "run_inference", return_value=nn_df):
+        orch.run_inference_dataset(dataset_dir=dataset_dir)
+
+    assert os.stat(indicators_path).st_mtime_ns == mtime_before
+
+
 def test_end_to_end_inference_parity_with_training_windows(tmp_path, data_attributes):
     """The inference feature matrix reuses the SAME window builder + bundled
     stats as training (D6): build_inference_matrix on the train df reproduces the

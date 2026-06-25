@@ -117,17 +117,30 @@ class TestRunDispatch:
         t.run()
         t._run_simulate.assert_called_once()
 
-    def test_dispatches_train_nn(self, monkeypatch):
-        t = self._make_trainer(monkeypatch, "train_nn")
+    def test_dispatches_nn_train(self, monkeypatch):
+        t = self._make_trainer(monkeypatch, "nn_train")
         t._run_train_nn = MagicMock()
         t.run()
         t._run_train_nn.assert_called_once()
 
-    def test_dispatches_simulate_nn(self, monkeypatch):
-        t = self._make_trainer(monkeypatch, "simulate_nn")
-        t._run_simulate_nn = MagicMock()
+    def test_dispatches_infer_nn(self, monkeypatch):
+        t = self._make_trainer(monkeypatch, "infer_nn")
+        t._run_infer_nn = MagicMock()
         t.run()
-        t._run_simulate_nn.assert_called_once()
+        t._run_infer_nn.assert_called_once()
+
+    def test_dispatches_simulate_nn_alias_to_infer(self, monkeypatch):
+        """Legacy RUN_TYPE 'simulate_nn' is an alias for infer_nn."""
+        t = self._make_trainer(monkeypatch, "simulate_nn")
+        t._run_infer_nn = MagicMock()
+        t.run()
+        t._run_infer_nn.assert_called_once()
+
+    def test_group_nn_run_type_removed(self, monkeypatch):
+        """The legacy 'group_nn' RUN_TYPE no longer dispatches → ValueError."""
+        t = self._make_trainer(monkeypatch, "group_nn")
+        with pytest.raises(ValueError, match="group_nn"):
+            t.run()
 
 
 # ---------------------------------------------------------------------------
@@ -263,17 +276,17 @@ class TestFullMode:
         t._run_prepare_data = MagicMock(side_effect=lambda: call_order.append("prepare_data"))
         t._run_simulate = MagicMock(side_effect=lambda: call_order.append("simulate"))
         t._run_train_nn = MagicMock(side_effect=lambda: call_order.append("train_nn"))
-        t._run_simulate_nn = MagicMock(side_effect=lambda: call_order.append("simulate_nn"))
+        t._run_infer_nn = MagicMock(side_effect=lambda: call_order.append("infer_nn"))
 
         t.run()
 
-        # "full" = grab_data → prepare_data → simulate → train_nn → simulate_nn → prepare_data
+        # "full" = grab_data → prepare_data → simulate → train_nn → infer_nn → prepare_data
         assert call_order == [
             "grab_data",
             "prepare_data",
             "simulate",
             "train_nn",
-            "simulate_nn",
+            "infer_nn",
             "prepare_data",
         ]
 
@@ -289,7 +302,7 @@ class TestFullMode:
         t._run_prepare_data = MagicMock()
         t._run_simulate = MagicMock()
         t._run_train_nn = MagicMock()
-        t._run_simulate_nn = MagicMock()
+        t._run_infer_nn = MagicMock()
 
         t.run()
 
@@ -537,69 +550,146 @@ class TestRunSimulate:
         )
 
 
-class TestRunSimulateNN:
-    """Tests for _run_simulate_nn().
+class TestAvailableThreads:
+    """Trainer.available_threads() reads NUM_WORKERS (fallback AVAIABLE_THREADS,
+    default 4) — the orchestrator's from_trainer factory consumes it."""
 
-    Uses sys.modules injection since NNOrchestrator, DataAttributes, and
-    pandas are all imported lazily inside the method body.
-    """
-
-    def test_simulate_nn_saves_result(self, monkeypatch, tmp_path):
-        """_run_simulate_nn calls NNOrchestrator.run_inference and saves result."""
-        import sys
-        import pandas as real_pd
-        _set_env(monkeypatch, {"RUN_TYPE": "simulate_nn"})
+    def _make(self, monkeypatch, env):
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train", **env})
         import importlib
         import training.trainer as mod
         importlib.reload(mod)
+        return mod.Trainer()
 
-        # Build a real small DataFrame as inference output so to_pickle works
-        nn_result_df = real_pd.DataFrame({"nn_col": [1, 2, 3]})
+    def test_defaults_to_4(self, monkeypatch):
+        monkeypatch.delenv("NUM_WORKERS", raising=False)
+        monkeypatch.delenv("AVAIABLE_THREADS", raising=False)
+        t = self._make(monkeypatch, {})
+        assert t.available_threads() == 4
 
-        mock_nn_orch = MagicMock()
-        mock_nn_orch.run_inference.return_value = nn_result_df
-        mock_nn_orch_cls = MagicMock(return_value=mock_nn_orch)
+    def test_reads_num_workers(self, monkeypatch):
+        t = self._make(monkeypatch, {"NUM_WORKERS": "9"})
+        assert t.available_threads() == 9
 
-        mock_da_instance = MagicMock()
-        mock_da_cls = MagicMock()
-        mock_da_cls.load.return_value = mock_da_instance
+    def test_falls_back_to_available_threads(self, monkeypatch):
+        monkeypatch.delenv("NUM_WORKERS", raising=False)
+        t = self._make(monkeypatch, {"AVAIABLE_THREADS": "7"})
+        assert t.available_threads() == 7
 
-        # Mock nn_orchestrator module
-        mock_nn_module = MagicMock()
-        mock_nn_module.NNOrchestrator = mock_nn_orch_cls
+    def test_pair_property(self, monkeypatch):
+        t = self._make(monkeypatch, {"PAIR": "btc_usdt"})
+        assert t.pair == "btc_usdt"
 
-        # Mock indicators module (contains DataAttributes)
-        mock_indicators_module = MagicMock()
-        mock_indicators_module.DataAttributes = mock_da_cls
 
-        # Mock config_loader for CANDLES
-        mock_config_module = MagicMock()
-        mock_config_module.CANDLES = [1, 5, 15, 60]
+class TestRunInferNN:
+    """Tests for _run_infer_nn() (replaces _run_simulate_nn).
 
-        _nn_keys = ["nn.nn_orchestrator", "indicators", "config_loader"]
-        _nn_saved = {k: sys.modules.get(k) for k in _nn_keys}
-        sys.modules["nn.nn_orchestrator"] = mock_nn_module
-        sys.modules["indicators"] = mock_indicators_module
-        sys.modules["config_loader"] = mock_config_module
+    Delegates dataset resolution + atomic write to
+    NNOrchestrator.run_inference_dataset; Trainer no longer touches pandas
+    or DataAttributes on this path.
+    """
 
+    @contextmanager
+    def _injected(self, tmp_path, run_inference_dataset_return):
+        import sys
+
+        mock_orch_instance = MagicMock()
+        mock_orch_instance.run_inference_dataset.return_value = (
+            run_inference_dataset_return
+        )
+        mock_orch_cls = MagicMock()
+        mock_orch_cls.from_trainer.return_value = mock_orch_instance
+
+        mods = {"nn.nn_orchestrator": MagicMock(NNOrchestrator=mock_orch_cls)}
+        saved = {k: sys.modules.get(k) for k in mods}
+        sys.modules.update(mods)
         try:
-            with patch("helpers.wide_df_path", return_value="/data/wide.pkl"), \
-                 patch("helpers.data_attributes_path", return_value="/data/attrs.pkl"), \
-                 patch("helpers.nn_folder", return_value=str(tmp_path) + "/"), \
-                 patch("pandas.read_pickle", return_value=MagicMock()):
-                t = mod.Trainer()
-                t._run_simulate_nn()
+            # wide_df_path() dir is the default dataset folder.
+            with patch(
+                "helpers.wide_df_path",
+                return_value=str(tmp_path) + "/df_with_indicators.pkl",
+            ):
+                yield (mock_orch_cls, mock_orch_instance)
         finally:
-            for key, original in _nn_saved.items():
+            for key, original in saved.items():
                 if original is None:
                     sys.modules.pop(key, None)
                 else:
                     sys.modules[key] = original
 
-        mock_nn_orch.run_inference.assert_called_once()
-        # Result should be saved as a pkl file
-        out_path = str(tmp_path) + "/df_with_nn.pkl"
-        assert os.path.exists(out_path)
+    def test_infer_nn_builds_orch_from_trainer(self, monkeypatch, tmp_path):
+        """_run_infer_nn constructs the orchestrator via from_trainer(pair, self)."""
+        import pandas as real_pd
+        _set_env(monkeypatch, {"RUN_TYPE": "infer_nn"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        result = real_pd.DataFrame({"nn_res_x": [1, 2, 3]})
+        with self._injected(tmp_path, result) as (orch_cls, orch_instance):
+            t = mod.Trainer()
+            t._run_infer_nn()
+
+        orch_cls.from_trainer.assert_called_once_with(t.pair, t)
+        orch_instance.run_inference_dataset.assert_called_once()
+
+    def test_infer_nn_default_dataset_is_wide_df_dir(self, monkeypatch, tmp_path):
+        """Default dataset = the dir CONTAINING df_with_indicators.pkl."""
+        import pandas as real_pd
+        _set_env(monkeypatch, {"RUN_TYPE": "infer_nn"})
+        monkeypatch.delenv("NN_INFER_DATASET", raising=False)
+        monkeypatch.delenv("NN_INFER_CHECKPOINT", raising=False)
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path, real_pd.DataFrame({"nn_res_x": [1]})) as (
+            _,
+            orch_instance,
+        ):
+            mod.Trainer()._run_infer_nn()
+
+        kwargs = orch_instance.run_inference_dataset.call_args.kwargs
+        assert kwargs["dataset_dir"] == str(tmp_path)
+        assert kwargs["checkpoint_id"] == "best"
+
+    def test_infer_nn_env_overrides(self, monkeypatch, tmp_path):
+        """NN_INFER_DATASET / NN_INFER_CHECKPOINT override the defaults."""
+        import pandas as real_pd
+        _set_env(
+            monkeypatch,
+            {
+                "RUN_TYPE": "infer_nn",
+                "NN_INFER_DATASET": "/custom/ds",
+                "NN_INFER_CHECKPOINT": "epoch_5",
+            },
+        )
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path, real_pd.DataFrame({"nn_res_x": [1]})) as (
+            _,
+            orch_instance,
+        ):
+            mod.Trainer()._run_infer_nn()
+
+        kwargs = orch_instance.run_inference_dataset.call_args.kwargs
+        assert kwargs["dataset_dir"] == "/custom/ds"
+        assert kwargs["checkpoint_id"] == "epoch_5"
+
+    def test_infer_nn_absence_safe_metadata(self, monkeypatch, tmp_path):
+        """result None → metadata records the absence without crashing."""
+        _set_env(monkeypatch, {"RUN_TYPE": "infer_nn"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path, None):
+            t = mod.Trainer()
+            t._run_infer_nn()  # must not raise
+
+        assert "infer_nn" in t.metadata
 
 
 class TestRunSimulateRealSignatures:
@@ -686,23 +776,19 @@ class TestRunSimulateRealSignatures:
 
 
 class TestRunTrainNNRealWiring:
-    """_run_train_nn/_run_simulate_nn must import NNOrchestrator from
-    nn.nn_orchestrator (it exists — phase 11 is implemented) and construct it
-    as NNOrchestrator(checkpoint_dir, feature_cols) from the nn section of
-    configs/indicators_config.yaml. The epoch callback must accept
-    (tf_str, epoch, metrics) — the orchestrator's contract."""
+    """_run_train_nn builds the orchestrator via NNOrchestrator.from_trainer
+    (no feature_cols / checkpoint_dir / tfs / load_nn_config). The epoch
+    callback is group-keyed (group_key, epoch, metrics) and pickles a
+    {"phase": "nn_train", "group": ..., "epoch": ..., "metrics": ...} state."""
 
     @contextmanager
     def _injected(self, tmp_path):
         import sys
 
-        import pandas as real_pd
-
         mock_orch_instance = MagicMock()
-        mock_orch_instance.train.return_value = {"15": {"loss": 0.1}}
-        # real DataFrame so the atomic to_pickle + os.rename path works
-        mock_orch_instance.run_inference.return_value = real_pd.DataFrame({"x": [1]})
-        mock_orch_cls = MagicMock(return_value=mock_orch_instance)
+        mock_orch_instance.train.return_value = {"all": {"loss": 0.1}}
+        mock_orch_cls = MagicMock()
+        mock_orch_cls.from_trainer.return_value = mock_orch_instance
 
         mock_indicators_mod = MagicMock()
         mock_indicators_mod.DataAttributes.load.return_value = MagicMock()
@@ -717,7 +803,6 @@ class TestRunTrainNNRealWiring:
             with patch("helpers.wide_df_path", return_value="/data/wide.pkl"), \
                  patch("helpers.data_attributes_path", return_value="/data/attrs.pkl"), \
                  patch("helpers.shared_folder", return_value=str(tmp_path) + "/"), \
-                 patch("helpers.nn_folder", return_value=str(tmp_path) + "/"), \
                  patch("pandas.read_pickle", return_value=MagicMock()):
                 yield (mock_orch_cls, mock_orch_instance)
         finally:
@@ -727,24 +812,35 @@ class TestRunTrainNNRealWiring:
                 else:
                     sys.modules[key] = original
 
-    def test_train_nn_constructs_orchestrator_from_nn_config(self, monkeypatch, tmp_path):
-        _set_env(monkeypatch, {"RUN_TYPE": "train_nn"})
+    def test_train_nn_constructs_orchestrator_from_trainer(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train"})
         import importlib
         import training.trainer as mod
         importlib.reload(mod)
 
-        with self._injected(tmp_path) as (orch_cls, _):
-            mod.Trainer(config_path="configs/")._run_train_nn()
+        with self._injected(tmp_path) as (orch_cls, orch_instance):
+            t = mod.Trainer(config_path="configs/")
+            t._run_train_nn()
 
-        from config_loader import load_nn_config
-        nn_cfg = load_nn_config("configs/indicators_config.yaml")
-        orch_cls.assert_called_once_with(
-            checkpoint_dir=nn_cfg["checkpoint_dir"],
-            feature_cols=nn_cfg["feature_cols"],
-        )
+        orch_cls.from_trainer.assert_called_once_with(t.pair, t)
+        orch_instance.train.assert_called_once()
+        # No legacy NNOrchestrator(checkpoint_dir=..., feature_cols=...) call.
+        orch_cls.assert_not_called()
 
-    def test_train_nn_epoch_callback_accepts_tf_str(self, monkeypatch, tmp_path):
-        _set_env(monkeypatch, {"RUN_TYPE": "train_nn"})
+    def test_train_nn_metadata_is_group_keyed(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train"})
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path):
+            t = mod.Trainer(config_path="configs/")
+            t._run_train_nn()
+
+        assert t.metadata["train_nn"] == {"all": {"loss": 0.1}}
+
+    def test_train_nn_epoch_callback_is_group_keyed(self, monkeypatch, tmp_path):
+        _set_env(monkeypatch, {"RUN_TYPE": "nn_train"})
         import importlib
         import training.trainer as mod
         importlib.reload(mod)
@@ -752,30 +848,17 @@ class TestRunTrainNNRealWiring:
         with self._injected(tmp_path) as (_, orch_instance):
             mod.Trainer(config_path="configs/")._run_train_nn()
             cb = orch_instance.train.call_args.kwargs["epoch_callback"]
-            cb("15", 3, {"loss": 0.5})  # orchestrator contract: (tf_str, epoch, metrics)
+            cb("all", 3, {"loss": 0.5})  # contract: (group_key, epoch, metrics)
 
         state_path = str(tmp_path) + "/training_state.pkl"
         assert os.path.exists(state_path)
         with open(state_path, "rb") as f:
             state = pickle.load(f)
+        assert state["phase"] == "nn_train"
+        assert state["group"] == "all"
         assert state["epoch"] == 3
-        assert state["tf"] == "15"
-
-    def test_simulate_nn_constructs_orchestrator_from_nn_config(self, monkeypatch, tmp_path):
-        _set_env(monkeypatch, {"RUN_TYPE": "simulate_nn"})
-        import importlib
-        import training.trainer as mod
-        importlib.reload(mod)
-
-        with self._injected(tmp_path) as (orch_cls, _):
-            mod.Trainer(config_path="configs/")._run_simulate_nn()
-
-        from config_loader import load_nn_config
-        nn_cfg = load_nn_config("configs/indicators_config.yaml")
-        orch_cls.assert_called_once_with(
-            checkpoint_dir=nn_cfg["checkpoint_dir"],
-            feature_cols=nn_cfg["feature_cols"],
-        )
+        assert state["metrics"] == {"loss": 0.5}
+        assert "tf" not in state
 
 
 class TestStrategyFactoryPicklable:

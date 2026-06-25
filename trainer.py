@@ -8,10 +8,9 @@ _MODE_MAP = {
     "grab_data": "grab_data",
     "generate_full_ohlc": "prepare_data",
     "simulate": "simulate",
-    "group_nn": "prepare_data",   # UNRESOLVED: no dedicated RUN_TYPE for NN grouping;
-                                  # plan README "Unresolved" section — revisit with NN target labeling
-    "nn_train": "train_nn",
-    "simulate_nn": "simulate_nn",
+    "nn_train": "nn_train",
+    "infer_nn": "infer_nn",
+    "simulate_nn": "infer_nn",   # legacy alias → infer_nn
     "full": "full",
 }
 
