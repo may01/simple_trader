@@ -248,8 +248,14 @@ class DataViewer:
             df_slice = df_slice[df_slice[close_col].notna()]
         return df_slice
 
-    def _subplot_list(self, indicators: list[str]) -> list[str]:
-        """Build the ordered subplot name list for create_figure."""
+    def _subplot_list(
+        self, indicators: list[str], show_nn: bool = False
+    ) -> list[str]:
+        """Build the ordered subplot name list for create_figure.
+
+        ``show_nn`` appends a dedicated "nn" subplot for the timeframe-agnostic
+        ``nn_res_*`` inference columns (drawn by ``_draw_nn_results``).
+        """
         subplots = ["price", "volume"]
         seen: set[str] = set()
         for ind in indicators:
@@ -257,7 +263,46 @@ class DataViewer:
             if sp is not None and sp not in seen:
                 subplots.append(sp)
                 seen.add(sp)
+        if show_nn:
+            subplots.append("nn")
         return subplots
+
+    # NN inference result columns are timeframe-agnostic (no ``{tf}_`` prefix),
+    # produced by NNOrchestrator.run_inference and left-joined by
+    # ``data.join_nn_results``. Colour by semantic suffix so a direction head
+    # reads at a glance (up green / neutral gray / down red); other heads
+    # (label prob, regression value) fall back to a neutral colour.
+    _NN_RES_COLORS = {
+        "prob_up": "green",
+        "prob_neutral": "gray",
+        "prob_down": "red",
+    }
+
+    @staticmethod
+    def _nn_res_cols(df: pd.DataFrame) -> list[str]:
+        """Sorted ``nn_res_*`` columns present in *df* (empty if none)."""
+        return sorted(c for c in df.columns if str(c).startswith("nn_res_"))
+
+    def _draw_nn_results(self, fig: go.Figure, df_slice: pd.DataFrame) -> None:
+        """Draw ``nn_res_*`` inference outputs on the "nn" subplot. Skip-if-absent.
+
+        One line per ``nn_res_*`` column over the displayed candles. Direction
+        heads yield three probability lines in [0, 1]; label/regression heads
+        yield their single value. Does nothing if the "nn" subplot is hidden
+        or no ``nn_res_*`` column is present.
+        """
+        if "nn" not in getattr(fig, "_subplot_rows", {}):
+            return
+        times = list(df_slice.index)
+        for col in self._nn_res_cols(df_slice):
+            color = "mediumpurple"
+            for suffix, c in self._NN_RES_COLORS.items():
+                if str(col).endswith(suffix):
+                    color = c
+                    break
+            self.renderer.draw_line(
+                fig, "nn", times, list(df_slice[col]), label=str(col), color=color
+            )
 
     def _draw_indicators(
         self,
@@ -292,15 +337,16 @@ class DataViewer:
         indicators: list[str],
         tf: int | None = None,
         range_row: bool = False,
+        show_nn: bool = False,
     ) -> go.Figure:
         """Create and populate a figure (candles + indicators). Does not show/save.
 
         ``range_row=True`` adds the navigator row holding a second OHLC
         candlestick copy — the rangeslider preview then always shows price,
-        never an indicator.
+        never an indicator. ``show_nn=True`` adds the ``nn_res_*`` subplot.
         """
         tf = self.tf if tf is None else tf
-        subplots = self._subplot_list(indicators)
+        subplots = self._subplot_list(indicators, show_nn=show_nn)
         fig = self.renderer.create_figure(subplots, range_row=range_row)
 
         times = list(df_slice.index)
@@ -322,6 +368,8 @@ class DataViewer:
             self.renderer.draw_bar(fig, "volume", times, vol_vals, label="volume")
 
         self._draw_indicators(fig, df_slice, indicators, tf=tf)
+        if show_nn:
+            self._draw_nn_results(fig, df_slice)
 
         return fig
 
@@ -359,6 +407,9 @@ class DataViewer:
                 continue
             if any(f"{tf}_{ind}" in cols for tf in tfs):
                 subplots.append(sp)
+        # NN inference results (timeframe-agnostic) get their own toggleable subplot.
+        if self._nn_res_cols(self.full_data.df):
+            subplots.append("nn")
         return subplots
 
     def available_overlays(self) -> list[str]:
@@ -441,7 +492,14 @@ class DataViewer:
                 i for i in indicators
                 if _indicator_subplot(i) is None or _indicator_subplot(i) in allowed
             ]
-        fig = self._build_figure(df_slice, indicators, tf=tf, range_row=True)
+        # Show the nn_res_* subplot when the columns are present and "nn" is
+        # selected (or no explicit subplot selection was made).
+        show_nn = bool(self._nn_res_cols(df_slice)) and (
+            subplots is None or "nn" in subplots
+        )
+        fig = self._build_figure(
+            df_slice, indicators, tf=tf, range_row=True, show_nn=show_nn
+        )
         self._draw_price_overlays(fig, df_slice, tf, overlays)
         self._draw_rsi_class_markers(fig, window, tf)
         self._draw_label_markers(fig, window, tf)
