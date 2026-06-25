@@ -554,9 +554,14 @@ class NNDataset:
         for tf in spec.timeframes:
             np.save(dataset_dir_path / f"X_{tf}.npy", tf_blocks[str(tf)])
         np.save(dataset_dir_path / "y.npy", y_kept)
+        # Real prepared frames carry a tz-aware UTC DatetimeIndex; .astype to a
+        # tz-naive datetime64[ns] raises, so drop the tz first (timestamps stay UTC).
+        _idx = kept_index
+        if getattr(_idx, "tz", None) is not None:
+            _idx = _idx.tz_convert("UTC").tz_localize(None)
         np.save(
             dataset_dir_path / "index.npy",
-            np.array(kept_index.astype("datetime64[ns]")),
+            np.array(_idx.astype("datetime64[ns]")),
         )
         (dataset_dir_path / "splits.json").write_text(json.dumps(splits, indent=2))
         (dataset_dir_path / "manifest.json").write_text(
