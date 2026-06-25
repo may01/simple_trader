@@ -1,0 +1,23 @@
+# Dockerfile.nn-train — dedicated NN training image
+#
+# Decision D1: Build FROM simple_trader (lean base) rather than a heavyweight
+# nvidia/cuda:* base image.  Rationale: simple_trader already carries
+# torch 2.12.0+cu130, a CUDA-enabled wheel that runs CPU-only when no GPU is
+# present and accelerates on GPU when one is available.  Building FROM
+# simple_trader therefore satisfies "same image runs CPU on laptop / GPU on
+# host" while keeping the image small.
+#
+# Tech-debt note: on a dedicated GPU host the pure nvidia/cuda:12.3.2-runtime-*
+# base (instead of FROM simple_trader) would be the canonical approach.
+# Switch to it if the always-on image is ever decoupled from torch.
+#
+# Image isolation guarantee: optuna (and any future heavy NN-only deps) are
+# installed HERE, never in the always-on simple_trader image.
+
+FROM simple_trader
+
+# Add NN-training extras that must not appear in the always-on trading image.
+RUN pip install --no-cache-dir optuna==4.3.0
+
+# Source code is mounted at /code via compose volume — NOT copied into image.
+# PYTHONPATH and WORKDIR are inherited from simple_trader base.

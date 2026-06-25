@@ -32,29 +32,21 @@ services:
       - simple_trader_vol:/trader_data
       - simple_trader_vol_long:/trader_data_long
 
-  prepare-nn-data:
-    image: simple_trader
-    build: .
-    command: python3 trainer.py group_nn
-    env_file: ${NN_TRAIN_ENV:-configs/nn_train_dataset.env}
-    volumes:
-      - .:/code
-      - simple_trader_vol:/trader_data
-      - simple_trader_vol_long:/trader_data_long
-
   nn-train:
-    image: simple_trader
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.nn-train
     command: python3 trainer.py nn_train
     env_file: ${NN_TRAIN_ENV:-configs/nn_train_dataset.env}
     volumes:
       - .:/code
-      - simple_trader_vol:/trader_data
+      - simple_trader_vol:/trader_data:ro
       - simple_trader_vol_long:/trader_data_long
     environment:
-      NN_CLS: ${NN_CLS}
-      NN_TGT: ${NN_TGT}
-      NN_TYPE: ${NN_TYPE}
+      NN_DEVICE: ${NN_DEVICE:-auto}
+      NN_DATA_ROOT: ${NN_DATA_ROOT:-/trader_data}
+      NN_ARTEFACT_ROOT: ${NN_ARTEFACT_ROOT:-/trader_data_long}
+      NUM_WORKERS: ${NUM_WORKERS:-4}
     deploy:
       resources:
         reservations:
@@ -64,14 +56,29 @@ services:
               capabilities: [gpu]
 
   simulate-nn:
-    image: simple_trader
-    build: .
-    command: python3 trainer.py simulate_nn
-    env_file: ${TRAIN_ENV:-configs/train_dataset.env}
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.nn-train
+    command: python3 trainer.py infer_nn
+    env_file: ${NN_TRAIN_ENV:-configs/nn_train_dataset.env}
     volumes:
       - .:/code
-      - simple_trader_vol:/trader_data
+      - simple_trader_vol:/trader_data:ro
       - simple_trader_vol_long:/trader_data_long
+    environment:
+      NN_DEVICE: ${NN_DEVICE:-auto}
+      NN_DATA_ROOT: ${NN_DATA_ROOT:-/trader_data}
+      NN_ARTEFACT_ROOT: ${NN_ARTEFACT_ROOT:-/trader_data_long}
+      NUM_WORKERS: ${NUM_WORKERS:-4}
+      NN_INFER_DATASET: ${NN_INFER_DATASET:-}
+      NN_INFER_CHECKPOINT: ${NN_INFER_CHECKPOINT:-best}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   live:
     image: simple_trader
