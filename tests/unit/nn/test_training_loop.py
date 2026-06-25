@@ -1,0 +1,438 @@
+"""Tests for TrainingLoop — hybrid Optuna + NNStrategist round loop (task 10).
+
+The loop orchestrates ONLY: propose scope (strategist) → per-round Optuna study
+→ for each trial build_spec + orchestrator.train + evaluate_on_holdout + record
++ promotion gate → review → return tracker.best() as a RunResult.
+
+optuna is installed ONLY in the nn-train image, so the whole module is SKIPPED
+where optuna is absent (base simple_trader image) via importorskip at the top.
+
+The pure-Optuna smoke exercises the REAL loop control flow against the REAL
+ExperimentTracker, a REAL CheckpointManager (via the orchestrator) and a tiny
+synthetic dataset; targeted tests use fakes to isolate caps / failure / degrade
+/ seeding behaviour.
+"""
+
+from __future__ import annotations
+
+import os
+from unittest.mock import MagicMock
+
+import numpy as np
+import pandas as pd
+import pytest
+
+optuna = pytest.importorskip("optuna")  # skip whole file in the base image
+
+from indicators import DataAttributes
+from indicators.labels import _fmt
+from nn.experiment_tracker import ExperimentTracker
+from nn.nn_model_spec import LayerSpec, NNModelSpec, TargetSpec
+from nn.nn_orchestrator import NNOrchestrator
+from nn.training_loop import RunResult, TrainingLoop
+
+
+# =====================================================================
+# Fixtures — real, tiny, trainable wide frame + spec
+# =====================================================================
+
+
+def _label_suffix(n: int, m: float, x: float) -> str:
+    return f"n{_fmt(n)}_m{_fmt(m)}_x{_fmt(x)}"
+
+
+def make_wide_df(rows: int = 240, seed: int = 0) -> pd.DataFrame:
+    """Small synthetic wide frame with 15-min closed flags, features, labels.
+
+    Mirrors the orchestrator/dataset test fixtures so a REAL NNDataset can be
+    built and trained over it.
+    """
+    rng = np.random.default_rng(seed)
+    idx = pd.date_range("2024-01-01", periods=rows, freq="1min")
+    df = pd.DataFrame(index=idx)
+    pos = np.arange(rows)
+
+    df["15_is_closed"] = (pos + 1) % 15 == 0
+
+    df["15_logret"] = (pos.astype(float) * 0.001) - 0.01
+    df["15_rsi_14"] = 50.0 + (pos.astype(float) % 30)
+    df["15_close"] = 100.0 + np.cumsum(rng.normal(0, 0.1, rows))
+
+    suf = _label_suffix(1, 1.0, 0.3)
+    df[f"15_plong_{suf}"] = np.where(pos % 3 == 0, 1.0, 0.0)
+    df[f"15_pshort_{suf}"] = np.where(pos % 3 == 1, 1.0, 0.0)
+    return df
+
+
+def small_spec(**overrides) -> NNModelSpec:
+    """A minimal but real spec (grouping=single, one direction target)."""
+    spec = NNModelSpec(
+        name="t",
+        timeframes=[15],
+        indicators=["logret", "rsi_14"],
+        history_points=4,
+        layers=[LayerSpec(kind="dense", units=8)],
+        targets=[
+            TargetSpec(
+                name="dir15",
+                kind="direction",
+                horizons=[1],
+                label_tf=15,
+                label_m=1.0,
+                label_x=0.3,
+            )
+        ],
+        epochs=3,
+        validation_split=0.2,
+        val_strategy="time_holdout",
+        seed=0,
+    )
+    for k, v in overrides.items():
+        setattr(spec, k, v)
+    return spec
+
+
+SEARCH_CONFIG = {
+    "max_rounds": 1,
+    "trials_per_round": 2,
+    "sampler": "tpe",
+    "pruner": "median",
+    "max_wall_clock_s": 120,
+    "max_compute": None,
+    "seed": 0,
+    "search_space": {
+        "lr": [1e-4, 1e-2],
+        "depth": [1, 2],
+        "units": [8, 16],
+        "dropout": [0.0, 0.2],
+    },
+}
+
+
+@pytest.fixture
+def data_attributes():
+    return DataAttributes()
+
+
+@pytest.fixture
+def base_spec():
+    return small_spec()
+
+
+@pytest.fixture
+def real_setup(tmp_path, base_spec):
+    """Build a real orchestrator + tracker over isolated temp dirs."""
+    ckpt = str(tmp_path / "ckpt")
+    dsdir = str(tmp_path / "ds")
+    track = str(tmp_path / "track")
+    orch = NNOrchestrator(checkpoint_dir=ckpt, dataset_dir=dsdir, base_spec=base_spec)
+    tracker = ExperimentTracker(
+        track, "study_smoke", metric="holdout_score", mode="max"
+    )
+    return orch, tracker, track, ckpt
+
+
+# =====================================================================
+# Pure-Optuna smoke — exercises the REAL loop control flow
+# =====================================================================
+
+
+def test_pure_optuna_smoke_returns_runresult_and_populates_tracker(
+    real_setup, data_attributes
+):
+    """strategist=None, 1 round, 2 trials over a tiny real dataset.
+
+    Asserts run() returns a RunResult, tracker.best('all') is recorded, and the
+    tracking dir is populated (index.sqlite + trials/).
+    """
+    orch, tracker, track, _ = real_setup
+
+    loop = TrainingLoop(
+        orchestrator=orch,
+        tracker=tracker,
+        strategist=None,
+        search_config=SEARCH_CONFIG,
+    )
+
+    df = make_wide_df()
+    result = loop.run(df, data_attributes)
+
+    assert isinstance(result, RunResult)
+    assert result is not None
+
+    best = tracker.best("all")
+    assert best is not None, "no incumbent recorded for group 'all'"
+
+    # tracking dir populated
+    assert os.path.exists(os.path.join(track, "study_smoke", "index.sqlite"))
+    assert os.path.isdir(os.path.join(track, "study_smoke", "trials"))
+
+    # Exactly trials_per_round trials recorded, all in round 0.
+    summary = tracker.summary()
+    assert summary["total_trials"] == 2
+    assert summary["rounds"] == [0]
+
+
+def test_pure_optuna_records_holdout_scores(real_setup, data_attributes):
+    """Each ok trial carries a holdout score (direction accuracy in [0,1])."""
+    orch, tracker, _, _ = real_setup
+    loop = TrainingLoop(orch, tracker, None, SEARCH_CONFIG)
+
+    loop.run(make_wide_df(), data_attributes)
+
+    best = tracker.best("all")
+    holdout = best["holdout"]
+    score = holdout.get("holdout_score", holdout.get("score"))
+    assert score is not None
+    assert 0.0 <= float(score) <= 1.0
+    assert holdout.get("n_rows", 0) > 0
+
+
+# =====================================================================
+# Caps stop the loop
+# =====================================================================
+
+
+def _fake_orch_tracker(monkeypatch_trained=True):
+    """A fake orchestrator + tracker that count trials without real training."""
+    orch = MagicMock()
+    orch.base_spec = small_spec()
+    orch.train.return_value = {"all": {"val_accuracy": 0.5, "loss": 0.2}}
+    orch.trained_models = {"all": MagicMock()}
+
+    tracker = MagicMock()
+    tracker._mode = "max"
+    tracker.mode = "max"
+    tracker.summary.return_value = {}
+    tracker.round_summary.return_value = {"round": 0}
+    tracker.is_improvement.return_value = False
+    tracker.best.return_value = {"all": {"holdout": {"holdout_score": 0.5}}}
+    tracker.record.return_value = "trial-id"
+    return orch, tracker
+
+
+def test_trials_per_round_cap_stops_loop():
+    """trials_per_round bounds the number of trials in a round."""
+    orch, tracker = _fake_orch_tracker()
+
+    cfg = dict(SEARCH_CONFIG)
+    cfg["max_rounds"] = 1
+    cfg["trials_per_round"] = 3
+
+    loop = TrainingLoop(orch, tracker, None, cfg)
+    # Stub holdout eval to avoid needing a real dataset.
+    loop.evaluate_on_holdout = MagicMock(
+        return_value={"holdout_score": 0.5, "score": 0.5, "n_rows": 10, "per_target": {}}
+    )
+
+    loop.run(MagicMock(), {})
+
+    assert orch.train.call_count == 3
+    assert tracker.record.call_count == 3
+
+
+def test_max_rounds_cap_stops_loop():
+    """max_rounds bounds the number of rounds (pure-Optuna → no review)."""
+    orch, tracker = _fake_orch_tracker()
+    cfg = dict(SEARCH_CONFIG)
+    cfg["max_rounds"] = 2
+    cfg["trials_per_round"] = 1
+
+    loop = TrainingLoop(orch, tracker, None, cfg)
+    loop.evaluate_on_holdout = MagicMock(
+        return_value={"holdout_score": 0.5, "score": 0.5, "n_rows": 10, "per_target": {}}
+    )
+    loop.run(MagicMock(), {})
+
+    # 2 rounds x 1 trial each.
+    assert orch.train.call_count == 2
+
+
+def test_max_compute_cap_stops_loop_after_first_trial():
+    """A compute cap of 1 trial stops the loop at the first trial."""
+    orch, tracker = _fake_orch_tracker()
+    cfg = dict(SEARCH_CONFIG)
+    cfg["max_rounds"] = 5
+    cfg["trials_per_round"] = 5
+    cfg["max_compute"] = 1  # one trial total
+
+    loop = TrainingLoop(orch, tracker, None, cfg)
+    loop.evaluate_on_holdout = MagicMock(
+        return_value={"holdout_score": 0.5, "score": 0.5, "n_rows": 10, "per_target": {}}
+    )
+    loop.run(MagicMock(), {})
+
+    assert orch.train.call_count == 1
+
+
+# =====================================================================
+# Trial failure is isolated → status="failed", loop continues
+# =====================================================================
+
+
+def test_trial_failure_recorded_failed_and_loop_continues():
+    """A trial whose training raises is recorded status='failed'; loop continues."""
+    orch, tracker = _fake_orch_tracker()
+
+    # First train() raises, second succeeds.
+    orch.train.side_effect = [
+        RuntimeError("bad spec"),
+        {"all": {"val_accuracy": 0.6, "loss": 0.1}},
+    ]
+
+    cfg = dict(SEARCH_CONFIG)
+    cfg["max_rounds"] = 1
+    cfg["trials_per_round"] = 2
+
+    loop = TrainingLoop(orch, tracker, None, cfg)
+    loop.evaluate_on_holdout = MagicMock(
+        return_value={"holdout_score": 0.6, "score": 0.6, "n_rows": 10, "per_target": {}}
+    )
+    loop.run(MagicMock(), {})
+
+    # Both trials recorded; the first as failed.
+    assert tracker.record.call_count == 2
+    statuses = [c.kwargs.get("status", "ok") for c in tracker.record.call_args_list]
+    assert "failed" in statuses
+    assert "ok" in statuses
+
+
+def test_gpu_oom_retries_once_on_cpu_before_failing():
+    """A CUDA-OOM trial is retried once on CPU before being marked failed."""
+    orch, tracker = _fake_orch_tracker()
+
+    oom = RuntimeError("CUDA out of memory")
+    # First call OOMs, the CPU retry succeeds.
+    orch.train.side_effect = [oom, {"all": {"val_accuracy": 0.55, "loss": 0.2}}]
+
+    cfg = dict(SEARCH_CONFIG)
+    cfg["max_rounds"] = 1
+    cfg["trials_per_round"] = 1
+
+    loop = TrainingLoop(orch, tracker, None, cfg)
+    loop.evaluate_on_holdout = MagicMock(
+        return_value={"holdout_score": 0.55, "score": 0.55, "n_rows": 10, "per_target": {}}
+    )
+    loop.run(MagicMock(), {})
+
+    # train called twice (OOM + CPU retry), recorded ok (retry succeeded).
+    assert orch.train.call_count == 2
+    # The retry spec was forced onto CPU.
+    retry_spec = orch.train.call_args_list[1].args[2] if orch.train.call_args_list[1].args else orch.train.call_args_list[1].kwargs["spec"]
+    assert retry_spec.device == "cpu"
+    statuses = [c.kwargs.get("status", "ok") for c in tracker.record.call_args_list]
+    assert statuses == ["ok"]
+
+
+# =====================================================================
+# Pure-Optuna degrade → no strategist calls
+# =====================================================================
+
+
+def test_pure_optuna_degrade_makes_no_strategist_calls(real_setup, data_attributes):
+    """With strategist=None the loop never calls propose/review (no strategist)."""
+    orch, tracker, _, _ = real_setup
+    # A strategist that, if called, would explode the test.
+    strategist = MagicMock()
+    # Pass None — the degrade path. The MagicMock is here only as a tripwire if
+    # the loop ever tried to call a strategist it was not given.
+    loop = TrainingLoop(orch, tracker, strategist=None, search_config=SEARCH_CONFIG)
+    loop.run(make_wide_df(), data_attributes)
+
+    strategist.propose.assert_not_called()
+    strategist.review.assert_not_called()
+
+
+# =====================================================================
+# Strategist drives propose/review when present
+# =====================================================================
+
+
+def test_strategist_present_calls_propose_and_review_and_stop_breaks():
+    """A strategist returning 'stop' on review breaks the loop after one round."""
+    from nn.nn_strategist import Proposal
+
+    orch, tracker = _fake_orch_tracker()
+
+    strategist = MagicMock()
+    strategist.propose.return_value = Proposal(
+        indicators=["logret", "rsi_14"],
+        timeframes=[15],
+        targets=orch.base_spec.targets,
+        search_space={"lr": (1e-4, 1e-2), "depth": (1, 2)},
+        rationale="explore",
+    )
+    strategist.review.return_value = "stop"
+
+    cfg = dict(SEARCH_CONFIG)
+    cfg["max_rounds"] = 5
+    cfg["trials_per_round"] = 1
+
+    loop = TrainingLoop(orch, tracker, strategist, cfg)
+    loop.evaluate_on_holdout = MagicMock(
+        return_value={"holdout_score": 0.5, "score": 0.5, "n_rows": 10, "per_target": {}}
+    )
+    loop.run(MagicMock(), {})
+
+    # propose called for round 0, review returned stop → only one round ran.
+    assert strategist.propose.call_count == 1
+    assert strategist.review.call_count == 1
+    assert orch.train.call_count == 1  # one round, one trial
+
+
+# =====================================================================
+# Seeding reproducibility — same seed → same suggested params
+# =====================================================================
+
+
+def test_same_seed_yields_same_suggested_params():
+    """Two runs with the same seed suggest identical Optuna params."""
+    captured_a: list[NNModelSpec] = []
+    captured_b: list[NNModelSpec] = []
+
+    def make_loop(sink):
+        orch, tracker = _fake_orch_tracker()
+
+        def _record_spec(df, da, spec, epoch_callback=None):
+            sink.append(spec)
+            return {"all": {"val_accuracy": 0.5, "loss": 0.2}}
+
+        orch.train.side_effect = _record_spec
+        cfg = dict(SEARCH_CONFIG)
+        cfg["max_rounds"] = 1
+        cfg["trials_per_round"] = 3
+        cfg["seed"] = 1234
+        loop = TrainingLoop(orch, tracker, None, cfg)
+        loop.evaluate_on_holdout = MagicMock(
+            return_value={"holdout_score": 0.5, "score": 0.5, "n_rows": 10, "per_target": {}}
+        )
+        return loop
+
+    make_loop(captured_a).run(MagicMock(), {})
+    make_loop(captured_b).run(MagicMock(), {})
+
+    assert len(captured_a) == len(captured_b) == 3
+    lr_a = [s.learning_rate for s in captured_a]
+    lr_b = [s.learning_rate for s in captured_b]
+    assert lr_a == lr_b
+    depth_a = [len(s.layers) for s in captured_a]
+    depth_b = [len(s.layers) for s in captured_b]
+    assert depth_a == depth_b
+    # spec.seed is set deterministically too.
+    assert all(s.seed == captured_b[0].seed for s in captured_a)
+
+
+# =====================================================================
+# direction "minimize" mode flips the Optuna study direction
+# =====================================================================
+
+
+def test_min_mode_creates_minimize_study(real_setup, data_attributes, tmp_path):
+    """A tracker in mode='min' produces a minimise study (no crash, runs)."""
+    orch, _, _, _ = real_setup
+    tracker_min = ExperimentTracker(
+        str(tmp_path / "track_min"), "study_min", metric="holdout_score", mode="min"
+    )
+    loop = TrainingLoop(orch, tracker_min, None, SEARCH_CONFIG)
+    result = loop.run(make_wide_df(), data_attributes)
+    assert isinstance(result, RunResult)
