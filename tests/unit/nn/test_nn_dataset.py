@@ -715,3 +715,55 @@ class TestInferenceMatrixTFOrderParity:
             X_15,
             err_msg="channel-1 should be TF-15 (manifest order); got TF-60 instead",
         )
+
+
+# ---------------------------------------------------------------------------
+# Regression: tz-aware UTC DatetimeIndex must not raise during materialise
+# ---------------------------------------------------------------------------
+
+
+class TestTzAwareDatetimeIndex:
+    """Regression test for NNDataset._materialise tz-aware index handling.
+
+    Real prepared frames carry a tz-aware UTC DatetimeIndex.  Before the fix,
+    ``kept_index.astype("datetime64[ns]")`` raised TypeError when the index was
+    tz-aware because pandas refuses to convert tz-aware datetimes to a tz-naive
+    dtype that way.  The fix drops the tz via ``tz_localize(None)`` first.
+
+    This test FAILS without the fix (the ``_idx.tz_localize(None)`` path in
+    ``_materialise``) and passes with it.
+    """
+
+    def test_build_succeeds_with_tz_aware_utc_index(self, tmp_path):
+        """NNDataset.build completes and writes index.npy with a UTC DatetimeIndex."""
+        rows = 120
+        # tz-aware UTC index — mirrors real prepared frames
+        idx = pd.date_range("2024-01-01", periods=rows, freq="1min", tz="UTC")
+        df = pd.DataFrame(index=idx)
+
+        pos = np.arange(rows)
+        df["15_is_closed"] = ((pos + 1) % 15 == 0)
+        df["15_logret"] = pos.astype(float) * 0.001 - 0.01
+        df["15_rsi_14"] = 50.0 + pos.astype(float)
+        df["15_close"] = 100.0 + np.cumsum(np.ones(rows) * 0.1)
+
+        suf = _label_suffix(1, 1.0, 0.3)
+        df[f"15_plong_{suf}"] = np.where(pos % 3 == 0, 1.0, 0.0)
+        df[f"15_pshort_{suf}"] = np.where(pos % 3 == 1, 1.0, 0.0)
+
+        spec = small_spec(history_points=2)
+
+        # Must not raise TypeError from astype("datetime64[ns]") on tz-aware index.
+        ds = NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+
+        # index.npy must exist and be loadable.
+        index_path = Path(ds.dataset_dir_path) / "index.npy"
+        assert index_path.exists(), "index.npy was not written"
+        index_arr = np.load(index_path, allow_pickle=True)
+        assert len(index_arr) == ds.manifest["rows"]
+
+        # tensors() must return the expected shapes.
+        X, y = ds.tensors()
+        n_feat = len(spec.timeframes) * len(spec.indicators)
+        assert X.shape == (ds.manifest["rows"], spec.history_points, n_feat)
+        assert y.shape == (ds.manifest["rows"], 3)  # direction → 3-class one-hot

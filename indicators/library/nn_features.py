@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 
 from ..framework import IndicatorField
+from constants import INDICATOR_WINDOW_ROWS
 
 
 def _rolling_ols_slope(series: pd.Series, window: int) -> pd.Series:
@@ -287,7 +288,14 @@ class NNVolRegimeField(IndicatorField):
     resource_dependencies: list[str] = []
     applies_to: list[int] = []
 
-    def __init__(self, atr_col: str = "atr_14", window: int = 200, buckets: int = 3) -> None:
+    def __init__(self, atr_col: str = "atr_14", window: int = 100, buckets: int = 3) -> None:
+        # window must be ≤ INDICATOR_WINDOW_ROWS (the prepare-slice size); a larger
+        # window never has a full trailing window in the slice → 100% NaN output.
+        if window > INDICATOR_WINDOW_ROWS:
+            raise ValueError(
+                f"vol_regime window={window} exceeds INDICATOR_WINDOW_ROWS="
+                f"{INDICATOR_WINDOW_ROWS}; the prepare slice cannot fill it"
+            )
         self.atr_col = atr_col
         self.window = window
         self.buckets = buckets

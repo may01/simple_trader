@@ -277,17 +277,37 @@ class TestOrthogonalFields:
 
     def test_vol_regime_buckets_in_range(self):
         tf = 15
-        n = 260
+        n = 150
         rng = np.random.RandomState(0)
         atr = np.abs(rng.normal(5.0, 2.0, n)) + 0.1
         df = make_df(tf, n, cols={"atr_14": atr})
-        f = NNVolRegimeField(atr_col="atr_14", window=200, buckets=3)
+        f = NNVolRegimeField(atr_col="atr_14", window=100, buckets=3)
         assert f.name == "vol_regime"
         s = run(f, df, tf)
         valid = s.dropna()
         assert len(valid) > 0
         assert valid.min() >= 0
         assert valid.max() <= 2  # buckets-1
+
+    def test_vol_regime_window_exceeds_indicator_window_rows_raises(self):
+        """window > INDICATOR_WINDOW_ROWS (105) must raise ValueError at construction."""
+        with pytest.raises(ValueError, match="vol_regime window=200 exceeds INDICATOR_WINDOW_ROWS"):
+            NNVolRegimeField(window=200)
+
+    def test_vol_regime_valid_window_produces_non_nan_tail(self):
+        """150-row series with window=100 → tail rows (≥99) are non-NaN and in [0, buckets-1]."""
+        tf = 15
+        n = 150
+        rng = np.random.RandomState(42)
+        atr = np.abs(rng.normal(5.0, 2.0, n)) + 0.1
+        df = make_df(tf, n, cols={"atr_14": atr})
+        f = NNVolRegimeField(atr_col="atr_14", window=100, buckets=3)
+        s = run(f, df, tf)
+        # First 99 rows are warmup (NaN); rows 100..149 must be finite and bucketed
+        tail = s.iloc[99:]
+        assert tail.notna().all(), "tail rows should be non-NaN with a full window"
+        assert tail.min() >= 0
+        assert tail.max() <= 2  # buckets - 1
 
     def test_cyclical_time_from_index(self):
         tf = 15

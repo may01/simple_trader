@@ -691,6 +691,64 @@ class TestRunInferNN:
 
         assert "infer_nn" in t.metadata
 
+    def test_infer_nn_empty_env_falls_back_to_wide_df_dir(self, monkeypatch, tmp_path):
+        """Regression: NN_INFER_DATASET="" (empty string) must be treated as unset.
+
+        Compose passes NN_INFER_DATASET= (empty string) by default.
+        ``os.getenv("NN_INFER_DATASET", default)`` would return "" instead of the
+        default, so the fix uses ``os.getenv(...) or <default>`` to treat "" as
+        falsy and fall through to wide_df_path()-based default.
+
+        This test FAILS without the fix (dataset_dir would be "") and passes with it.
+        """
+        import pandas as real_pd
+        _set_env(monkeypatch, {"RUN_TYPE": "infer_nn", "NN_INFER_DATASET": ""})
+        monkeypatch.delenv("NN_INFER_CHECKPOINT", raising=False)
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path, real_pd.DataFrame({"nn_res_x": [1]})) as (
+            _,
+            orch_instance,
+        ):
+            mod.Trainer()._run_infer_nn()
+
+        kwargs = orch_instance.run_inference_dataset.call_args.kwargs
+        # Must use the parent dir of wide_df_path(), NOT the empty string "".
+        assert kwargs["dataset_dir"] == str(tmp_path), (
+            f"Expected dataset_dir={str(tmp_path)!r} (wide_df dir), "
+            f"got {kwargs['dataset_dir']!r}; empty NN_INFER_DATASET was not treated as unset"
+        )
+        assert kwargs["dataset_dir"] != "", "dataset_dir must not be empty string"
+
+    def test_infer_nn_nonempty_env_is_honoured(self, monkeypatch, tmp_path):
+        """A non-empty NN_INFER_DATASET=/some/path is used as-is (not overridden).
+
+        Complements the empty-string regression test: ensures the fix does not
+        accidentally swallow legitimate non-empty values.
+        """
+        import pandas as real_pd
+        _set_env(
+            monkeypatch,
+            {"RUN_TYPE": "infer_nn", "NN_INFER_DATASET": "/explicit/dataset/dir"},
+        )
+        monkeypatch.delenv("NN_INFER_CHECKPOINT", raising=False)
+        import importlib
+        import training.trainer as mod
+        importlib.reload(mod)
+
+        with self._injected(tmp_path, real_pd.DataFrame({"nn_res_x": [1]})) as (
+            _,
+            orch_instance,
+        ):
+            mod.Trainer()._run_infer_nn()
+
+        kwargs = orch_instance.run_inference_dataset.call_args.kwargs
+        assert kwargs["dataset_dir"] == "/explicit/dataset/dir", (
+            f"Non-empty NN_INFER_DATASET was not honoured; got {kwargs['dataset_dir']!r}"
+        )
+
 
 class TestRunSimulateRealSignatures:
     """_run_simulate must construct collaborators with their REAL signatures:
