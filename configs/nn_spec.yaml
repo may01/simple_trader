@@ -18,16 +18,17 @@ indicators:
   - macd_12_26_9_slope
   - vol_regime
 
-history_points: 32
+history_points: 8
 
 grouping:
   mode: single
 
+# Small model for NN-flow verification (Phase-11 step 4): one narrow dense
+# layer + short lookback + few epochs proves the pipeline end-to-end fast.
+# Scale up (history_points, layers, epochs) for real training/investigation.
 layers:
   - kind: dense
-    units: 128
-  - kind: dense
-    units: 64
+    units: 32
 
 activation: relu
 dropout: 0.1
@@ -46,10 +47,10 @@ optimizer: adam
 learning_rate: 0.001
 weight_decay: 0.0
 batch_size: 32
-epochs: 50
+epochs: 5
 validation_split: 0.2
 val_strategy: time_holdout
-early_stopping_patience: 10
+early_stopping_patience: 3
 class_weight: balanced
 
 device: auto

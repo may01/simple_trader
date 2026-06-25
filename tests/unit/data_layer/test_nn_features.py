@@ -39,6 +39,7 @@ from indicators.library.nn_features import (
     NNSinDowField,
     NNCosDowField,
     NNCrossTFAlignField,
+    _rolling_ols_slope,
 )
 
 
@@ -166,6 +167,70 @@ class TestNNSlopeField:
         s_b = run(f, df_b, tf)
         # slope at row 9 (window covers rows 5..9) must be identical
         assert s_a.iloc[9] == pytest.approx(s_b.iloc[9])
+
+
+# ---------------------------------------------------------------------------
+# Vectorised OLS slope — closed-form correctness vs np.polyfit reference
+# ---------------------------------------------------------------------------
+
+class TestVectorisedOLSSlope:
+    """Verify the vectorised _rolling_ols_slope matches np.polyfit per-window."""
+
+    def _polyfit_slope(self, y: np.ndarray, w: int) -> np.ndarray:
+        """Reference: np.polyfit slope for every valid trailing window."""
+        n = len(y)
+        out = np.full(n, np.nan)
+        for t in range(w - 1, n):
+            out[t] = np.polyfit(np.arange(w, dtype=float), y[t - w + 1 : t + 1], 1)[0]
+        return out
+
+    def test_linear_series_slope_equals_step(self):
+        """y = 3x + 2 → slope should equal 3.0 at every valid row."""
+        y = np.array([2.0 + 3.0 * i for i in range(30)])
+        s = pd.Series(y)
+        result = _rolling_ols_slope(s, window=7)
+        valid = result.dropna()
+        np.testing.assert_allclose(valid.values, 3.0, atol=1e-9)
+
+    def test_matches_polyfit_on_curved_series(self):
+        """Curved (quadratic) series: vectorised result matches np.polyfit per window."""
+        rng = np.random.RandomState(42)
+        y = rng.randn(100).cumsum()
+        w = 8
+        s = pd.Series(y)
+        result = _rolling_ols_slope(s, window=w).values
+        reference = self._polyfit_slope(y, w)
+        # Both arrays should be NaN for the first w-1 rows
+        np.testing.assert_array_equal(np.isnan(result[: w - 1]), True)
+        np.testing.assert_allclose(result[w - 1 :], reference[w - 1 :], atol=1e-9)
+
+    def test_warmup_rows_are_nan(self):
+        """First window-1 rows must be NaN; row window-1 must be finite."""
+        y = pd.Series(np.arange(20, dtype=float))
+        w = 5
+        result = _rolling_ols_slope(y, window=w)
+        assert result.iloc[: w - 1].isna().all()
+        assert np.isfinite(result.iloc[w - 1])
+
+    def test_no_look_ahead(self):
+        """Corrupting rows after index t must not change the slope at t."""
+        rng = np.random.RandomState(7)
+        y = rng.randn(50).cumsum()
+        w = 6
+        t = 20  # row whose slope we will verify
+        s_clean = pd.Series(y.copy())
+        s_dirty = pd.Series(y.copy())
+        # corrupt all rows after t
+        s_dirty.iloc[t + 1 :] = 1e9
+        clean_slope = _rolling_ols_slope(s_clean, window=w).iloc[t]
+        dirty_slope = _rolling_ols_slope(s_dirty, window=w).iloc[t]
+        assert clean_slope == pytest.approx(dirty_slope, abs=1e-9)
+
+    def test_window_less_than_2_returns_all_nan(self):
+        """A window of 1 is degenerate — no slope can be defined."""
+        y = pd.Series([1.0, 2.0, 3.0, 4.0])
+        result = _rolling_ols_slope(y, window=1)
+        assert result.isna().all()
 
 
 # ---------------------------------------------------------------------------

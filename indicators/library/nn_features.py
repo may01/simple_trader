@@ -37,25 +37,40 @@ def _rolling_ols_slope(series: pd.Series, window: int) -> pd.Series:
     x-statistics are constants, so the rolling estimate is a closed-form ratio
     of rolling sums. Uses only the trailing window (no look-ahead). The first
     ``window - 1`` rows lack a full window and are NaN.
+
+    Fully vectorised — no per-window Python callbacks.
+
+    The closed-form slope for x = 0..w-1, y = trailing window values is::
+
+        slope = (w * Σ(x·y) - Σx * Σy) / (w * Σ(x²) - (Σx)²)
+
+    * Σx, Σx², (Σx)²  are constants for fixed w.
+    * Σy  = y.rolling(w).sum()
+    * Σ(x·y) = Σ_{j=0..w-1} j * y_{t-(w-1)+j}
+             = sum(j * y.shift(w-1-j) for j in range(w))
+               (O(w) vectorised shifts, each O(n))
     """
     w = int(window)
     if w < 2:
         # A line through < 2 points has no defined slope.
         return pd.Series(np.nan, index=series.index)
 
-    x = np.arange(w, dtype=float)
-    x_mean = x.mean()
-    # Sxx = sum((x - x_mean)^2) — constant for a fixed integer abscissa.
-    sxx = float(((x - x_mean) ** 2).sum())
-
     y = series.astype(float)
-    # Sxy_t = sum_i (x_i - x_mean) * y_{t-w+1+i}; rolling dot of centred x with y.
-    weights = x - x_mean
 
-    def _slope(window_vals: np.ndarray) -> float:
-        return float(np.dot(weights, window_vals) / sxx)
+    # Constants for x = 0, 1, ..., w-1
+    sum_x = w * (w - 1) / 2.0           # Σx
+    sum_x2 = w * (w - 1) * (2 * w - 1) / 6.0  # Σx²
+    denominator = w * sum_x2 - sum_x ** 2       # w·Σx² − (Σx)²
 
-    return y.rolling(w).apply(_slope, raw=True)
+    # Rolling Σy — standard pandas vectorised rolling sum
+    sum_y = y.rolling(w).sum()
+
+    # Σ(x·y) over trailing window: position j (0..w-1) maps to y_{t-(w-1-j)}
+    # i.e. y.shift(w-1) is position 0, y.shift(0) is position w-1.
+    sum_xy = sum(j * y.shift(w - 1 - j) for j in range(w))
+
+    numerator = w * sum_xy - sum_x * sum_y
+    return numerator / denominator
 
 
 # ---------------------------------------------------------------------------
