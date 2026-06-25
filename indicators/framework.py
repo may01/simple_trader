@@ -190,6 +190,16 @@ class Indicators:
                 factory = _field_registry().get(cfg.name)
                 if factory is not None:
                     field = factory(cfg)
+                    # For nn_features fields the factory passes only **cfg.params,
+                    # so the instance retains the class-level applies_to=[] (meaning
+                    # "all TFs").  Propagate the config applies_to onto the instance
+                    # so the scheduler respects the YAML restriction — but ONLY for
+                    # the nn_features group, leaving every other group's class-level
+                    # convention intact.  NNCrossTFAlignField already stores an
+                    # instance-level applies_to set by its factory; this branch is a
+                    # no-op for those entries because cfg.applies_to would match.
+                    if cfg.group == "nn_features" and not getattr(field, "applies_to", []):
+                        field.applies_to = list(cfg.applies_to)
                 else:
                     field = _PlaceholderField(cfg)
                 fields.append(field)

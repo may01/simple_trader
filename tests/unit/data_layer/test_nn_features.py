@@ -429,6 +429,58 @@ class TestAlignFieldScheduling:
 
 
 # ---------------------------------------------------------------------------
+# Non-align nn_features scheduling: config applies_to governs all nn_features
+# ---------------------------------------------------------------------------
+
+class TestNNFeaturesScheduling:
+    """Verify that non-align nn_features fields respect config applies_to=[15,60,240].
+
+    The YAML config sets applies_to: [15, 60, 240] for every nn_features entry.
+    After the fix, the scheduler must honour this so tf=1 and tf=1440 get zero
+    nn_features fields (avoiding wasted compute on the 20k-row tf=1 frame).
+    """
+
+    def setup_method(self):
+        Indicators._registry = None
+
+    def _nn_names_for_tf(self, tf: int) -> set[str]:
+        fields = Indicators._sorted_fields(tf, groups=["nn_features"], check_resources=False)
+        return {f.name for f in fields}
+
+    def test_logret_scheduled_on_tf_15(self):
+        """logret must appear in the tf=15 schedule (in applies_to list)."""
+        assert "logret" in self._nn_names_for_tf(15), \
+            "logret missing from tf=15 schedule"
+
+    def test_macd_slope_scheduled_on_tf_15(self):
+        """macd_12_26_9_slope must appear in the tf=15 schedule."""
+        assert "macd_12_26_9_slope" in self._nn_names_for_tf(15), \
+            "macd_12_26_9_slope missing from tf=15 schedule"
+
+    def test_logret_not_scheduled_on_tf_1(self):
+        """logret must NOT appear on tf=1 — config restricts nn_features to [15,60,240]."""
+        assert "logret" not in self._nn_names_for_tf(1), \
+            "logret wrongly scheduled on tf=1 (should be excluded by config applies_to)"
+
+    def test_macd_slope_not_scheduled_on_tf_1(self):
+        """macd_12_26_9_slope must NOT appear on tf=1."""
+        assert "macd_12_26_9_slope" not in self._nn_names_for_tf(1), \
+            "macd_12_26_9_slope wrongly scheduled on tf=1"
+
+    def test_no_nn_features_on_tf_1(self):
+        """tf=1 must have zero nn_features fields after the fix."""
+        names = self._nn_names_for_tf(1)
+        assert len(names) == 0, \
+            f"Expected 0 nn_features on tf=1 but got {len(names)}: {names}"
+
+    def test_no_nn_features_on_tf_1440(self):
+        """tf=1440 must have zero nn_features fields (not in config applies_to)."""
+        names = self._nn_names_for_tf(1440)
+        assert len(names) == 0, \
+            f"Expected 0 nn_features on tf=1440 but got {len(names)}: {names}"
+
+
+# ---------------------------------------------------------------------------
 # Robust winsorised stats + apply clamp
 # ---------------------------------------------------------------------------
 

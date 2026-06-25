@@ -460,244 +460,244 @@ fields:
   # --- nn_features ---
   - name: nn_rsi_ma8_norm_mean_20
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [rsi_ma8]
     params: {}
 
   - name: nn_close_diff_atr_14_ma_5
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [close_diff_prc, atr_14_ma_5]
     params: {atr_ma_length: 5}
 
   # Group 2 — indicator differences (identity left/right baked in registry; params {})
   - name: bb_upper_20_2_minus_close
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [bb_upper_20_2, close]
     params: {}
   - name: bb_middle_20_2_minus_close
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [bb_middle_20_2, close]
     params: {}
   - name: bb_lower_20_2_minus_close
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [bb_lower_20_2, close]
     params: {}
   - name: ema_7_minus_close
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_7, close]
     params: {}
   - name: ema_14_minus_close
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_14, close]
     params: {}
   - name: ema_25_minus_close
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_25, close]
     params: {}
   - name: ema_50_minus_close
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_50, close]
     params: {}
   - name: ema_100_minus_close
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_100, close]
     params: {}
   - name: vol_ma_20_minus_volume
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [vol_ma_20, volume]
     params: {}
   - name: ema_7_minus_ema_14
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_7, ema_14]
     params: {}
   - name: ema_7_minus_ema_25
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_7, ema_25]
     params: {}
   - name: ema_7_minus_ema_50
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_7, ema_50]
     params: {}
   - name: ema_7_minus_ema_100
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_7, ema_100]
     params: {}
   - name: ema_14_minus_ema_25
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_14, ema_25]
     params: {}
   - name: ema_14_minus_ema_50
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_14, ema_50]
     params: {}
   - name: ema_14_minus_ema_100
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_14, ema_100]
     params: {}
   - name: ema_25_minus_ema_50
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_25, ema_50]
     params: {}
   - name: ema_25_minus_ema_100
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_25, ema_100]
     params: {}
   - name: ema_50_minus_ema_100
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_50, ema_100]
     params: {}
   - name: atr_14_ma_5_minus_atr_14
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [atr_14_ma_5, atr_14]
     params: {}
   - name: natr_14_ma_5_minus_natr_14
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [natr_14_ma_5, natr_14]
     params: {}
 
   # Group 3 — slopes (identity source baked in registry; window is the tunable)
   - name: macd_12_26_9_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [macd_12_26_9]
     params: {window: 5}
   - name: macd_signal_12_26_9_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [macd_signal_12_26_9]
     params: {window: 5}
   - name: macd_5_13_9_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [macd_5_13_9]
     params: {window: 5}
   - name: macd_signal_5_13_9_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [macd_signal_5_13_9]
     params: {window: 5}
   - name: ema_7_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_7]
     params: {window: 5}
   - name: ema_14_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_14]
     params: {window: 5}
   - name: ema_25_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_25]
     params: {window: 5}
   - name: ema_50_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_50]
     params: {window: 5}
   - name: ema_100_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [ema_100]
     params: {window: 5}
   - name: adx_14_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [adx_14]
     params: {window: 5}
   - name: rsi_ma8_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [rsi_ma8]
     params: {window: 5}
   - name: rsi_ma12_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [rsi_ma12]
     params: {window: 5}
   - name: rsi_ma24_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [rsi_ma24]
     params: {window: 5}
   - name: cci_14_ma_5_slope
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [cci_14_ma_5]
     params: {window: 5}
 
   # Orthogonal engineered features
   - name: logret
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [close]
     params: {}
   - name: range_atr
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [high, low, atr_14]
     params: {}
   - name: body_ratio
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [open, close, high, low]
     params: {}
   - name: wick_up
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [open, close, high, low]
     params: {}
   - name: wick_dn
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [open, close, high, low]
     params: {}
   - name: vol_regime
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: [atr_14]
     params: {}
   - name: sin_tod
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: []
     params: {}
   - name: cos_tod
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: []
     params: {}
   - name: sin_dow
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: []
     params: {}
   - name: cos_dow
     group: nn_features
-    applies_to: all
+    applies_to: [15, 60, 240]
     depends_on: []
     params: {}
   - name: align_60
