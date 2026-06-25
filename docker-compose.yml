@@ -64,8 +64,8 @@ services:
     volumes:
       - .:/code
       # infer writes the additive df_with_nn.pkl beside df_with_indicators.pkl
-      # (never mutates df_with_indicators.pkl), so the data volume is RW here.
-      # Training (nn-train) keeps /trader_data RO. See DECISIONS-LOG D8.
+      # (never mutates df_with_indicators.pkl), so the data volume is RW here —
+      # same as nn-train (which writes shared/training_state.pkl). See DECISIONS-LOG D8.
       - simple_trader_vol:/trader_data
       - simple_trader_vol_long:/trader_data_long
     environment:
