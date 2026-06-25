@@ -15,12 +15,6 @@ import os
 import pickle
 
 
-def _nn_output_path() -> str:
-    """Return the path for df_with_nn.pkl inside nn_folder()."""
-    from helpers import nn_folder  # lazy — reads env at call time
-    return nn_folder() + "df_with_nn.pkl"
-
-
 class _DefaultStrategyFactory:
     """Picklable StrategyManager factory.
 
@@ -158,7 +152,6 @@ class Trainer:
             self.config_path + "indicators_config.yaml",
             wide_df_path(),
             data_attributes_path(),
-            nn_output_path=_nn_output_path(),
         )
         # Indicators are computed from DATA_START on; the warmup head grabbed
         # by _run_grab_data is lookback input only and is trimmed before save.

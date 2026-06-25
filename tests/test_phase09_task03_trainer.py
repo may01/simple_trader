@@ -381,7 +381,6 @@ class TestRunPrepareData:
             "/cfg/indicators_config.yaml",
             "/data/wide.pkl",
             "/data/attrs.pkl",
-            nn_output_path="/data/nn/df_with_nn.pkl",
         )
 
     def test_prepare_called_with_graber_data_path(self, monkeypatch):

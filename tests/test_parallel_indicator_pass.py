@@ -12,7 +12,6 @@ def _make_preparer(tmp_path):
         "configs/",
         str(tmp_path / "out.pkl"),
         str(tmp_path / "attrs.pkl"),
-        nn_output_path=str(tmp_path / "nn.pkl"),
     )
 
 

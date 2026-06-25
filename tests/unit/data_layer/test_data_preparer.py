@@ -99,7 +99,6 @@ class TestLoadRawData:
             config_path="configs/indicators_config.yaml",
             output_path="/tmp/test_dp_out.pkl",
             attributes_output_path="/tmp/test_dp_attrs.pkl",
-            nn_output_path="/tmp/nn_not_present.pkl",
         )
 
     def test_load_raw_data_raises_on_missing_required_columns(self, tmp_path):
@@ -186,7 +185,6 @@ class TestPreparePipeline:
             config_path="configs/indicators_config.yaml",
             output_path=output_path,
             attributes_output_path=attrs_path,
-            nn_output_path=nn_path,
         )
 
         # Patch instance methods to track order
@@ -239,7 +237,6 @@ class TestAtomicSave:
             config_path="configs/indicators_config.yaml",
             output_path=output_path,
             attributes_output_path=attrs_path,
-            nn_output_path=nn_path,
         )
         # Bypass heavy steps, keep only I/O logic
         dp._load_raw_data = lambda path: pd.DataFrame({"x": [1]})
@@ -320,7 +317,6 @@ class TestComputeClassIndicators:
                 config_path="configs/indicators_config.yaml",
                 output_path="/tmp/test_dp_out.pkl",
                 attributes_output_path="/tmp/test_dp_attrs.pkl",
-                nn_output_path="/tmp/nn_not_present.pkl",
             )
             # Serial path: sys.modules mocks don't survive fork workers
             dp.num_workers = 1
@@ -380,7 +376,6 @@ class TestWarmupTrim:
             config_path="configs/indicators_config.yaml",
             output_path=str(tmp_path / "df_with_indicators.pkl"),
             attributes_output_path=str(tmp_path / "data_attributes.pkl"),
-            nn_output_path=str(tmp_path / "nn_not_present.pkl"),
         )
         # Serial path: sys.modules mocks don't survive fork workers
         dp.num_workers = 1

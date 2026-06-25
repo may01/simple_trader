@@ -33,6 +33,7 @@ services:
       - simple_trader_vol_long:/trader_data_long
 
   nn-train:
+    image: simple_trader_nn
     build:
       context: .
       dockerfile: docker/Dockerfile.nn-train
@@ -56,6 +57,7 @@ services:
     # hook on a driverless host. See DECISIONS-LOG D10.
 
   simulate-nn:
+    image: simple_trader_nn
     build:
       context: .
       dockerfile: docker/Dockerfile.nn-train

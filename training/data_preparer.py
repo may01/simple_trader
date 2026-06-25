@@ -149,10 +149,6 @@ class DataPreparer:
         config_path:            Path to indicators_config.yaml.
         output_path:            Path for df_with_indicators.pkl (plain DataFrame).
         attributes_output_path: Path for data_attributes.pkl.
-        nn_output_path:         Path where the NN inference batch writes df_with_nn.pkl.
-                                Retained for the Trainer wiring contract; prepare()
-                                NEVER merges it (df_with_indicators.pkl is single-writer).
-                                nn_res_* reach consumers via data.join_nn_results only.
     """
 
     def __init__(
@@ -160,12 +156,10 @@ class DataPreparer:
         config_path: str,
         output_path: str,
         attributes_output_path: str,
-        nn_output_path: str = "df_with_nn.pkl",
     ) -> None:
         self.config_path = config_path
         self.output_path = output_path
         self.attributes_output_path = attributes_output_path
-        self.nn_output_path = nn_output_path
         self.num_workers: int = int(
             os.environ.get("NUM_WORKERS", os.environ.get("AVAIABLE_THREADS", "4"))
         )
