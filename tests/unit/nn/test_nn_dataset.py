@@ -21,7 +21,7 @@ import pytest
 from data import WideDataPoint
 from indicators import DataAttributes
 from indicators.labels import _fmt
-from nn.nn_dataset import NNDataset
+from nn.nn_dataset import NNDataset, _build_tf_block
 from nn.nn_model_spec import GroupingSpec, NNModelSpec, TargetSpec
 
 
@@ -103,33 +103,46 @@ def small_spec(**overrides) -> NNModelSpec:
 
 class TestLookbackMatchesWideDataPoint:
     def test_block_matches_reference_get(self, tmp_path):
-        df = make_wide_df()
-        spec = small_spec(history_points=4)
-        ds = NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+        """The PRODUCTION un-normalised lookback block == WideDataPoint.get.
 
-        X, _ = ds.tensors()
-        index = np.load(Path(ds.dataset_dir_path) / "index.npy", allow_pickle=True)
-        manifest = ds.manifest
-        feat_cols = manifest["feature_cols"]["15"]
-        # X is normalised; recover raw is not possible directly. Instead, build
-        # a SECOND dataset with degenerate stats (wide band, mean 0, std 1) so
-        # tensors() returns RAW values, and compare to WideDataPoint.get.
-        raw = _raw_block(df, feat_cols, 15, spec.history_points, pd.DatetimeIndex(index))
+        This asserts the real production builder ``_build_tf_block`` (the
+        highest-risk piece) directly, BEFORE any normalisation — no test-local
+        re-implementation. Covers several rows × every shift: shift=0 (forming
+        candle) AND shift>=1 (closed candles), including the
+        NaN-on-insufficient-history warm-up boundary at the earliest rows.
+        """
+        df = make_wide_df(rows=90)
+        feat_cols = ["15_logret", "15_rsi_14"]
+        history_points = 4
 
-        # Reference values from WideDataPoint.get for a few rows/shifts.
-        kept = pd.DatetimeIndex(index)
-        for ts in [kept[0], kept[len(kept) // 2], kept[-1]]:
+        # REAL production output — un-normalised by construction.
+        block = _build_tf_block(df, 15, feat_cols, history_points)
+        assert block.shape == (len(df), history_points, len(feat_cols))
+
+        all_idx = list(df.index)
+        # Rows spanning the warm-up (early rows have <history_points closed
+        # candles → NaN at deep shifts) through fully-resolved later rows.
+        sample_positions = [0, 1, 14, 15, 29, 30, 44, len(df) // 2, len(df) - 1]
+        saw_nan = False
+        for ri in sample_positions:
+            ts = all_idx[ri]
             wdp = WideDataPoint(df, ts)
             for fi, col in enumerate(feat_cols):
                 bare = col.split("_", 1)[1]
-                ri = list(kept).index(ts)
-                for shift in range(spec.history_points):
+                for shift in range(history_points):
                     ref = wdp.get(bare, 15, shift)
-                    got = raw[ri, shift, fi]
+                    got = block[ri, shift, fi]
                     if math.isnan(ref):
-                        assert math.isnan(got)
+                        saw_nan = True
+                        assert math.isnan(got), (
+                            f"row {ri} shift {shift} {col}: expected NaN, got {got}"
+                        )
                     else:
-                        assert got == pytest.approx(ref)
+                        assert got == pytest.approx(ref), (
+                            f"row {ri} shift {shift} {col}: {got} != {ref}"
+                        )
+        # The warm-up boundary must actually be exercised (teeth on NaN path).
+        assert saw_nan, "test did not exercise the NaN-insufficient-history boundary"
 
     def test_nan_on_insufficient_history_dropped(self, tmp_path):
         # First rows lack history_points closed candles -> NaN -> dropped.
@@ -149,25 +162,6 @@ class TestLookbackMatchesWideDataPoint:
             ri = all_idx.index(ts)
             n_closed = int((closed_pos <= ri).sum())
             assert n_closed >= spec.history_points - 1
-
-
-def _raw_block(df, feat_cols, tf, history_points, kept_index):
-    """Reference raw lookback block for kept rows (mirrors the spec)."""
-    closed_pos = np.flatnonzero(df[f"{tf}_is_closed"].to_numpy().astype(bool))
-    all_idx = list(df.index)
-    rows = len(kept_index)
-    out = np.full((rows, history_points, len(feat_cols)), np.nan)
-    for ri, ts in enumerate(kept_index):
-        i = all_idx.index(ts)
-        n_le = int((closed_pos <= i).sum())
-        for fi, col in enumerate(feat_cols):
-            colvals = df[col].to_numpy(dtype=float)
-            out[ri, 0, fi] = colvals[i]
-            for shift in range(1, history_points):
-                k = n_le - shift
-                if k >= 0:
-                    out[ri, shift, fi] = colvals[closed_pos[k]]
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +349,40 @@ class TestNaNDrops:
 
 
 # ---------------------------------------------------------------------------
+# Strict target guard / non-monotonic index guard
+# ---------------------------------------------------------------------------
+
+
+class TestBuildGuards:
+    def test_strict_target_without_l_y_raises(self, tmp_path):
+        # TargetSpec carries no label_l/label_y; strict=True must fail loudly
+        # rather than silently fabricating a "_lNone_yNone" column name.
+        df = make_wide_df()
+        spec = small_spec(
+            targets=[
+                TargetSpec(
+                    name="dir15",
+                    kind="direction",
+                    horizons=[1],
+                    label_tf=15,
+                    label_m=1.0,
+                    label_x=0.3,
+                    strict=True,
+                )
+            ]
+        )
+        with pytest.raises(ValueError, match="strict target needs label_l/label_y"):
+            NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+
+    def test_non_monotonic_index_raises(self, tmp_path):
+        df = make_wide_df()
+        df = df.iloc[::-1]  # descending index breaks the searchsorted gather
+        spec = small_spec(history_points=2)
+        with pytest.raises(ValueError, match="monotonically-ascending"):
+            NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+
+
+# ---------------------------------------------------------------------------
 # Normalisation
 # ---------------------------------------------------------------------------
 
@@ -369,33 +397,48 @@ class TestNormalisation:
         assert finite.min() >= -4.0 - 1e-6
         assert finite.max() <= 4.0 + 1e-6
 
-    def test_stats_train_split_only(self, tmp_path):
-        """Stats must be computed on the train split rows only (no leakage)."""
+    def test_stats_match_compute_nn_stats_semantics(self, tmp_path):
+        """Stats match DataAttributes.compute_nn_stats: raw per-column values,
+        closed-candle rows only, each timestamp once, restricted to the train
+        split's timestamp span (no val/holdout leak)."""
         df = make_wide_df(rows=200)
         spec = small_spec(history_points=2)
         ds = NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
 
-        # Recompute expected stats from the TRAIN split raw values of one col.
         splits = json.loads((Path(ds.dataset_dir_path) / "splits.json").read_text())
         index = np.load(Path(ds.dataset_dir_path) / "index.npy", allow_pickle=True)
         kept = pd.DatetimeIndex(index)
         feat_cols = ds.manifest["feature_cols"]["15"]
         col = feat_cols[0]
-        bare = col.split("_", 1)[1]
-        raw = _raw_block(df, feat_cols, 15, spec.history_points, kept)
+
         tr0, tr1 = splits["train"]
-        # all raw values for this feature across the train rows' history window
-        train_vals = raw[tr0:tr1, :, 0].ravel()
-        train_vals = train_vals[np.isfinite(train_vals)]
-        q01 = float(np.quantile(train_vals, 0.01))
-        q99 = float(np.quantile(train_vals, 0.99))
-        xw = np.clip(train_vals, q01, q99)
+        train_lo, train_hi = kept[tr0], kept[tr1 - 1]
+
+        # Reference: the SAME inputs compute_nn_stats would use — raw source
+        # column on closed rows, one per timestamp, within the train span.
+        closed = df["15_is_closed"].to_numpy().astype(bool)
+        in_train = (df.index >= train_lo) & (df.index <= train_hi)
+        series = df.loc[closed & in_train, col].dropna()
+        q01 = float(series.quantile(0.01))
+        q99 = float(series.quantile(0.99))
+        xw = series.clip(q01, q99)
         exp_mean = float(xw.mean())
+        exp_std = max(float(xw.std()), 1e-8)
+
         got = ds.manifest["normalization"][col]
-        # q01/q99 close; mean within tolerance (quantile interpolation differences)
-        assert got["q01"] == pytest.approx(q01, abs=1e-6)
-        assert got["q99"] == pytest.approx(q99, abs=1e-6)
-        assert got["mean"] == pytest.approx(exp_mean, rel=1e-3, abs=1e-6)
+        assert got["q01"] == pytest.approx(q01, abs=1e-9)
+        assert got["q99"] == pytest.approx(q99, abs=1e-9)
+        assert got["mean"] == pytest.approx(exp_mean, abs=1e-9)
+        assert got["std"] == pytest.approx(exp_std, abs=1e-9)
+
+        # Cross-check against the production layer itself on the same train span.
+        attrs = DataAttributes()
+        attrs.compute_nn_stats(df.loc[in_train], feat_cols)
+        layer = attrs.column_stats[col]
+        assert got["q01"] == pytest.approx(layer["q01"], abs=1e-9)
+        assert got["q99"] == pytest.approx(layer["q99"], abs=1e-9)
+        assert got["mean"] == pytest.approx(layer["mean"], abs=1e-9)
+        assert got["std"] == pytest.approx(layer["std"], abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -489,6 +532,13 @@ class TestGrouping:
         sub = ds.group(keys[0])
         X, _ = sub.tensors()
         assert X.shape[0] == ds.manifest["rows"]
+
+    def test_by_indicator_raises_not_implemented(self, tmp_path):
+        df = make_wide_df()
+        spec = small_spec()
+        ds = NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+        with pytest.raises(NotImplementedError, match="orchestrated upstream"):
+            ds.groups(GroupingSpec(mode="by_indicator", column="15_rsi_14"))
 
 
 # ---------------------------------------------------------------------------

@@ -17,10 +17,13 @@ Lookback semantics replicate ``WideDataPoint.get(col, tf, shift)`` exactly:
   - shift=N≥1  → the value at the Nth-last row where ``{tf}_is_closed == True``
                  at/up to that timestamp; NaN when history is insufficient.
 
-Normalisation is leakage-free: robust winsorised stats ``{q01,q99,mean,std}``
-are computed on the TRAIN split only (the same formula as
-``DataAttributes.compute_nn_stats``) and tensors are written PRE-normalised
-(``clip(x, q01, q99) → (x - mean)/std → clip(z, -4, +4)``).
+Normalisation is leakage-free and shares the project's single layer with
+``DataAttributes.compute_nn_stats``: robust winsorised stats
+``{q01,q99,mean,std}`` are estimated on the RAW per-column source values,
+closed-candle rows only, each timestamp once — restricted to the TRAIN split's
+timestamp span (no val/holdout leak). The SAME stats are then applied to the
+windowed feature tensors (``clip(x, q01, q99) → (x - mean)/std → clip(z, -4,
++4)``) and stored in the manifest for verbatim reuse by ``run_inference``.
 """
 
 from __future__ import annotations
@@ -57,6 +60,8 @@ def _profit_suffix(spec: "TargetSpec", horizon: int) -> str:
     if spec.strict:
         label_l = getattr(spec, "label_l", None)
         label_y = getattr(spec, "label_y", None)
+        if label_l is None or label_y is None:
+            raise ValueError("strict target needs label_l/label_y on TargetSpec")
         base = f"{base}_l{_fmt(label_l)}_y{_fmt(label_y)}"
     return base
 
@@ -93,6 +98,11 @@ def _build_tf_block(
       single (rows, history_points) gather-index matrix per tf lets us index
       each feature column in one vectorised take.
     """
+    if not df.index.is_monotonic_increasing:
+        raise ValueError(
+            "NNDataset lookback requires a monotonically-ascending index; "
+            "the vectorised searchsorted gather assumes ascending row order"
+        )
     n_rows = len(df)
     closed_mask = df[f"{tf}_is_closed"].to_numpy().astype(bool)
     closed_pos = np.flatnonzero(closed_mask)  # ascending row positions
@@ -483,13 +493,26 @@ class NNDataset:
         }
 
         # --- Robust normalisation stats on the TRAIN split only ---
+        # Match DataAttributes.compute_nn_stats semantics EXACTLY: stats are
+        # estimated on the RAW per-column source values, closed-candle rows
+        # only, each timestamp counted once — NOT the windowed lookback tensor
+        # (which is forming-candle inclusive and duplicates each closed value
+        # once per window it appears in). The train split is a row range over
+        # the kept (post-drop) rows; its timestamp span [train_lo, train_hi]
+        # bounds which closed source rows feed the stats (no val/holdout leak).
         normalization: dict[str, dict] = {}
+        train_lo = kept_index[0] if tr_end > 0 else None
+        train_hi = kept_index[tr_end - 1] if tr_end > 0 else None
         for tf in spec.timeframes:
             tf_key = str(tf)
-            block = tf_blocks[tf_key]  # (n_kept, hp, n_feat) — kept rows
-            train_block = block[: tr_end]
-            for fi, col in enumerate(feature_cols_by_tf[tf_key]):
-                vals = train_block[:, :, fi].ravel()
+            closed_mask = df[f"{tf}_is_closed"].to_numpy().astype(bool)
+            if train_hi is not None:
+                in_train = (df.index >= train_lo) & (df.index <= train_hi)
+            else:
+                in_train = np.zeros(len(df), dtype=bool)
+            stat_mask = closed_mask & in_train
+            for col in feature_cols_by_tf[tf_key]:
+                vals = df[col].to_numpy(dtype=np.float64)[stat_mask]
                 vals = vals[np.isfinite(vals)]
                 normalization[col] = _robust_stats(vals)
 
@@ -617,16 +640,17 @@ class NNDataset:
         """Return the group keys for a GroupingSpec.
 
         mode="single" → one group ("all") containing all rows.
-        mode="by_indicator" → unique values of the routing column at kept rows.
+        mode="by_indicator" → not supported in-dataset; the routing column is
+            not retained post-build, so per-class routing is orchestrated
+            upstream (task 08).
         """
         if grouping.mode == "single":
             return ["all"]
         if grouping.mode == "by_indicator":
-            # Routing column read off the manifest is not stored; group routing
-            # needs the source frame, which is not retained. Single-mode is the
-            # supported in-dataset path; by_indicator routing is orchestrated
-            # upstream. Return one bucket "all" so callers degrade gracefully.
-            return ["all"]
+            raise NotImplementedError(
+                "by_indicator grouping is orchestrated upstream (task 08); "
+                "NNDataset does not retain the routing column"
+            )
         raise ValueError(f"unknown grouping mode {grouping.mode!r}")
 
     def group(self, group_key: str) -> "NNDataset":
@@ -650,11 +674,13 @@ class NNDataset:
 
 
 def _robust_stats(vals: np.ndarray) -> dict:
-    """{q01,q99,mean,std} via the winsorised formula (train-split values).
+    """{q01,q99,mean,std} via the winsorised formula (raw closed-row values).
 
     q01/q99 on raw → xw=clip(q01,q99) → mean=xw.mean(), std=max(xw.std(),1e-8).
-    Pandas Series.quantile (linear) and Series.std (ddof=1) match
-    DataAttributes.compute_nn_stats exactly, so we reuse pandas here.
+    Pandas Series.quantile (linear) and Series.std (ddof=1) reproduce
+    DataAttributes.compute_nn_stats's numbers; the caller feeds it the same
+    inputs that layer uses (raw per-column closed-candle values, one per
+    timestamp), so the dataset and the global layer agree.
     """
     if len(vals) == 0:
         return {"q01": 0.0, "q99": 0.0, "mean": 0.0, "std": 1e-8}
