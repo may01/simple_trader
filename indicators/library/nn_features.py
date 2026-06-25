@@ -375,16 +375,28 @@ class NNCrossTFAlignField(IndicatorField):
     last closed higher-TF value, never a future one), then emits +1 when the
     signs agree, -1 when they disagree, 0 when either is flat/NaN.
 
-    ``applies_to`` is set to the lower member only (config: ``[15]`` / ``[60]``),
-    so a missing higher TF is a config error, not a silent NaN.
+    ``applies_to`` is set on the instance (supplied by the registry factory from
+    the config entry) to restrict scheduling to the lower TF only — e.g. ``[15]``
+    for align_60 and ``[60]`` for align_240.  This ensures a missing higher TF
+    is a config error, not a silent NaN, and prevents garbage self/forward-
+    alignment columns (e.g. ``240_align_240``) from being produced.
     """
 
     group = "nn_features"
     resource_dependencies: list[str] = []
-    applies_to: list[int] = []
 
-    def __init__(self, other_tf: int, trend_col: str = "ema_50", window: int = 5) -> None:
+    def __init__(
+        self,
+        other_tf: int,
+        applies_to: list[int] | None = None,
+        trend_col: str = "ema_50",
+        window: int = 5,
+    ) -> None:
         self.other_tf = other_tf
+        # Instance-level applies_to so the scheduler respects the TF restriction.
+        # Caller (registry factory) supplies the concrete list from config; fall
+        # back to [] (all TFs) only when constructed without an explicit value.
+        self.applies_to: list[int] = list(applies_to) if applies_to is not None else []
         self.trend_col = trend_col
         self.window = window
         self.params = {"other_tf": other_tf, "trend_col": trend_col, "window": window}

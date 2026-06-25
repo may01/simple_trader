@@ -24,6 +24,7 @@ import pytest
 
 from data import LiveDataPoint
 from indicators import DataAttributes
+from indicators.framework import Indicators
 from indicators.library.nn_features import (
     NNDiffField,
     NNSlopeField,
@@ -320,6 +321,46 @@ class TestNNCrossTFAlignField:
         s_b = run(f, df_b, tf)
         # alignment at row 10 must be identical (slope window ends at row 10)
         assert s_a.iloc[10] == s_b.iloc[10]
+
+
+# ---------------------------------------------------------------------------
+# Scheduling: align fields must only appear for their designated TF
+# ---------------------------------------------------------------------------
+
+class TestAlignFieldScheduling:
+    """Verify that align_60 is scheduled only on tf=15, align_240 only on tf=60.
+
+    Uses Indicators._sorted_fields — the same entry point the rest of the system
+    uses to decide which fields to run on a given TF.
+    """
+
+    def setup_method(self):
+        # Reset the class-level registry cache so each test starts fresh and
+        # picks up the current (post-fix) registry state.
+        Indicators._registry = None
+
+    def _align_names_for_tf(self, tf: int) -> set[str]:
+        """Return the set of field names in group nn_features for the given TF."""
+        fields = Indicators._sorted_fields(tf, groups=["nn_features"], check_resources=False)
+        return {f.name for f in fields}
+
+    def test_align_60_scheduled_only_on_tf_15(self):
+        """align_60 must appear for tf=15 and NOT for tf=60 or tf=240."""
+        assert "align_60" in self._align_names_for_tf(15), \
+            "align_60 missing from tf=15 schedule"
+        assert "align_60" not in self._align_names_for_tf(60), \
+            "align_60 wrongly scheduled on tf=60 (self-alignment)"
+        assert "align_60" not in self._align_names_for_tf(240), \
+            "align_60 wrongly scheduled on tf=240 (forward-alignment)"
+
+    def test_align_240_scheduled_only_on_tf_60(self):
+        """align_240 must appear for tf=60 and NOT for tf=15 or tf=240."""
+        assert "align_240" in self._align_names_for_tf(60), \
+            "align_240 missing from tf=60 schedule"
+        assert "align_240" not in self._align_names_for_tf(15), \
+            "align_240 wrongly scheduled on tf=15 (forward-alignment)"
+        assert "align_240" not in self._align_names_for_tf(240), \
+            "align_240 wrongly scheduled on tf=240 (self-alignment)"
 
 
 # ---------------------------------------------------------------------------
