@@ -124,15 +124,20 @@ def _compute_tf_rows(
     # inserts beat pre-allocation there (see Indicators._run_fields) —
     # so silence pandas' PerformanceWarning for the loop.
     results: dict[str, list[float]] = {col: [] for col in out_cols}
+    # Emit a log every 1% of this work unit's rows so a long-running (tf, slice)
+    # does not run silent. In fork workers stdout is the parent's, so each unit
+    # reports its own 1%.
+    progress = _PctProgress(len(rows), f"[prepare] indic tf={tf} n={len(rows)}")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=pd.errors.PerformanceWarning)
-        for ts in rows:
+        for i, ts in enumerate(rows, start=1):
             slice_df = build_indicator_input(df, ts, tf)
             data_point = _SliceDataPoint(slice_df, ts)
             Indicators.compute_group(data_point, tf, groups=groups)
             last = slice_df.iloc[-1]
             for col in out_cols:
                 results[col].append(last[col] if col in slice_df.columns else float("nan"))
+            progress.tick(i)
     return results
 
 
@@ -226,6 +231,35 @@ class _ChunkProgress:
         )
         log(line)
         return line
+
+
+class _PctProgress:
+    """Logs a line each time an integer percent of a chunk's rows is reached.
+
+    Used inside the per-row indicator loop so a long-running work unit reports
+    progress instead of running silent. Runs in fork workers too (their stdout
+    is the parent's), so each (tf, row-slice) unit reports its own 1%.
+    """
+
+    def __init__(
+        self, total: int, label: str, *, log: "Callable[[str], None] | None" = None
+    ) -> None:
+        if log is None:
+            from logs import log as _log
+            log = _log
+        self._total = total
+        self._label = label
+        self._log = log
+        self._last_pct = 0
+
+    def tick(self, done: int) -> None:
+        """Record *done* rows processed; log once for each new integer percent."""
+        if self._total <= 0:
+            return
+        pct = done * 100 // self._total
+        if pct > self._last_pct:
+            self._last_pct = pct
+            self._log(f"{self._label} {pct}% ({done}/{self._total})")
 
 
 # ---------------------------------------------------------------------------
