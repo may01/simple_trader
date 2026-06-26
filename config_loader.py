@@ -165,3 +165,18 @@ def warmup_start_ms(data_start_ms: int) -> int:
     The simulation window itself must keep using the raw DATA_START.
     """
     return max(data_start_ms - warmup_minutes() * 60_000, 0)
+
+
+def chunk_config() -> tuple[int, int]:
+    """Return (chunk_span_days, chunk_min_rows) for chunked data preparation.
+
+    CHUNK_SPAN_DAYS  default 30      — calendar-day size of each time portion.
+    CHUNK_MIN_ROWS   default 200000  — row threshold below which the dataset
+                                       runs as one chunk (≈140 days of 1-min
+                                       rows). Counts 1-min rows in the simulation
+                                       window [DATA_START, DATA_END).
+    """
+    import os
+    span_days = int(os.environ.get("CHUNK_SPAN_DAYS", "30"))
+    min_rows = int(os.environ.get("CHUNK_MIN_ROWS", "200000"))
+    return span_days, min_rows

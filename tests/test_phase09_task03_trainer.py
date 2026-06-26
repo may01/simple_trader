@@ -383,8 +383,9 @@ class TestRunPrepareData:
             "/data/attrs.pkl",
         )
 
-    def test_prepare_called_with_graber_data_path(self, monkeypatch):
-        """_run_prepare_data calls prepare(graber_data_path(), data_start_ms=DATA_START)."""
+    def test_prepare_chunked_called_with_graber_data_path(self, monkeypatch):
+        """_run_prepare_data calls prepare_chunked(graber_data_path(),
+        data_start_ms=DATA_START, data_end_ms=DATA_END)."""
         _set_env(monkeypatch, {"RUN_TYPE": "prepare_data"})
         import importlib
         import training.trainer as mod
@@ -401,10 +402,12 @@ class TestRunPrepareData:
             t = mod.Trainer()
             t._run_prepare_data()
 
-        # data_start_ms = DATA_START from _set_env — indicators computed only
-        # from this point; warmup rows are input history and get trimmed.
-        mock_dp_instance.prepare.assert_called_once_with(
-            "/data/graber.pkl", data_start_ms=1700000000000
+        # Chunked entry point: below CHUNK_MIN_ROWS it is the unchanged single
+        # pass; indicators are computed from DATA_START on, warmup rows trimmed.
+        mock_dp_instance.prepare_chunked.assert_called_once_with(
+            "/data/graber.pkl",
+            data_start_ms=1700000000000,
+            data_end_ms=1700100000000,
         )
 
 

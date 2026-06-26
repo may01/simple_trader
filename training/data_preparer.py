@@ -15,15 +15,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import time
 import warnings
+from typing import Callable
 
 import pandas as pd
 
 # Heavy imports (talib-dependent) are deferred to method bodies to allow
 # test-time patching without triggering talib at module import time.
 # config_loader is safe to import eagerly.
-from config_loader import CANDLES, load_nn_config
+from config_loader import CANDLES, chunk_config, load_nn_config, warmup_start_ms
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -139,6 +143,92 @@ def _pool_compute_chunk(args: tuple[int, pd.Index, list[str]]) -> dict[str, list
 
 
 # ---------------------------------------------------------------------------
+# Chunked-preparation helpers (time-portion split, boundaries, progress)
+# ---------------------------------------------------------------------------
+
+_MS_PER_MIN = 60_000
+_MS_PER_DAY = 86_400_000
+
+
+def _window_row_count(start_ms: int, end_ms: int) -> int:
+    """Number of 1-min rows in [start_ms, end_ms)."""
+    if end_ms <= start_ms:
+        return 0
+    return (end_ms - start_ms) // _MS_PER_MIN
+
+
+def _chunk_boundaries(
+    start_ms: int, end_ms: int, span_days: int
+) -> list[tuple[int, int]]:
+    """Contiguous [start, end) time portions of *span_days* each.
+
+    The last portion is clamped to *end_ms*. A window no larger than one span
+    returns a single ``(start_ms, end_ms)``. Returns ``[]`` when the window is
+    empty (``start_ms >= end_ms``). Pure function of its arguments — the single
+    source of truth for portion identity (a part file at index *i* means that
+    portion is done).
+    """
+    if end_ms <= start_ms:
+        return []
+    span_ms = span_days * _MS_PER_DAY
+    boundaries: list[tuple[int, int]] = []
+    cur = start_ms
+    while cur < end_ms:
+        boundaries.append((cur, min(cur + span_ms, end_ms)))
+        cur += span_ms
+    return boundaries
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Format *seconds* as <h>h<m>m<s>s dropping leading zero units (e.g. 8m12s)."""
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+class _ChunkProgress:
+    """Logs per-portion completion with elapsed time and a linear ETA.
+
+    The clock is injected (``now``) so ETA math is unit-testable without
+    sleeping and stays deterministic in tests.
+    """
+
+    def __init__(
+        self, pass_name: str, total: int, *, now: Callable[[], float] = time.monotonic
+    ) -> None:
+        self.pass_name = pass_name
+        self.total = total
+        self._now = now
+        self._start = now()
+
+    def tick(self, done: int, rows: int) -> str:
+        """Record *done*/total portions complete (*rows* processed). Log + return
+        the formatted line. ETA = elapsed/done × (total − done); '—' while done==0."""
+        if self.total <= 0:
+            return ""
+        from logs import log
+
+        elapsed = self._now() - self._start
+        pct = int(done * 100 / self.total)
+        if done > 0:
+            eta = elapsed / done * (self.total - done)
+            eta_str = _fmt_duration(eta)
+        else:
+            eta_str = "—"
+        line = (
+            f"{self.pass_name}  portion {done}/{self.total}  {pct}%  "
+            f"elapsed {_fmt_duration(elapsed)}  ETA {eta_str}  rows={rows}"
+        )
+        log(line)
+        return line
+
+
+# ---------------------------------------------------------------------------
 # DataPreparer
 # ---------------------------------------------------------------------------
 
@@ -236,6 +326,245 @@ class DataPreparer:
 
         # Step 10 — save DataAttributes
         data_attributes.save(self.attributes_output_path)
+
+    # ------------------------------------------------------------------
+    # Chunked entry point (resumable, progress-logged)
+    # ------------------------------------------------------------------
+
+    def prepare_chunked(
+        self, raw_data_path: str, data_start_ms: int, data_end_ms: int
+    ) -> None:
+        """Resumable, progress-logged preparation.
+
+        Below CHUNK_MIN_ROWS the whole dataset runs through the unchanged
+        single-pass ``prepare()``. Otherwise the window is split into
+        CHUNK_SPAN_DAYS time portions, each computed and persisted to its own
+        part file (skipped on rerun if present), then merged. The chunked output
+        is identical to single-pass within float tolerance.
+
+        Args:
+            raw_data_path: Path to graber_data.pkl (shared by all portions).
+            data_start_ms: DATA_START as Unix ms (inclusive).
+            data_end_ms:   DATA_END as Unix ms (exclusive).
+        """
+        from logs import log
+
+        span_days, min_rows = chunk_config()
+        rows = _window_row_count(data_start_ms, data_end_ms)
+        if rows < min_rows:
+            log(
+                f"[prepare] single-chunk path ({rows} rows < CHUNK_MIN_ROWS={min_rows})"
+            )
+            self.prepare(raw_data_path, data_start_ms)
+            return
+
+        boundaries = _chunk_boundaries(data_start_ms, data_end_ms, span_days)
+        n = len(boundaries)
+        log(
+            f"[prepare] chunked path: {rows} rows → {n} portions "
+            f"of {span_days}d (CHUNK_MIN_ROWS={min_rows})"
+        )
+
+        # Invalidate stale parts if the chunk config changed between runs.
+        self._guard_chunk_manifest(data_start_ms, data_end_ms, span_days)
+
+        # Shared raw frame — loaded once, read-only across every portion.
+        raw_df = self._load_raw_data(raw_data_path)
+
+        # Pass 1 — base indicators per portion.
+        prog = _ChunkProgress("[prepare] pass1 base-ind", n)
+        base_paths: list[str] = []
+        done_rows = 0
+        for i, window in enumerate(boundaries):
+            base_paths.append(self._pass1_base_portion(raw_df, i, window))
+            done_rows += _window_row_count(*window)
+            prog.tick(i + 1, done_rows)
+
+        # Global base-attribute stats (consistent thresholds for every portion).
+        log("[prepare] computing global base-attribute stats")
+        self._global_base_stats(base_paths)
+
+        # Pass 2 — class indicators per portion.
+        prog = _ChunkProgress("[prepare] pass2 class-ind", n)
+        final_paths: list[str] = []
+        done_rows = 0
+        for i, window in enumerate(boundaries):
+            prev = base_paths[i - 1] if i > 0 else None
+            final_paths.append(self._pass2_class_portion(i, window, prev))
+            done_rows += _window_row_count(*window)
+            prog.tick(i + 1, done_rows)
+
+        # Merge — labels + nn merge + nn-norm over the full frame, then save.
+        log("[prepare] merging parts → final output")
+        self._merge_parts(final_paths, base_paths)
+        log("[prepare] done")
+
+    # ------------------------------------------------------------------
+    # Chunked-preparation part files + manifest
+    # ------------------------------------------------------------------
+
+    def _final_part_path(self, index: int) -> str:
+        """output_path with .pkl → .part_NN.pkl (zero-padded 2-digit index)."""
+        base, ext = os.path.splitext(self.output_path)
+        return f"{base}.part_{index:02d}{ext}"
+
+    def _base_part_path(self, index: int) -> str:
+        """df_base.part_NN.pkl beside output_path."""
+        return os.path.join(
+            os.path.dirname(self.output_path), f"df_base.part_{index:02d}.pkl"
+        )
+
+    def _chunk_manifest_path(self) -> str:
+        """chunk_manifest.json beside output_path."""
+        return os.path.join(os.path.dirname(self.output_path), "chunk_manifest.json")
+
+    @staticmethod
+    def _chunk_config_hash(start_ms: int, end_ms: int, span_days: int) -> str:
+        """Stable hash of the chunk config that determines portion identity."""
+        payload = f"{start_ms}|{end_ms}|{span_days}".encode()
+        return hashlib.sha256(payload).hexdigest()
+
+    def _purge_parts(self) -> None:
+        """Delete every base + final part file beside output_path."""
+        import glob
+
+        out_dir = os.path.dirname(self.output_path) or "."
+        out_name = os.path.basename(os.path.splitext(self.output_path)[0])
+        patterns = [
+            os.path.join(out_dir, "df_base.part_*.pkl"),
+            os.path.join(out_dir, f"{out_name}.part_*.pkl"),
+        ]
+        for pat in patterns:
+            for path in glob.glob(pat):
+                os.remove(path)
+
+    def _guard_chunk_manifest(
+        self, start_ms: int, end_ms: int, span_days: int
+    ) -> None:
+        """Purge stale parts when the chunk config changed, then record the hash."""
+        cur = self._chunk_config_hash(start_ms, end_ms, span_days)
+        manifest_path = self._chunk_manifest_path()
+        if os.path.exists(manifest_path):
+            try:
+                stored = json.load(open(manifest_path)).get("config_hash")
+            except (ValueError, OSError):
+                stored = None
+            if stored != cur:
+                from logs import log
+
+                log("[prepare] chunk config changed — purging stale parts")
+                self._purge_parts()
+        os.makedirs(os.path.dirname(manifest_path) or ".", exist_ok=True)
+        tmp = manifest_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"config_hash": cur}, f)
+        os.rename(tmp, manifest_path)
+
+    # ------------------------------------------------------------------
+    # Chunked-preparation portion workers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _atomic_to_pickle(df: pd.DataFrame, path: str) -> None:
+        """Pickle *df* to *path* via temp-file + os.rename (crash-safe)."""
+        tmp = path + ".tmp"
+        df.to_pickle(tmp)
+        os.rename(tmp, path)
+
+    def _pass1_base_portion(
+        self, raw_df: pd.DataFrame, index: int, window: tuple[int, int]
+    ) -> str:
+        """Compute base indicators for owned window [w0, w1); save owned rows.
+
+        Lookback (warmup) rows before w0 are taken from *raw_df* (the shared
+        grabbed data) so per-row slices are full; only owned rows are saved.
+        Skips (returns path) when the base part already exists.
+        """
+        part_path = self._base_part_path(index)
+        if os.path.exists(part_path):
+            return part_path
+
+        w0, w1 = window
+        w0_ts = pd.Timestamp(w0, unit="ms", tz="UTC")
+        w1_ts = pd.Timestamp(w1, unit="ms", tz="UTC")
+        lb_ts = pd.Timestamp(warmup_start_ms(w0), unit="ms", tz="UTC")
+
+        raw_slice = raw_df.loc[(raw_df.index >= lb_ts) & (raw_df.index < w1_ts)]
+        wide_df = self._build_base_dataframe(raw_slice)
+        self._compute_base_indicators(wide_df, w0_ts)
+
+        owned = wide_df.loc[(wide_df.index >= w0_ts) & (wide_df.index < w1_ts)]
+        self._atomic_to_pickle(owned, part_path)
+        return part_path
+
+    def _global_base_stats(self, base_part_paths: list[str]) -> None:
+        """Concatenate base parts and compute rsi_classification.json + diff_stats.pkl.
+
+        Idempotent: DataAttributes.compute no-ops when the stats files exist.
+        """
+        from indicators import DataAttributes  # lazy import
+
+        frames = [pd.read_pickle(p) for p in base_part_paths]
+        full = pd.concat(frames)
+        DataAttributes().compute(full)
+
+    def _pass2_class_portion(
+        self, index: int, window: tuple[int, int], prev_base_path: "str | None"
+    ) -> str:
+        """Compute class indicators for owned window [w0, w1); save the final part.
+
+        Prepends a lookback margin from *prev_base_path* (when set) so per-row
+        slices at the portion start are full (targets use shift(1)); the margin
+        rows are dropped before save. Skips (returns path) when the final part
+        already exists.
+        """
+        final_path = self._final_part_path(index)
+        if os.path.exists(final_path):
+            return final_path
+
+        from constants import INDICATOR_WINDOW_ROWS  # lazy import
+
+        base = pd.read_pickle(self._base_part_path(index))
+        if prev_base_path is not None:
+            margin = INDICATOR_WINDOW_ROWS * max(CANDLES)
+            lead = pd.read_pickle(prev_base_path).iloc[-margin:]
+            frame = pd.concat([lead, base])
+        else:
+            frame = base.copy()
+
+        w0_ts = pd.Timestamp(window[0], unit="ms", tz="UTC")
+        self._compute_class_indicators(frame, w0_ts)
+
+        owned = frame.loc[frame.index >= w0_ts]
+        self._atomic_to_pickle(owned, final_path)
+        return final_path
+
+    def _merge_parts(
+        self, final_part_paths: list[str], base_part_paths: list[str]
+    ) -> None:
+        """Concat final parts → full frame; labels + nn-norm; save; cleanup.
+
+        Labels and NN-normalisation run on the whole concatenated frame so chunk
+        boundaries never affect them. Mirrors prepare() steps 7–10 exactly (the
+        df_with_nn.pkl left-join lives in consumers, not prepare). Part files are
+        deleted only after both outputs are saved (so a failed save resumes from
+        merge, not Pass 1); cleanup is skipped when CHUNK_KEEP_PARTS is set.
+        """
+        frames = [pd.read_pickle(p) for p in final_part_paths]
+        full = pd.concat(frames)
+
+        # Steps mirror prepare() 7–10 on the concatenated frame.
+        self._compute_profit_labels(full)
+        data_attributes = self._compute_nn_attributes(full)
+
+        self._atomic_to_pickle(full, self.output_path)
+        data_attributes.save(self.attributes_output_path)
+
+        if os.environ.get("CHUNK_KEEP_PARTS"):
+            return
+        for path in list(final_part_paths) + list(base_part_paths):
+            if os.path.exists(path):
+                os.remove(path)
 
     # ------------------------------------------------------------------
     # Pipeline steps

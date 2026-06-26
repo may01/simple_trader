@@ -155,8 +155,12 @@ class Trainer:
         )
         # Indicators are computed from DATA_START on; the warmup head grabbed
         # by _run_grab_data is lookback input only and is trimmed before save.
-        preparer.prepare(
-            graber_data_path(), data_start_ms=int(os.environ["DATA_START"])
+        # prepare_chunked splits big windows into resumable, progress-logged
+        # time portions; below CHUNK_MIN_ROWS it is the unchanged single pass.
+        preparer.prepare_chunked(
+            graber_data_path(),
+            data_start_ms=int(os.environ["DATA_START"]),
+            data_end_ms=int(os.environ["DATA_END"]),
         )
 
         self.metadata["prepare_data"] = {"status": "complete"}
