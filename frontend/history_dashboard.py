@@ -71,6 +71,7 @@ class HistoryDashboard:
         subplots: list | None = None,
         overlays: list | None = None,
         show_actions: bool = False,
+        show_labels: bool = False,
     ) -> list:
         """Return one dcc.Graph per selected TF, ascending TF order. Never raises.
 
@@ -87,6 +88,7 @@ class HistoryDashboard:
                 fig = self.viewer.build_window_figure(
                     pd.Timestamp(start_date), int(days), tf=tf, subplots=subplots,
                     overlays=overlays, show_actions=show_actions,
+                    show_labels=show_labels,
                 )
                 graphs.append(
                     dcc.Graph(id={"type": "tf-chart", "tf": tf}, figure=fig)
@@ -170,6 +172,12 @@ class HistoryDashboard:
                             value=[],  # off by default
                             inline=True,
                         ),
+                        dcc.Checklist(
+                            id="labels",
+                            options=[{"label": "labels", "value": "labels"}],
+                            value=[],  # off by default
+                            inline=True,
+                        ),
                     ]
                 ),
                 html.Div(id="chart-groups"),
@@ -185,14 +193,16 @@ class HistoryDashboard:
                 Input("subplots", "value"),
                 Input("overlays", "value"),
                 Input("actions", "value"),
+                Input("labels", "value"),
             ],
         )
         def update(start_date, days, tfs_selected, subplots_selected,
-                   overlays_selected, actions_selected):  # type: ignore[return]
+                   overlays_selected, actions_selected, labels_selected):  # type: ignore[return]
             return self._render_groups(
                 start_date, days, tfs_selected, subplots_selected,
                 overlays=overlays_selected,
                 show_actions=bool(actions_selected and "actions" in actions_selected),
+                show_labels=bool(labels_selected and "labels" in labels_selected),
             )
 
         return app

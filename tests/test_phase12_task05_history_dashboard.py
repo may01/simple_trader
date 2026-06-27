@@ -223,7 +223,7 @@ class TestRenderGroups:
         assert graphs[0].figure is sentinel
         d.viewer.build_window_figure.assert_called_once_with(
             pd.Timestamp("2024-01-01"), 2, tf=15, subplots=None,
-            overlays=None, show_actions=False
+            overlays=None, show_actions=False, show_labels=False,
         )
 
     def test_none_start_date_returns_no_groups(self, full_data):

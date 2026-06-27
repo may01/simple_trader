@@ -442,6 +442,7 @@ class DataViewer:
         tf: int | None = None,
         subplots: list[str] | None = None,
         show_actions: bool = False,
+        show_labels: bool = False,
         overlays: list[str] | None = None,
     ) -> go.Figure:
         """Build a figure for a date window of the wide DataFrame.
@@ -502,7 +503,8 @@ class DataViewer:
         )
         self._draw_price_overlays(fig, df_slice, tf, overlays)
         self._draw_rsi_class_markers(fig, window, tf)
-        self._draw_label_markers(fig, window, tf)
+        if show_labels:
+            self._draw_label_markers(fig, window, tf)
         if show_actions:
             self._draw_action_markers(fig, window)
         self._draw_zero_lines(fig)
