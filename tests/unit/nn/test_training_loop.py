@@ -543,3 +543,32 @@ def test_worse_last_trial_does_not_overwrite_best_pt(real_setup, data_attributes
         )
         best_metric = bundle["metrics"].get("holdout_score")
     assert best_metric == pytest.approx(0.90)
+
+
+class TestScorePredictionsDirectionBinary:
+    def test_mixed_direction_and_binary_offset_and_accuracy(self):
+        spec = NNModelSpec(
+            name="m",
+            timeframes=[15],
+            indicators=["15_close"],
+            layers=[LayerSpec(kind="dense", units=8)],
+            targets=[
+                TargetSpec(name="dir15", kind="direction",
+                           label_tf=15, label_m=1.0, label_x=0.3),
+                TargetSpec(name="long15", kind="direction_binary", side="long",
+                           label_tf=15, label_m=1.0, label_x=0.3),
+            ],
+        )
+        # columns: [dir up, neutral, down | long prob_long, prob_other]
+        y = np.array([
+            [1, 0, 0, 1, 0],
+            [0, 0, 1, 0, 1],
+        ], dtype=float)
+        preds = np.array([
+            [0.7, 0.2, 0.1, 0.9, 0.1],
+            [0.1, 0.2, 0.7, 0.2, 0.8],
+        ], dtype=float)
+        overall, per_target = TrainingLoop._score_predictions(spec, preds, y)
+        assert per_target["dir15"] == 1.0
+        assert per_target["long15"] == 1.0   # FAILS before the fix (~0.976, MSE-scored on 1 col)
+        assert overall == 1.0

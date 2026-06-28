@@ -534,8 +534,8 @@ class TrainingLoop:
 
         for target in spec.targets:
             for _hk in target.horizons:
-                if target.kind == "direction":
-                    width = 3
+                if target.kind in ("direction", "direction_binary"):
+                    width = 3 if target.kind == "direction" else 2
                     p = preds[:, offset : offset + width]
                     t = y[:, offset : offset + width]
                     acc = float((p.argmax(axis=1) == t.argmax(axis=1)).mean())
