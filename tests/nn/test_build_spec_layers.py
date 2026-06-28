@@ -95,3 +95,18 @@ def test_sets_lr_dropout_seed_and_no_depth_param():
     assert "depth" not in trial.params
     # the only tuned knobs are width/lr/dropout
     assert set(trial.params) == {"units", "lr", "dropout"}
+
+
+def test_dense_base_still_works():
+    # NNModelSpec.default() already has one dense layer (units=64).
+    base = NNModelSpec.default()
+    assert [layer.kind for layer in base.layers] == ["dense"]
+
+    study, trial = _ask()
+    spec = _loop().build_spec(base, proposal=None, trial=trial, seed=0)
+    study.tell(trial, 0.0)
+
+    assert len(spec.layers) == 1
+    assert spec.layers[0].kind == "dense"
+    assert spec.layers[0].units == trial.params["units"]
+    assert spec.seed == 0
