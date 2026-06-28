@@ -90,10 +90,13 @@ class TargetSpec:
     """
 
     name: str
-    kind: str                                   # "direction"|"label"|"regression"
+    kind: str                                   # "direction"|"direction_binary"|"label"|"regression"
     horizons: list[int] = field(default_factory=lambda: [1])
 
-    # direction / label
+    # direction_binary only:
+    side: str | None = None                     # "long" | "short"
+
+    # direction / direction_binary / label
     label_tf: int | None = None
     label_m: float | None = None
     label_x: float | None = None
@@ -101,6 +104,13 @@ class TargetSpec:
 
     # regression
     transform: str = "logret"
+
+    def __post_init__(self) -> None:
+        if self.kind == "direction_binary" and self.side not in ("long", "short"):
+            raise ValueError(
+                f"direction_binary target {self.name!r} needs "
+                f"side='long'|'short', got {self.side!r}"
+            )
 
     def out_columns(self) -> list[str]:
         """Return timeframe-agnostic output column names for this target.
@@ -129,6 +139,11 @@ class TargetSpec:
                     f"{base}_prob_up",
                     f"{base}_prob_neutral",
                     f"{base}_prob_down",
+                ]
+            elif self.kind == "direction_binary":
+                cols += [
+                    f"{base}_prob_{self.side}",
+                    f"{base}_prob_other",
                 ]
             elif self.kind == "label":
                 cols.append(f"{base}_prob")
