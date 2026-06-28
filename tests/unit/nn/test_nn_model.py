@@ -16,6 +16,7 @@ import tempfile
 
 import numpy as np
 import pytest
+import torch
 
 from nn.nn_dataset import NNDataset
 from nn.nn_model import NNModel
@@ -89,6 +90,47 @@ def _multi_target_spec(**overrides) -> NNModelSpec:
     return NNModelSpec(**kwargs)
 
 
+def _binary_spec(**overrides) -> NNModelSpec:
+    """Single-head direction_binary (long) spec: head width 2 (softmax)."""
+    kwargs = dict(
+        name="tiny_binary",
+        timeframes=[15],
+        indicators=["rsi", "atr_ma"],
+        history_points=1,
+        layers=[LayerSpec(kind="dense", units=8)],
+        targets=[
+            TargetSpec(
+                name="long15", kind="direction_binary", side="long",
+                label_tf=15, label_m=1.0, label_x=0.3,
+            )
+        ],
+        epochs=2,
+        validation_split=0.2,
+        val_strategy="time_holdout",
+        device="cpu",
+        seed=0,
+    )
+    kwargs.update(overrides)
+    return NNModelSpec(**kwargs)
+
+
+def test_direction_binary_spec_to_softmax_head():
+    """Integration: a direction_binary TargetSpec -> one width-2 softmax head."""
+    spec = _binary_spec()
+    model = NNModel(spec)
+    model.build()
+
+    assert model.output_size == 2
+    assert [m["width"] for m in model.model.head_meta] == [2]
+    assert model.model.head_meta[0]["kind"] == "direction_binary"
+
+    x = torch.zeros(3, spec.history_points, model._n_features)
+    logits = model.model.head_logits(x)[0]
+    probs = NNModel._apply_head_activation(logits, model.model.head_meta[0])
+    assert probs.shape == (3, 2)
+    assert torch.allclose(probs.sum(dim=1), torch.ones(3), atol=1e-5)
+
+
 def _make_y(spec: NNModelSpec, n: int, rng: np.random.RandomState) -> np.ndarray:
     """Build a (n, output_size) y matrix matching the spec's heads.
 
@@ -100,6 +142,11 @@ def _make_y(spec: NNModelSpec, n: int, rng: np.random.RandomState) -> np.ndarray
             if t.kind == "direction":
                 codes = rng.randint(0, 3, size=n)
                 oh = np.zeros((n, 3), dtype=np.float32)
+                oh[np.arange(n), codes] = 1.0
+                cols.append(oh)
+            elif t.kind == "direction_binary":
+                codes = rng.randint(0, 2, size=n)
+                oh = np.zeros((n, 2), dtype=np.float32)
                 oh[np.arange(n), codes] = 1.0
                 cols.append(oh)
             elif t.kind == "label":
@@ -736,6 +783,23 @@ def test_training_consumes_lazy_dataset_not_tensors(tmp_path, monkeypatch):
     assert model.is_trained
     assert td_calls["n"] >= 2  # train view + val view
     assert tn_calls["n"] == 0  # full-X materialisation gone from the train path
+
+
+def test_head_width_direction_binary():
+    from nn.nn_model import _HEAD_WIDTH
+    assert _HEAD_WIDTH["direction_binary"] == 2
+
+
+def test_compute_output_size_direction_binary():
+    spec = _binary_spec()
+    assert NNModel._compute_output_size(spec) == 2
+
+
+def test_apply_activation_direction_binary_is_softmax():
+    logits = torch.tensor([[2.0, 0.0], [0.0, 0.0]])
+    out = NNModel._apply_head_activation(logits, {"kind": "direction_binary"})
+    assert torch.allclose(out.sum(dim=1), torch.ones(2), atol=1e-6)
+    assert out[0, 0] > out[0, 1]
 
 
 def test_splits_json_absent_lazy_fallback(tmp_path):
