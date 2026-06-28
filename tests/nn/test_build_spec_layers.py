@@ -55,3 +55,24 @@ def test_lstm_base_preserves_kind_and_params():
     assert layer.units == trial.params["units"]
     # architecture untouched in the base object (deepcopy, not mutation)
     assert base.layers[0].units == 32
+
+
+def test_mixed_base_preserves_both_kinds_and_count():
+    base = dataclasses.replace(
+        NNModelSpec.default(),
+        layers=[
+            LayerSpec(kind="conv1d", units=24, params={"kernel_size": 3}),
+            LayerSpec(kind="dense", units=48),
+        ],
+    )
+    study, trial = _ask()
+    spec = _loop().build_spec(base, proposal=None, trial=trial, seed=1)
+    study.tell(trial, 0.0)
+
+    assert len(spec.layers) == 2  # not collapsed to dense-only
+    assert [layer.kind for layer in spec.layers] == ["conv1d", "dense"]
+    assert spec.layers[0].params == {"kernel_size": 3}
+    # both layers get the single suggested width
+    suggested = trial.params["units"]
+    assert spec.layers[0].units == suggested
+    assert spec.layers[1].units == suggested
