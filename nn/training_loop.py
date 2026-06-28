@@ -5,8 +5,8 @@ round is ``propose → Optuna study → train+evaluate trials → record → rev
 
   - **NNStrategist** (LLM, optional) decides *which* indicators / timeframes /
     targets to explore and *when to stop* — the search *scope*.
-  - **Optuna** samples + prunes the numeric knobs (lr / depth / units / dropout)
-    *within* that scope.
+  - **Optuna** samples + prunes the numeric knobs (lr / units / dropout) *within*
+    that scope (architecture depth is reasoned, not searched — ADR-0001).
   - **NNOrchestrator** trains each concrete spec (one NNModel per group).
   - **ExperimentTracker** records every trial and gates promotion on a
     time-ordered holdout.
@@ -102,7 +102,7 @@ class TrainingLoop:
     search_config:
         Read (not invented): ``max_rounds``, ``trials_per_round``,
         ``sampler`` ("tpe"), ``pruner`` ("median"), ``search_space`` bounds +
-        clamps (lr/depth/units/dropout), ``max_wall_clock_s``, ``max_compute``,
+        clamps (lr/units/dropout), ``max_wall_clock_s``, ``max_compute``,
         ``seed``.
     """
 
@@ -162,7 +162,7 @@ class TrainingLoop:
                 proposal = self._propose(round_idx)
 
                 # 2. Per-round Optuna study (incumbent lives in the tracker).
-                sampler = optuna.samplers.TPESampler(seed=seed)
+                sampler = self._make_sampler(seed)
                 pruner = optuna.pruners.MedianPruner()
                 study = optuna.create_study(
                     direction=direction, sampler=sampler, pruner=pruner
@@ -357,8 +357,9 @@ class TrainingLoop:
         """Concrete spec for one trial.
 
         The proposal sets the *structural* scope (indicators / timeframes /
-        targets); Optuna suggests the *numeric* knobs (lr, depth, units,
-        dropout) within the CLAMPED bounds; ``spec.seed`` is set for
+        targets); Optuna suggests the *numeric* knobs (lr, units, dropout)
+        within the CLAMPED bounds (depth is a declared architectural choice, not
+        searched — ADR-0001); ``spec.seed`` is set for
         reproducibility. In degrade mode (proposal is None) the base_spec scope
         is kept unchanged and only the ``search_config`` bounds apply.
         """
@@ -636,6 +637,22 @@ class TrainingLoop:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _make_sampler(self, seed: int) -> "optuna.samplers.TPESampler":
+        """Build the Optuna TPESampler with n_startup_trials from search_config.
+
+        Reads ``search_config["n_startup_trials"]`` (default 10 — matches the
+        optuna library default so an absent key is a no-op). Phase-17 locks this
+        to 4 (half of ``trials_per_round: 8``) so TPE switches from random
+        sampling to its surrogate model within a single short round.
+
+        Extracted from ``run()`` so the config-driven kwarg is directly testable
+        without invoking the heavy training path.
+        """
+        import optuna  # lazy — keeps module importable in the base image
+
+        n_startup = int(self.search_config.get("n_startup_trials", 10))
+        return optuna.samplers.TPESampler(seed=seed, n_startup_trials=n_startup)
 
     @staticmethod
     def _is_cuda_oom(exc: BaseException) -> bool:
