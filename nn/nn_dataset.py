@@ -284,7 +284,7 @@ def _binary_onehot(col: np.ndarray) -> np.ndarray:
     valid = ~np.isnan(col)
     out[valid] = 0.0
     pos = np.flatnonzero(valid & (col == 1.0))
-    oth = np.flatnonzero(valid & (col != 1.0))
+    oth = np.flatnonzero(valid & (col == 0.0))
     out[pos, 0] = 1.0
     out[oth, 1] = 1.0
     return out

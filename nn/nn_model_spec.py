@@ -79,8 +79,10 @@ class TargetSpec:
     """One output head produced by the model.
 
     name      — used in output column names: nn_res_{name}_*
-    kind      — "direction" | "label" | "regression"
+    kind      — "direction" | "direction_binary" | "label" | "regression"
     horizons  — list of look-ahead candle counts; len>1 → multi-horizon heads
+    side      — for direction_binary only: "long" | "short" (which profit-label
+                column is the positive class)
 
     direction / label fields (profit-labels pipeline, Phase 03 Task 07):
         label_tf, label_m, label_x, strict
