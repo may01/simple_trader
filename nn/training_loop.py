@@ -375,20 +375,18 @@ class TrainingLoop:
 
         # Resolve the effective numeric bounds (proposal/clamped or config).
         lr_lo, lr_hi = self._bounds(space, "lr", (1e-5, 1e-2))
-        depth_lo, depth_hi = self._bounds(space, "depth", (1, 3))
         units_lo, units_hi = self._bounds(space, "units", (16, 128))
         drop_lo, drop_hi = self._bounds(space, "dropout", (0.0, 0.5))
 
         # Optuna suggestions within the clamped bounds.
         lr = trial.suggest_float("lr", lr_lo, lr_hi, log=True)
-        depth = trial.suggest_int("depth", int(round(depth_lo)), int(round(depth_hi)))
         units = trial.suggest_int("units", int(round(units_lo)), int(round(units_hi)))
         dropout = trial.suggest_float("dropout", drop_lo, drop_hi)
 
         spec.learning_rate = lr
         spec.dropout = dropout
-        # depth = number of hidden dense layers, each `units` wide.
-        spec.layers = [LayerSpec(kind="dense", units=int(units)) for _ in range(int(depth))]
+        # ADR-0001: keep declared architecture (kind/params/count); tune width only.
+        spec.layers = [dataclasses.replace(layer, units=int(units)) for layer in spec.layers]
         spec.seed = int(seed) if seed is not None else 0
 
         return spec
