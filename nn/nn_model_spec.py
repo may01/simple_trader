@@ -272,6 +272,34 @@ class NNModelSpec:
         )
 
     # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> dict:
+        """Return a plain nested dict representation of this spec.
+
+        Calls dataclasses.asdict(self), so all nested dataclasses (LayerSpec,
+        GroupingSpec, TargetSpec) become plain dicts.  device and seed are
+        included (unlike spec_hash, which excludes them).
+        """
+        return asdict(self)
+
+    def to_yaml(self, path: str) -> None:
+        """Write this spec to a YAML file at *path*.
+
+        Creates parent directories if they do not exist.  Dumps with
+        sort_keys=False to preserve dataclass field order for readability;
+        from_yaml reads by key so order does not affect the round-trip.
+        """
+        import os
+
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w") as f:
+            yaml.safe_dump(self.to_dict(), f, sort_keys=False)
+
+    # ------------------------------------------------------------------
     # Default factory
     # ------------------------------------------------------------------
 
