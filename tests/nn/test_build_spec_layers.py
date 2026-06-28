@@ -76,3 +76,22 @@ def test_mixed_base_preserves_both_kinds_and_count():
     suggested = trial.params["units"]
     assert spec.layers[0].units == suggested
     assert spec.layers[1].units == suggested
+
+
+def test_sets_lr_dropout_seed_and_no_depth_param():
+    base = dataclasses.replace(
+        NNModelSpec.default(),
+        layers=[LayerSpec(kind="gru", units=16, params={"num_layers": 1})],
+    )
+    study, trial = _ask()
+    spec = _loop().build_spec(base, proposal=None, trial=trial, seed=42)
+    study.tell(trial, 0.0)
+
+    # numerics come from the trial / seed
+    assert spec.learning_rate == trial.params["lr"]
+    assert spec.dropout == trial.params["dropout"]
+    assert spec.seed == 42
+    # ADR-0001: depth is NOT a tuned parameter
+    assert "depth" not in trial.params
+    # the only tuned knobs are width/lr/dropout
+    assert set(trial.params) == {"units", "lr", "dropout"}
