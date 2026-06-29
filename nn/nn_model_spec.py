@@ -83,7 +83,7 @@ class TargetSpec:
     horizons  — list of look-ahead candle counts; len>1 → multi-horizon heads
 
     direction / label fields (profit-labels pipeline, Phase 03 Task 07):
-        label_tf, label_m, label_x, strict
+        label_tf, label_m, label_x, strict; label_l, label_y for strict
 
     regression fields:
         transform — "logret"
@@ -98,6 +98,8 @@ class TargetSpec:
     label_m: float | None = None
     label_x: float | None = None
     strict: bool = False
+    label_l: int | None = None      # strict-only: clean-entry lookback window
+    label_y: float | None = None    # strict-only: clean-entry threshold (ATR mult)
 
     # regression
     transform: str = "logret"
