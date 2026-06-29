@@ -43,6 +43,22 @@ targets:
     label_m: 1.0
     label_x: 0.3
     strict: false
+  - name: long15
+    kind: direction_binary
+    side: long
+    horizons: [1]
+    label_tf: 15
+    label_m: 1.0
+    label_x: 0.3
+    strict: false
+  - name: short15
+    kind: direction_binary
+    side: short
+    horizons: [1]
+    label_tf: 15
+    label_m: 1.0
+    label_x: 0.3
+    strict: false
 
 loss_fn: auto
 optimizer: adam

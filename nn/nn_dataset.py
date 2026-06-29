@@ -181,6 +181,32 @@ def _target_block(
             else {"per_horizon": srcs, "strict": target.strict}
         )
 
+    elif target.kind == "direction_binary":
+        if target.side not in ("long", "short"):
+            raise ValueError(
+                f"direction_binary target {target.name!r} needs "
+                f"side='long'|'short', got {target.side!r}"
+            )
+        srcs = []
+        for h in target.horizons:
+            col_name = (
+                _profit_long_col(target, h)
+                if target.side == "long"
+                else _profit_short_col(target, h)
+            )
+            srcs.append(col_name)
+            if col_name not in df.columns:
+                raise ValueError(f"missing profit-label column {col_name!r}")
+            c = df[col_name].to_numpy(dtype=np.float64)
+            cols.append(_binary_onehot(c))
+        entry["side"] = target.side
+        entry["encoding"] = {target.side: 0, "other": 1}
+        entry["source"] = (
+            {"column": srcs[0], "strict": target.strict}
+            if len(srcs) == 1
+            else {"per_horizon": srcs, "strict": target.strict}
+        )
+
     elif target.kind == "label":
         srcs = []
         for h in target.horizons:
@@ -249,6 +275,21 @@ def _onehot3(cls: np.ndarray) -> np.ndarray:
     return out
 
 
+def _binary_onehot(col: np.ndarray) -> np.ndarray:
+    """(rows,) profit label {0,1}/NaN -> (rows, 2) one-hot [positive, other].
+
+    positive (col == 1) -> [1, 0]; other (col == 0) -> [0, 1]; NaN row -> all NaN.
+    """
+    out = np.full((col.shape[0], 2), np.nan, dtype=np.float64)
+    valid = ~np.isnan(col)
+    out[valid] = 0.0
+    pos = np.flatnonzero(valid & (col == 1.0))
+    oth = np.flatnonzero(valid & (col == 0.0))
+    out[pos, 0] = 1.0
+    out[oth, 1] = 1.0
+    return out
+
+
 def _forward_logret(close: np.ndarray, horizon: int) -> np.ndarray:
     """Forward logret log(close[t+h]/close[t]); rows past end → NaN."""
     out = np.full(close.shape, np.nan, dtype=np.float64)
@@ -295,6 +336,7 @@ def _dataset_hash(
             {
                 "name": t.name,
                 "kind": t.kind,
+                "side": t.side,
                 "horizons": list(t.horizons),
                 "label_tf": t.label_tf,
                 "label_m": t.label_m,

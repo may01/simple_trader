@@ -722,6 +722,83 @@ class TestInferenceMatrixTFOrderParity:
 # ---------------------------------------------------------------------------
 
 
+def test_binary_onehot_positive_other_nan():
+    from nn.nn_dataset import _binary_onehot
+    col = np.array([1.0, 0.0, np.nan, 1.0])
+    out = _binary_onehot(col)
+    assert out.shape == (4, 2)
+    np.testing.assert_array_equal(out[0], [1.0, 0.0])   # positive
+    np.testing.assert_array_equal(out[1], [0.0, 1.0])   # other
+    assert np.isnan(out[2]).all()                        # NaN row dropped at build
+    np.testing.assert_array_equal(out[3], [1.0, 0.0])
+
+
+def test_target_block_direction_binary_long():
+    from nn.nn_dataset import _target_block, _profit_long_col
+    t = TargetSpec(
+        name="long15", kind="direction_binary", side="long",
+        horizons=[1], label_tf=15, label_m=1.0, label_x=0.3,
+    )
+    col = _profit_long_col(t, 1)
+    df = pd.DataFrame({col: [1.0, 0.0, 1.0, np.nan]})
+    block, entry = _target_block(df, t)
+    assert block.shape == (4, 2)
+    assert entry["out_columns"] == [
+        "nn_res_long15_prob_long", "nn_res_long15_prob_other",
+    ]
+    assert entry["side"] == "long"
+    assert entry["encoding"] == {"long": 0, "other": 1}
+    assert entry["source"] == {"column": col, "strict": False}
+    np.testing.assert_array_equal(block[0], [1.0, 0.0])
+    np.testing.assert_array_equal(block[1], [0.0, 1.0])
+
+
+def test_target_block_direction_binary_short_reads_short_col():
+    from nn.nn_dataset import _target_block, _profit_short_col
+    t = TargetSpec(
+        name="short15", kind="direction_binary", side="short",
+        horizons=[1], label_tf=15, label_m=1.0, label_x=0.3,
+    )
+    col = _profit_short_col(t, 1)
+    df = pd.DataFrame({col: [1.0, 0.0]})
+    block, entry = _target_block(df, t)
+    assert entry["out_columns"] == [
+        "nn_res_short15_prob_short", "nn_res_short15_prob_other",
+    ]
+    np.testing.assert_array_equal(block[0], [1.0, 0.0])
+    np.testing.assert_array_equal(block[1], [0.0, 1.0])
+
+
+def test_target_block_direction_binary_missing_column_raises():
+    from nn.nn_dataset import _target_block
+    t = TargetSpec(
+        name="long15", kind="direction_binary", side="long",
+        horizons=[1], label_tf=15, label_m=1.0, label_x=0.3,
+    )
+    with pytest.raises(ValueError, match="missing profit-label column"):
+        _target_block(pd.DataFrame({"other": [1.0]}), t)
+
+
+def test_target_block_direction_binary_multi_horizon():
+    from nn.nn_dataset import _target_block, _profit_long_col
+    t = TargetSpec(
+        name="long15", kind="direction_binary", side="long",
+        horizons=[1, 2], label_tf=15, label_m=1.0, label_x=0.3,
+    )
+    c1 = _profit_long_col(t, 1)
+    c2 = _profit_long_col(t, 2)
+    df = pd.DataFrame({c1: [1.0, 0.0, 1.0], c2: [0.0, 1.0, 0.0]})
+    block, entry = _target_block(df, t)
+    assert block.shape == (3, 4)
+    assert entry["out_columns"] == [
+        "nn_res_long15_h1_prob_long", "nn_res_long15_h1_prob_other",
+        "nn_res_long15_h2_prob_long", "nn_res_long15_h2_prob_other",
+    ]
+    assert entry["source"] == {"per_horizon": [c1, c2], "strict": False}
+    # horizon 1 row 0: long profitable -> [1,0]; horizon 2 row 0: not -> [0,1]
+    np.testing.assert_array_equal(block[0], [1.0, 0.0, 0.0, 1.0])
+
+
 class TestTzAwareDatetimeIndex:
     """Regression test for NNDataset._materialise tz-aware index handling.
 

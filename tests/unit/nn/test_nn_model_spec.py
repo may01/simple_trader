@@ -380,3 +380,56 @@ class TestTargetSpecOutColumns:
     def test_out_columns_is_list(self):
         t = TargetSpec(name="dir15", kind="direction", horizons=[1])
         assert isinstance(t.out_columns(), list)
+
+
+class TestDirectionBinaryTarget:
+    def test_out_columns_long_single_horizon(self):
+        t = TargetSpec(
+            name="long15", kind="direction_binary", side="long",
+            horizons=[1], label_tf=15, label_m=1.0, label_x=0.3,
+        )
+        assert t.out_columns() == [
+            "nn_res_long15_prob_long",
+            "nn_res_long15_prob_other",
+        ]
+
+    def test_out_columns_short_multi_horizon(self):
+        t = TargetSpec(
+            name="s", kind="direction_binary", side="short",
+            horizons=[1, 2], label_tf=15, label_m=1.0, label_x=0.3,
+        )
+        assert t.out_columns() == [
+            "nn_res_s_h1_prob_short", "nn_res_s_h1_prob_other",
+            "nn_res_s_h2_prob_short", "nn_res_s_h2_prob_other",
+        ]
+
+    def test_missing_side_raises(self):
+        with pytest.raises(ValueError, match="side"):
+            TargetSpec(
+                name="x", kind="direction_binary", side=None,
+                label_tf=15, label_m=1.0, label_x=0.3,
+            )
+
+    def test_bad_side_raises(self):
+        with pytest.raises(ValueError, match="side"):
+            TargetSpec(
+                name="x", kind="direction_binary", side="up",
+                label_tf=15, label_m=1.0, label_x=0.3,
+            )
+
+    def test_side_changes_spec_hash(self):
+        common = dict(
+            name="m", timeframes=[15], indicators=["15_close"],
+            layers=[LayerSpec(kind="dense", units=8)],
+        )
+        long_spec = NNModelSpec(
+            targets=[TargetSpec(name="a", kind="direction_binary", side="long",
+                                label_tf=15, label_m=1.0, label_x=0.3)],
+            **common,
+        )
+        short_spec = NNModelSpec(
+            targets=[TargetSpec(name="a", kind="direction_binary", side="short",
+                                label_tf=15, label_m=1.0, label_x=0.3)],
+            **common,
+        )
+        assert long_spec.spec_hash != short_spec.spec_hash

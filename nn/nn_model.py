@@ -40,7 +40,7 @@ from nn.nn_model_spec import (
 )
 
 # Per-target-kind head widths (per horizon).
-_HEAD_WIDTH = {"direction": 3, "label": 1, "regression": 1}
+_HEAD_WIDTH = {"direction": 3, "direction_binary": 2, "label": 1, "regression": 1}
 
 
 class _EpochStats:
@@ -533,7 +533,7 @@ class NNModel:
         for meta in self.model.head_meta:
             width = meta["width"]
             block = y[:, offset : offset + width]
-            if meta["kind"] == "direction":
+            if meta["kind"] in ("direction", "direction_binary"):
                 counts = block.sum(dim=0)  # one-hot → per-class counts
                 counts = torch.clamp(counts, min=1.0)
                 w = counts.sum() / (width * counts)
@@ -556,7 +556,7 @@ class NNModel:
             key = meta["name"] + f"#{offset}"
             cw = class_weights.get(key)
 
-            if meta["kind"] == "direction":
+            if meta["kind"] in ("direction", "direction_binary"):
                 tgt = target_y.argmax(dim=1)
                 loss = nn.functional.cross_entropy(logits, tgt, weight=cw)
             elif meta["kind"] == "label":
@@ -587,7 +587,7 @@ class NNModel:
         for logits, meta in zip(logits_list, self.model.head_meta):
             width = meta["width"]
             target_y = y[:, offset : offset + width]
-            if meta["kind"] == "direction":
+            if meta["kind"] in ("direction", "direction_binary"):
                 pred = logits.argmax(dim=1)
                 tgt = target_y.argmax(dim=1)
                 correct += float((pred == tgt).float().sum().item())
@@ -665,7 +665,7 @@ class NNModel:
 
     @staticmethod
     def _apply_head_activation(logits: torch.Tensor, meta: dict) -> torch.Tensor:
-        if meta["kind"] == "direction":
+        if meta["kind"] in ("direction", "direction_binary"):
             return torch.softmax(logits, dim=1)
         if meta["kind"] == "label":
             return torch.sigmoid(logits)
