@@ -38,7 +38,9 @@ import yaml
 class LayerSpec:
     """One hidden layer in the network.
 
-    kind: "dense" | "lstm" | "gru" | "conv1d"
+    kind: "dense" | "lstm" | "gru" | "conv1d" | "conv1d_seq"
+        conv1d_seq — conv over time, preserves the sequence for a following
+        recurrent layer (unlike conv1d, which mean-pools the time axis away).
     units: layer width / hidden-state size
     params: kind-specific kwargs (e.g. kernel_size, bidirectional)
     """
