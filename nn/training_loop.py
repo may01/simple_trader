@@ -47,6 +47,39 @@ if TYPE_CHECKING:  # pragma: no cover — typing only
 
 
 # ---------------------------------------------------------------------------
+# Holdout chunking
+# ---------------------------------------------------------------------------
+
+#: Maximum rows per ``run_batch`` call during holdout evaluation.
+#: Keeps GPU memory bounded regardless of holdout size (fix for OOM on large
+#: holdouts with LSTM models on constrained GPUs).
+HOLDOUT_EVAL_CHUNK: int = 4096
+
+
+def _chunked_predict(model, X_flat: np.ndarray, chunk_size: int) -> np.ndarray:
+    """Run ``model.run_batch`` in fixed-size chunks and concatenate results.
+
+    Args:
+        model:      Any object with a ``run_batch(X: np.ndarray) -> np.ndarray``
+                    method.
+        X_flat:     2-D float32 array of shape ``(n_rows, features)``.
+        chunk_size: Maximum number of rows per ``run_batch`` call.
+
+    Returns:
+        Predictions array of shape ``(n_rows, out_width)``, identical to a
+        single ``model.run_batch(X_flat)`` call but GPU-memory-bounded.
+    """
+    n_rows = X_flat.shape[0]
+    return np.concatenate(
+        [
+            model.run_batch(X_flat[i : i + chunk_size])
+            for i in range(0, n_rows, chunk_size)
+        ],
+        axis=0,
+    )
+
+
+# ---------------------------------------------------------------------------
 # RunResult
 # ---------------------------------------------------------------------------
 
@@ -501,7 +534,7 @@ class TrainingLoop:
             n_rows_total += n_rows
             # Flatten (rows, T, F) → (rows, T*F) for run_batch.
             X_flat = np.asarray(X, dtype=np.float32).reshape(n_rows, -1)
-            preds = model.run_batch(X_flat)
+            preds = _chunked_predict(model, X_flat, HOLDOUT_EVAL_CHUNK)
             score, target_scores = self._score_predictions(spec, preds, y)
             if score is not None:
                 scores.append(score)
