@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -40,6 +41,8 @@ import torch
 
 from indicators.labels import _fmt
 from nn.device import nn_artefact_root
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from indicators import DataAttributes
@@ -431,22 +434,45 @@ class NNDataset:
         base = cls._base_dir(dataset_dir)
 
         # Feature columns per TF (bare indicator names → {tf}_{indicator}).
+        # Ragged / applies_to-aware: emit {tf}_{ind} only where the column
+        # exists, so TF-restricted features (align ladder, cyclical-omit-1440)
+        # select cleanly instead of crashing. Order preserves spec.indicators
+        # for a deterministic dataset hash.
         feature_cols_by_tf: dict[str, list[str]] = {}
+        dropped: list[tuple[int, str]] = []
         for tf in spec.timeframes:
-            feature_cols_by_tf[str(tf)] = [
-                f"{tf}_{ind}" for ind in spec.indicators
-            ]
+            cols: list[str] = []
+            for ind in spec.indicators:
+                col = f"{tf}_{ind}"
+                if col in df.columns:
+                    cols.append(col)
+                else:
+                    dropped.append((tf, ind))
+            feature_cols_by_tf[str(tf)] = cols
 
-        # Validate every feature column exists.
-        missing = [
-            c
-            for cols in feature_cols_by_tf.values()
-            for c in cols
-            if c not in df.columns
+        # Typo guard: an indicator absent at EVERY timeframe is a spec error,
+        # distinct from a legitimate per-TF restriction.
+        unresolved = [
+            ind
+            for ind in spec.indicators
+            if not any(f"{tf}_{ind}" in df.columns for tf in spec.timeframes)
         ]
-        if missing:
+        if unresolved:
             raise ValueError(
-                f"feature columns missing from source frame: {missing}"
+                f"indicators not found at any timeframe: {unresolved}"
+            )
+
+        # A timeframe that resolves to zero features is a spec error.
+        empty_tfs = [tf for tf, cols in feature_cols_by_tf.items() if not cols]
+        if empty_tfs:
+            raise ValueError(f"timeframes with zero features: {empty_tfs}")
+
+        # Visibility: intentional per-TF drops are logged, never silent.
+        if dropped:
+            logger.info(
+                "NN feature selection dropped %d per-TF pair(s) via applies_to: %s",
+                len(dropped),
+                dropped,
             )
 
         source_hash = _source_content_hash(df)

@@ -6,7 +6,7 @@
 #       → base indicators (momentum/trend/volatility/oscillators/volume/price_derivatives/trend_flags/nn_features)
 #       → base attributes (rsi_classification.json, diff_stats.pkl)
 #       → class indicators (classification, targets — only TFs [15,60,240,1440])
-#       → nn attributes (column_stats for normalization)
+#       → DataAttributes container (NN normalisation lives in the dataset manifest; D13)
 #       → save df_with_indicators.pkl + data_attributes.pkl
 #
 # df_with_indicators.pkl is single-writer: nn_res_* result columns are NEVER
@@ -27,7 +27,7 @@ import pandas as pd
 # Heavy imports (talib-dependent) are deferred to method bodies to allow
 # test-time patching without triggering talib at module import time.
 # config_loader is safe to import eagerly.
-from config_loader import CANDLES, chunk_config, load_nn_config, warmup_start_ms
+from config_loader import CANDLES, chunk_config, warmup_start_ms
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -303,7 +303,8 @@ class DataPreparer:
           5. Compute class indicators (classification + targets; only TFs [15,60,240,1440])
           6. Trim warmup rows (drop everything before data_start_ms)
           7. Compute lookahead profit labels (labels: config section)
-          8. Compute NN normalisation stats → data_attributes
+          8. Build DataAttributes container (NN normalisation now lives in the
+             dataset manifest; see D13)
           9. Save wide_df atomically to output_path
          10. Save data_attributes to attributes_output_path
 
@@ -350,8 +351,9 @@ class DataPreparer:
         # future rows inside the simulation window, never warmup history)
         self._compute_profit_labels(wide_df)
 
-        # Step 8 — NN normalisation stats
-        data_attributes = self._compute_nn_attributes(wide_df)
+        # Step 8 — DataAttributes container for data_attributes.pkl (NN
+        # normalisation lives in the dataset manifest now; see D13)
+        data_attributes = self._data_attributes_container(wide_df)
 
         # Step 9 — atomic save of wide_df
         tmp_out = self.output_path + ".tmp"
@@ -589,7 +591,7 @@ class DataPreparer:
 
         # Steps mirror prepare() 7–10 on the concatenated frame.
         self._compute_profit_labels(full)
-        data_attributes = self._compute_nn_attributes(full)
+        data_attributes = self._data_attributes_container(full)
 
         self._atomic_to_pickle(full, self.output_path)
         data_attributes.save(self.attributes_output_path)
@@ -744,25 +746,27 @@ class DataPreparer:
                         atr_period=spec.atr_period, ma_length=spec.ma_length,
                     )
 
-    def _compute_nn_attributes(self, df: pd.DataFrame) -> "DataAttributes":
-        """Compute NN normalisation stats and return a populated DataAttributes.
+    def _data_attributes_container(self, df: pd.DataFrame) -> "DataAttributes":
+        """Return the DataAttributes instance to persist as ``data_attributes.pkl``.
 
-        Reads feature_cols from indicators_config.yaml (nn.feature_cols).
-        Calls data_attributes.compute_nn_stats(df, feature_cols).
+        NN feature normalisation no longer lives here — it is computed by
+        ``NNDataset`` (train-split winsorised stats bundled into the checkpoint
+        manifest; see DECISIONS-LOG D13). The classification/target stat files
+        (``rsi_classification.json``/``diff_stats.pkl``/``indicator_stats.json``)
+        are written separately by ``_compute_base_attributes``.
+
+        The pickle is still emitted because the spec-driven trainer/orchestrator
+        load it and thread it through (currently as an unused argument). Removing
+        that vestigial plumbing is a separate follow-up (D13).
 
         Args:
             df: Wide DataFrame with all indicator columns populated.
 
         Returns:
-            Populated DataAttributes instance (not yet saved to disk).
+            An empty DataAttributes container.
         """
         from indicators import DataAttributes  # lazy import
-        nn_config = load_nn_config(self.config_path)
-        feature_cols: list[str] = nn_config.get("feature_cols", [])
-
-        data_attributes = DataAttributes()
-        data_attributes.compute_nn_stats(df, feature_cols)
-        return data_attributes
+        return DataAttributes()
 
     # ------------------------------------------------------------------
     # Internal helpers

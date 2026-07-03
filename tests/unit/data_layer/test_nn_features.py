@@ -413,7 +413,9 @@ class TestNNCrossTFAlignField:
 # ---------------------------------------------------------------------------
 
 class TestAlignFieldScheduling:
-    """Verify that align_60 is scheduled only on tf=15, align_240 only on tf=60.
+    """Verify the cross-TF align ladder: each align_{other_tf} is scheduled only
+    on the next-lower CANDLE. Ladder: 1→align_5, 5→align_15, 15→align_60,
+    60→align_240, 240→align_1440; tf=1440 (top) has no align.
 
     Uses Indicators._sorted_fields — the same entry point the rest of the system
     uses to decide which fields to run on a given TF.
@@ -447,18 +449,52 @@ class TestAlignFieldScheduling:
         assert "align_240" not in self._align_names_for_tf(240), \
             "align_240 wrongly scheduled on tf=240 (self-alignment)"
 
+    def test_align_5_scheduled_only_on_tf_1(self):
+        """align_5 must appear for tf=1 (1→5) and NOT for tf=5 (self-alignment)."""
+        assert "align_5" in self._align_names_for_tf(1), \
+            "align_5 missing from tf=1 schedule"
+        assert "align_5" not in self._align_names_for_tf(5), \
+            "align_5 wrongly scheduled on tf=5 (self-alignment)"
+
+    def test_align_15_scheduled_only_on_tf_5(self):
+        """align_15 must appear for tf=5 (5→15) and NOT for tf=1 or tf=15."""
+        assert "align_15" in self._align_names_for_tf(5), \
+            "align_15 missing from tf=5 schedule"
+        assert "align_15" not in self._align_names_for_tf(1), \
+            "align_15 wrongly scheduled on tf=1 (forward-alignment)"
+        assert "align_15" not in self._align_names_for_tf(15), \
+            "align_15 wrongly scheduled on tf=15 (self-alignment)"
+
+    def test_align_1440_scheduled_only_on_tf_240(self):
+        """align_1440 must appear for tf=240 (240→1440) and NOT for tf=1440."""
+        assert "align_1440" in self._align_names_for_tf(240), \
+            "align_1440 missing from tf=240 schedule"
+        assert "align_1440" not in self._align_names_for_tf(1440), \
+            "align_1440 wrongly scheduled on tf=1440 (self-alignment)"
+
+    def test_no_align_on_tf_1440(self):
+        """tf=1440 is the top of the ladder — no align field of any kind."""
+        names = self._align_names_for_tf(1440)
+        assert not {n for n in names if n.startswith("align_")}, \
+            f"tf=1440 must have no align fields, got {names}"
+
 
 # ---------------------------------------------------------------------------
 # Non-align nn_features scheduling: config applies_to governs all nn_features
 # ---------------------------------------------------------------------------
 
 class TestNNFeaturesScheduling:
-    """Verify that non-align nn_features fields respect config applies_to=[15,60,240].
+    """Verify nn_features are scheduled on every CANDLE (D11 supersedes D9).
 
-    The YAML config sets applies_to: [15, 60, 240] for every nn_features entry.
-    After the fix, the scheduler must honour this so tf=1 and tf=1440 get zero
-    nn_features fields (avoiding wasted compute on the 20k-row tf=1 frame).
+    Config now sets applies_to: [1, 5, 15, 60, 240, 1440] for every non-align
+    nn_features entry, EXCEPT sin_tod/cos_tod which omit 1440 (daily bars share
+    one wall-clock open → constant). The scheduler must honour this:
+    - tf in {1, 5, 15, 60, 240}: full non-align set + sin_tod/cos_tod + one align.
+    - tf=1440: full non-align set MINUS sin_tod/cos_tod, no align (top of ladder).
     """
+
+    # Per-tf nn_features field counts (incl. align where applicable).
+    EXPECTED_COUNT = {1: 48, 5: 48, 15: 48, 60: 48, 240: 48, 1440: 45}
 
     def setup_method(self):
         Indicators._registry = None
@@ -467,121 +503,32 @@ class TestNNFeaturesScheduling:
         fields = Indicators._sorted_fields(tf, groups=["nn_features"], check_resources=False)
         return {f.name for f in fields}
 
-    def test_logret_scheduled_on_tf_15(self):
-        """logret must appear in the tf=15 schedule (in applies_to list)."""
-        assert "logret" in self._nn_names_for_tf(15), \
-            "logret missing from tf=15 schedule"
+    @pytest.mark.parametrize("tf", [1, 5, 15, 60, 240, 1440])
+    def test_core_nn_features_scheduled_on_every_tf(self, tf):
+        """logret + macd_12_26_9_slope must appear on every CANDLE."""
+        names = self._nn_names_for_tf(tf)
+        assert "logret" in names, f"logret missing from tf={tf} schedule"
+        assert "macd_12_26_9_slope" in names, \
+            f"macd_12_26_9_slope missing from tf={tf} schedule"
 
-    def test_macd_slope_scheduled_on_tf_15(self):
-        """macd_12_26_9_slope must appear in the tf=15 schedule."""
-        assert "macd_12_26_9_slope" in self._nn_names_for_tf(15), \
-            "macd_12_26_9_slope missing from tf=15 schedule"
+    @pytest.mark.parametrize("tf,count", EXPECTED_COUNT.items())
+    def test_nn_features_count_per_tf(self, tf, count):
+        """Each CANDLE schedules the expected number of nn_features fields."""
+        names = self._nn_names_for_tf(tf)
+        assert len(names) == count, \
+            f"Expected {count} nn_features on tf={tf} but got {len(names)}: {sorted(names)}"
 
-    def test_logret_not_scheduled_on_tf_1(self):
-        """logret must NOT appear on tf=1 — config restricts nn_features to [15,60,240]."""
-        assert "logret" not in self._nn_names_for_tf(1), \
-            "logret wrongly scheduled on tf=1 (should be excluded by config applies_to)"
-
-    def test_macd_slope_not_scheduled_on_tf_1(self):
-        """macd_12_26_9_slope must NOT appear on tf=1."""
-        assert "macd_12_26_9_slope" not in self._nn_names_for_tf(1), \
-            "macd_12_26_9_slope wrongly scheduled on tf=1"
-
-    def test_no_nn_features_on_tf_1(self):
-        """tf=1 must have zero nn_features fields after the fix."""
+    def test_time_of_day_present_below_1440(self):
+        """sin_tod/cos_tod scheduled on tf=1 (and below 1440) — intraday time varies."""
         names = self._nn_names_for_tf(1)
-        assert len(names) == 0, \
-            f"Expected 0 nn_features on tf=1 but got {len(names)}: {names}"
+        assert {"sin_tod", "cos_tod"} <= names, \
+            f"sin_tod/cos_tod missing from tf=1 schedule: {sorted(names)}"
 
-    def test_no_nn_features_on_tf_1440(self):
-        """tf=1440 must have zero nn_features fields (not in config applies_to)."""
+    def test_time_of_day_absent_on_1440(self):
+        """sin_tod/cos_tod NOT scheduled on tf=1440 (daily bars → constant)."""
         names = self._nn_names_for_tf(1440)
-        assert len(names) == 0, \
-            f"Expected 0 nn_features on tf=1440 but got {len(names)}: {names}"
-
-
-# ---------------------------------------------------------------------------
-# Robust winsorised stats + apply clamp
-# ---------------------------------------------------------------------------
-
-class TestRobustNNStats:
-    def _df_with_col(self, tf, values):
-        idx = pd.date_range("2023-09-01", periods=len(values), freq=f"{tf}min", tz="UTC")
-        return pd.DataFrame(
-            {f"{tf}_is_closed": True, f"{tf}_feat": values},
-            index=idx,
-        )
-
-    def test_compute_stores_four_values(self):
-        tf = 15
-        vals = list(np.linspace(0.0, 100.0, 101))
-        df = self._df_with_col(tf, vals)
-        da = DataAttributes()
-        da.compute_nn_stats(df, [f"{tf}_feat"])
-        entry = da.column_stats[f"{tf}_feat"]
-        for key in ("q01", "q99", "mean", "std"):
-            assert key in entry, f"missing stat key {key}"
-
-    def test_get_stats_returns_four_tuple(self):
-        tf = 15
-        vals = list(np.linspace(0.0, 100.0, 101))
-        df = self._df_with_col(tf, vals)
-        da = DataAttributes()
-        da.compute_nn_stats(df, [f"{tf}_feat"])
-        out = da.get_stats(f"{tf}_feat")
-        assert len(out) == 4
-        q01, q99, mean, std = out
-        assert q01 < q99
-        assert std >= 1e-8
-
-    def test_winsorised_mean_robust_to_outlier(self):
-        """A fat-tail spike inflates raw mean/std but barely moves the
-        winsorised stats (estimated on the [q01,q99] band)."""
-        tf = 15
-        vals = list(np.zeros(99)) + [0.0, 1_000_000.0]  # one huge outlier
-        df = self._df_with_col(tf, vals)
-        da = DataAttributes()
-        da.compute_nn_stats(df, [f"{tf}_feat"])
-        q01, q99, mean, std = da.get_stats(f"{tf}_feat")
-        raw_mean = float(np.mean(vals))
-        # winsorised mean must be far below the raw (outlier-pulled) mean
-        assert mean < raw_mean / 10.0
-
-    def test_std_floored_at_1e8(self):
-        tf = 15
-        vals = [5.0] * 50  # zero variance
-        df = self._df_with_col(tf, vals)
-        da = DataAttributes()
-        da.compute_nn_stats(df, [f"{tf}_feat"])
-        q01, q99, mean, std = da.get_stats(f"{tf}_feat")
-        assert std == pytest.approx(1e-8)
-
-    def test_apply_winsorise_z_clamp(self):
-        """End-to-end apply: clip raw to [q01,q99], z-score, clamp to [-4,4].
-
-        A sharply-peaked distribution (most mass at one value, a small upper
-        tail) puts q99 many std-devs above the winsorised mean, so a value at or
-        beyond q99 z-scores past +4 and is clamped to exactly +4.0.
-        """
-        tf = 15
-        # Symmetric, sharply-peaked: most mass at 0 with small symmetric tails
-        # so q01/q99 land well beyond 4 winsorised std-devs from the (zero) mean.
-        tail = [50.0, 60.0, 70.0, 80.0, 90.0, 100.0]
-        vals = [0.0] * 195 + tail + [-v for v in tail]
-        df = self._df_with_col(tf, vals)
-        da = DataAttributes()
-        da.compute_nn_stats(df, [f"{tf}_feat"])
-        q01, q99, mean, std = da.get_stats(f"{tf}_feat")
-
-        def apply(x_raw):
-            xc = min(max(x_raw, q01), q99)
-            z = (xc - mean) / std
-            return min(max(z, -4.0), 4.0)
-
-        # the raw z at q99 must exceed 4 (so the clamp is actually load-bearing)
-        assert (q99 - mean) / std > 4.0
-        # a value far above q99 clamps at +4, far below q01 clamps at -4
-        assert apply(1e9) == pytest.approx(4.0)
-        assert apply(-1e9) == pytest.approx(-4.0)
-        # a central value (== mean) sits at 0, well within the band
-        assert apply(mean) == pytest.approx(0.0)
+        assert "sin_tod" not in names and "cos_tod" not in names, \
+            f"sin_tod/cos_tod wrongly scheduled on tf=1440: {sorted(names)}"
+        # day-of-week still varies daily and must remain.
+        assert {"sin_dow", "cos_dow"} <= names, \
+            f"sin_dow/cos_dow missing from tf=1440 schedule: {sorted(names)}"

@@ -177,51 +177,14 @@ class TestDataAttributes:
         with pytest.raises(FileNotFoundError):
             DataAttributes.load_rsi_classification()
 
-    def test_compute_nn_stats_populates_column_stats(
-        self, wide_df_with_rsi, patched_stats_folder
-    ):
-        """compute_nn_stats() populates column_stats for each feature_col."""
+    def test_save_and_load_roundtrip(self, tmp_path):
+        """save() then load() returns a DataAttributes instance."""
         da = DataAttributes()
-        # Use a column that exists in the df and is tied to a tf with is_closed data
-        feature_cols = ["15_rsi_ma8"]
-        da.compute_nn_stats(wide_df_with_rsi, feature_cols)
-        assert "15_rsi_ma8" in da.column_stats
-        entry = da.column_stats["15_rsi_ma8"]
-        assert "mean" in entry
-        assert "std" in entry
-
-    def test_get_stats_returns_robust_quad(self, wide_df_with_rsi, patched_stats_folder):
-        """get_stats() returns the robust (q01, q99, mean, std) tuple."""
-        da = DataAttributes()
-        feature_cols = ["15_rsi_ma8"]
-        da.compute_nn_stats(wide_df_with_rsi, feature_cols)
-        q01, q99, mean, std = da.get_stats("15_rsi_ma8")
-        assert isinstance(q01, float)
-        assert isinstance(q99, float)
-        assert isinstance(mean, float)
-        assert isinstance(std, float)
-        assert q01 <= q99
-        assert std >= 1e-8
-
-    def test_get_stats_raises_on_unknown_col(self):
-        """get_stats() raises KeyError for a column not in column_stats."""
-        da = DataAttributes()
-        with pytest.raises(KeyError):
-            da.get_stats("99_nonexistent_col")
-
-    def test_save_and_load_roundtrip(self, wide_df_with_rsi, patched_stats_folder, tmp_path):
-        """save() then load() preserves column_stats."""
-        da = DataAttributes()
-        feature_cols = ["15_rsi_ma8", "60_rsi_ma8"]
-        da.compute_nn_stats(wide_df_with_rsi, feature_cols)
-
         save_path = str(tmp_path / "da.pkl")
         da.save(save_path)
 
         loaded = DataAttributes.load(save_path)
-        assert loaded.column_stats == da.column_stats
-        for col in feature_cols:
-            assert col in loaded.column_stats
+        assert isinstance(loaded, DataAttributes)
 
     def test_load_diff_stats_raises_if_absent(self, tmp_path, monkeypatch):
         """load_diff_stats() raises FileNotFoundError when file is missing."""
@@ -240,31 +203,6 @@ class TestDataAttributes:
         da.compute(wide_df_with_rsi)
         path = patched_stats_folder + "diff_stats.pkl"
         assert os.path.exists(path), f"Expected file at {path}"
-
-    def test_compute_nn_stats_uses_closed_rows_only(
-        self, wide_df, patched_stats_folder
-    ):
-        """compute_nn_stats() computes mean from closed-candle rows only.
-
-        Build a df where closed rows for tf=15 have value=100 and open rows
-        have value=0; the resulting mean must be 100.0, not the full-df mean.
-        """
-        df = wide_df.copy()
-        closed_mask = df["15_is_closed"].astype(bool)
-        df["15_test_col"] = 0.0
-        df.loc[closed_mask, "15_test_col"] = 100.0
-
-        da = DataAttributes()
-        da.compute_nn_stats(df, ["15_test_col"])
-
-        full_mean = df["15_test_col"].mean()
-        stats_mean = da.column_stats["15_test_col"]["mean"]
-        assert stats_mean == pytest.approx(100.0), (
-            f"Expected mean=100.0 (closed rows only), got {stats_mean}"
-        )
-        assert stats_mean != pytest.approx(full_mean), (
-            "Mean should differ from full-df mean when open rows have value=0"
-        )
 
     def test_compute_idempotent_diff_stats(
         self, wide_df_with_rsi, patched_stats_folder

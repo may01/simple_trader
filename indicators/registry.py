@@ -146,6 +146,9 @@ _FIELD_REGISTRY: dict[str, object] = {
     "cos_tod":             lambda cfg: NNCosTodField(**cfg.params),
     "sin_dow":             lambda cfg: NNSinDowField(**cfg.params),
     "cos_dow":             lambda cfg: NNCosDowField(**cfg.params),
+    "align_5":             lambda cfg: NNCrossTFAlignField(**{"other_tf": 5,    "applies_to": cfg.applies_to, **cfg.params}),
+    "align_15":            lambda cfg: NNCrossTFAlignField(**{"other_tf": 15,   "applies_to": cfg.applies_to, **cfg.params}),
     "align_60":            lambda cfg: NNCrossTFAlignField(**{"other_tf": 60,  "applies_to": cfg.applies_to, **cfg.params}),
     "align_240":           lambda cfg: NNCrossTFAlignField(**{"other_tf": 240, "applies_to": cfg.applies_to, **cfg.params}),
+    "align_1440":          lambda cfg: NNCrossTFAlignField(**{"other_tf": 1440, "applies_to": cfg.applies_to, **cfg.params}),
 }
