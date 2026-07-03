@@ -347,6 +347,33 @@ class TestNaNDrops:
         with pytest.raises(ValueError, match="does_not_exist"):
             NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
 
+    def test_ragged_selection_drops_nonapplicable_tf(self, tmp_path):
+        # 60_rsi_14 does not exist in make_wide_df → dropped at tf=60 only.
+        # history_points=1 (shift=0 only) so the assertion isolates column
+        # selection from the closed-candle lookback guard: make_wide_df's
+        # 90-row fixture only closes tf=60 once, which would otherwise NaN
+        # out every row regardless of feature selection.
+        df = make_wide_df(rows=90)
+        spec = small_spec(
+            timeframes=[15, 60], indicators=["logret", "rsi_14"], history_points=1
+        )
+        ds = NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+        assert ds.manifest["feature_cols"]["15"] == ["15_logret", "15_rsi_14"]
+        assert ds.manifest["feature_cols"]["60"] == ["60_logret"]
+
+    def test_indicator_absent_at_all_tfs_raises(self, tmp_path):
+        df = make_wide_df(rows=90)
+        spec = small_spec(timeframes=[15, 60], indicators=["logret", "does_not_exist"])
+        with pytest.raises(ValueError, match="does_not_exist"):
+            NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+
+    def test_timeframe_with_zero_features_raises(self, tmp_path):
+        # rsi_14 resolves at 15 (typo guard passes) but tf=60 has no features.
+        df = make_wide_df(rows=90)
+        spec = small_spec(timeframes=[15, 60], indicators=["rsi_14"])
+        with pytest.raises(ValueError, match="zero features"):
+            NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+
 
 # ---------------------------------------------------------------------------
 # Strict target guard / non-monotonic index guard
