@@ -283,9 +283,6 @@ class NNModel:
     def __init__(self, spec: NNModelSpec) -> None:
         self.spec = spec
         self.device = resolve_device(spec.device)
-        self.input_size = (
-            len(spec.indicators) * len(spec.timeframes) * spec.history_points
-        )
         self.output_size = self._compute_output_size(spec)
 
         self.model: Optional[nn.Module] = None
@@ -304,8 +301,19 @@ class NNModel:
 
     @property
     def _n_features(self) -> int:
-        """Per-timestep feature width = indicators x timeframes."""
+        """Per-timestep feature width.
+
+        Uses the RESOLVED feature_cols (from the dataset at train time or the
+        bundled manifest at load time) when available; before either is known,
+        falls back to the spec's uniform indicators×timeframes product.
+        """
+        if self.feature_cols:
+            return sum(len(cols) for cols in self.feature_cols.values())
         return len(self.spec.indicators) * len(self.spec.timeframes)
+
+    @property
+    def input_size(self) -> int:
+        return self._n_features * self.spec.history_points
 
     # ------------------------------------------------------------------
     # Build
@@ -347,12 +355,13 @@ class NNModel:
         if self.spec.seed is not None:
             torch.manual_seed(self.spec.seed)
 
+        # Capture the manifest + resolved feature_cols BEFORE build so the net
+        # is sized to the dataset's (possibly ragged) feature width, not the
+        # spec's uniform product. Stats are the TRAIN stats (leakage guard).
+        self._capture_manifest(dataset)
         self.build()
 
         train_view, val_view = self._split_dataset(dataset)
-        # Capture the normalisation manifest + feature_cols for self-contained
-        # checkpoints (leakage guard: stats are the TRAIN stats from the dataset).
-        self._capture_manifest(dataset)
 
         try:
             return self._run_training(
@@ -696,11 +705,6 @@ class NNModel:
         """Rebuild from the embedded spec, load weights, restore manifest."""
         bundle = torch.load(path, map_location=self.device, weights_only=False)
         self.spec = _spec_from_dict(bundle["spec"])
-        self.input_size = (
-            len(self.spec.indicators)
-            * len(self.spec.timeframes)
-            * self.spec.history_points
-        )
         self.output_size = self._compute_output_size(self.spec)
         self.device = resolve_device(self.spec.device)
 

@@ -236,6 +236,21 @@ def test_input_size_from_spec():
     assert m.input_size == 3 * 2 * 4
 
 
+def test_n_features_uses_resolved_feature_cols():
+    m = NNModel(_direction_spec(timeframes=[15, 60], indicators=["a", "b"], history_points=4))
+    # Simulate a ragged resolved selection: 2 cols @15, 1 col @60 → 3 (NOT 2*2)
+    m.feature_cols = {"15": ["15_a", "15_b"], "60": ["60_a"]}
+    assert m._n_features == 3
+    assert m.input_size == 3 * 4
+
+
+def test_n_features_falls_back_to_spec_product_when_unresolved():
+    m = NNModel(_direction_spec(timeframes=[15, 60], indicators=["a", "b", "c"], history_points=4))
+    assert m.feature_cols is None
+    assert m._n_features == 3 * 2          # spec product fallback
+    assert m.input_size == 3 * 2 * 4       # keeps test_input_size_from_spec semantics
+
+
 def test_output_size_single_direction_head():
     m = NNModel(_direction_spec())
     assert m.output_size == 3  # direction head width
