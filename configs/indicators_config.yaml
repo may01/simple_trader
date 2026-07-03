@@ -460,245 +460,257 @@ fields:
   # --- nn_features ---
   - name: nn_rsi_ma8_norm_mean_20
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [rsi_ma8]
     params: {}
 
   - name: nn_close_diff_atr_14_ma_5
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [close_diff_prc, atr_14_ma_5]
     params: {atr_ma_length: 5}
 
   # Group 2 — indicator differences (identity left/right baked in registry; params {})
   - name: bb_upper_20_2_minus_close
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [bb_upper_20_2, close]
     params: {}
   - name: bb_middle_20_2_minus_close
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [bb_middle_20_2, close]
     params: {}
   - name: bb_lower_20_2_minus_close
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [bb_lower_20_2, close]
     params: {}
   - name: ema_7_minus_close
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_7, close]
     params: {}
   - name: ema_14_minus_close
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_14, close]
     params: {}
   - name: ema_25_minus_close
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_25, close]
     params: {}
   - name: ema_50_minus_close
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_50, close]
     params: {}
   - name: ema_100_minus_close
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_100, close]
     params: {}
   - name: vol_ma_20_minus_volume
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [vol_ma_20, volume]
     params: {}
   - name: ema_7_minus_ema_14
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_7, ema_14]
     params: {}
   - name: ema_7_minus_ema_25
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_7, ema_25]
     params: {}
   - name: ema_7_minus_ema_50
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_7, ema_50]
     params: {}
   - name: ema_7_minus_ema_100
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_7, ema_100]
     params: {}
   - name: ema_14_minus_ema_25
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_14, ema_25]
     params: {}
   - name: ema_14_minus_ema_50
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_14, ema_50]
     params: {}
   - name: ema_14_minus_ema_100
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_14, ema_100]
     params: {}
   - name: ema_25_minus_ema_50
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_25, ema_50]
     params: {}
   - name: ema_25_minus_ema_100
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_25, ema_100]
     params: {}
   - name: ema_50_minus_ema_100
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_50, ema_100]
     params: {}
   - name: atr_14_ma_5_minus_atr_14
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [atr_14_ma_5, atr_14]
     params: {}
   - name: natr_14_ma_5_minus_natr_14
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [natr_14_ma_5, natr_14]
     params: {}
 
   # Group 3 — slopes (identity source baked in registry; window is the tunable)
   - name: macd_12_26_9_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [macd_12_26_9]
     params: {window: 5}
   - name: macd_signal_12_26_9_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [macd_signal_12_26_9]
     params: {window: 5}
   - name: macd_5_13_9_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [macd_5_13_9]
     params: {window: 5}
   - name: macd_signal_5_13_9_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [macd_signal_5_13_9]
     params: {window: 5}
   - name: ema_7_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_7]
     params: {window: 5}
   - name: ema_14_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_14]
     params: {window: 5}
   - name: ema_25_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_25]
     params: {window: 5}
   - name: ema_50_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_50]
     params: {window: 5}
   - name: ema_100_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [ema_100]
     params: {window: 5}
   - name: adx_14_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [adx_14]
     params: {window: 5}
   - name: rsi_ma8_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [rsi_ma8]
     params: {window: 5}
   - name: rsi_ma12_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [rsi_ma12]
     params: {window: 5}
   - name: rsi_ma24_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [rsi_ma24]
     params: {window: 5}
   - name: cci_14_ma_5_slope
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [cci_14_ma_5]
     params: {window: 5}
 
   # Orthogonal engineered features
   - name: logret
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [close]
     params: {}
   - name: range_atr
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [high, low, atr_14]
     params: {}
   - name: body_ratio
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [open, close, high, low]
     params: {}
   - name: wick_up
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [open, close, high, low]
     params: {}
   - name: wick_dn
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [open, close, high, low]
     params: {}
   - name: vol_regime
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: [atr_14]
     params: {}
   - name: sin_tod
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240]   # skip 1440: daily bars share one wall-clock open → constant
     depends_on: []
     params: {}
   - name: cos_tod
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240]   # skip 1440: daily bars share one wall-clock open → constant
     depends_on: []
     params: {}
   - name: sin_dow
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: []
     params: {}
   - name: cos_dow
     group: nn_features
-    applies_to: [15, 60, 240]
+    applies_to: [1, 5, 15, 60, 240, 1440]
     depends_on: []
+    params: {}
+  # Cross-TF align ladder: each TF aligns to the next-higher CANDLE.
+  # name = align_{other_tf}; applies_to = [lower_tf] only (registry asserts other_tf present).
+  - name: align_5
+    group: nn_features
+    applies_to: [1]
+    depends_on: [ema_50]
+    params: {}
+  - name: align_15
+    group: nn_features
+    applies_to: [5]
+    depends_on: [ema_50]
     params: {}
   - name: align_60
     group: nn_features
@@ -708,6 +720,11 @@ fields:
   - name: align_240
     group: nn_features
     applies_to: [60]
+    depends_on: [ema_50]
+    params: {}
+  - name: align_1440
+    group: nn_features
+    applies_to: [240]
     depends_on: [ema_50]
     params: {}
 
@@ -798,225 +815,3 @@ labels:
     x: 0.1
     l: 15
     y: 0.1
-
-nn:
-  feature_cols:
-    # ---- tf=15 — Group 1 (raw, globally z-scored) ----
-    - "15_rsi_ma8_diff"
-    - "15_rsi_ma12_diff"
-    - "15_rsi_ma24_diff"
-    - "15_cci_diff"
-    - "15_atr_14_ma_5"
-    - "15_natr_14_ma_5"
-    - "15_close_diff_prc_rm_6"
-    - "15_close_diff_prc_rm_6_mean_above"
-    - "15_close_diff_prc_rm_6_mean_below"
-    - "15_high_diff_prc_rm_6"
-    - "15_high_diff_prc_rm_6_mean_above"
-    - "15_high_diff_prc_rm_6_mean_below"
-    - "15_low_diff_prc_rm_6"
-    - "15_low_diff_prc_rm_6_mean_above"
-    - "15_low_diff_prc_rm_6_mean_below"
-    - "15_macd_12_26_9"
-    - "15_macd_signal_12_26_9"
-    - "15_macd_5_13_9"
-    - "15_macd_signal_5_13_9"
-    - "15_rsi_14"
-    - "15_cci_14"
-    # ---- tf=15 — Group 2 (differences, globally z-scored) ----
-    - "15_bb_upper_20_2_minus_close"
-    - "15_bb_middle_20_2_minus_close"
-    - "15_bb_lower_20_2_minus_close"
-    - "15_ema_7_minus_close"
-    - "15_ema_14_minus_close"
-    - "15_ema_25_minus_close"
-    - "15_ema_50_minus_close"
-    - "15_ema_100_minus_close"
-    - "15_vol_ma_20_minus_volume"
-    - "15_ema_7_minus_ema_14"
-    - "15_ema_7_minus_ema_25"
-    - "15_ema_7_minus_ema_50"
-    - "15_ema_7_minus_ema_100"
-    - "15_ema_14_minus_ema_25"
-    - "15_ema_14_minus_ema_50"
-    - "15_ema_14_minus_ema_100"
-    - "15_ema_25_minus_ema_50"
-    - "15_ema_25_minus_ema_100"
-    - "15_ema_50_minus_ema_100"
-    - "15_atr_14_ma_5_minus_atr_14"
-    - "15_natr_14_ma_5_minus_natr_14"
-    # ---- tf=15 — Group 3 (slopes, globally z-scored) ----
-    - "15_macd_12_26_9_slope"
-    - "15_macd_signal_12_26_9_slope"
-    - "15_macd_5_13_9_slope"
-    - "15_macd_signal_5_13_9_slope"
-    - "15_ema_7_slope"
-    - "15_ema_14_slope"
-    - "15_ema_25_slope"
-    - "15_ema_50_slope"
-    - "15_ema_100_slope"
-    - "15_adx_14_slope"
-    - "15_rsi_ma8_slope"
-    - "15_rsi_ma12_slope"
-    - "15_rsi_ma24_slope"
-    - "15_cci_14_ma_5_slope"
-    # ---- tf=15 — orthogonal + already-built ----
-    - "15_logret"
-    - "15_range_atr"
-    - "15_body_ratio"
-    - "15_wick_up"
-    - "15_wick_dn"
-    - "15_vol_regime"
-    - "15_sin_tod"
-    - "15_cos_tod"
-    - "15_sin_dow"
-    - "15_cos_dow"
-    - "15_align_60"
-    - "15_nn_rsi_ma8_norm_mean_20"
-    - "15_nn_close_diff_atr_14_ma_5"
-    # ---- tf=60 — Group 1 (raw, globally z-scored) ----
-    - "60_rsi_ma8_diff"
-    - "60_rsi_ma12_diff"
-    - "60_rsi_ma24_diff"
-    - "60_cci_diff"
-    - "60_atr_14_ma_5"
-    - "60_natr_14_ma_5"
-    - "60_close_diff_prc_rm_6"
-    - "60_close_diff_prc_rm_6_mean_above"
-    - "60_close_diff_prc_rm_6_mean_below"
-    - "60_high_diff_prc_rm_6"
-    - "60_high_diff_prc_rm_6_mean_above"
-    - "60_high_diff_prc_rm_6_mean_below"
-    - "60_low_diff_prc_rm_6"
-    - "60_low_diff_prc_rm_6_mean_above"
-    - "60_low_diff_prc_rm_6_mean_below"
-    - "60_macd_12_26_9"
-    - "60_macd_signal_12_26_9"
-    - "60_macd_5_13_9"
-    - "60_macd_signal_5_13_9"
-    - "60_rsi_14"
-    - "60_cci_14"
-    # ---- tf=60 — Group 2 (differences, globally z-scored) ----
-    - "60_bb_upper_20_2_minus_close"
-    - "60_bb_middle_20_2_minus_close"
-    - "60_bb_lower_20_2_minus_close"
-    - "60_ema_7_minus_close"
-    - "60_ema_14_minus_close"
-    - "60_ema_25_minus_close"
-    - "60_ema_50_minus_close"
-    - "60_ema_100_minus_close"
-    - "60_vol_ma_20_minus_volume"
-    - "60_ema_7_minus_ema_14"
-    - "60_ema_7_minus_ema_25"
-    - "60_ema_7_minus_ema_50"
-    - "60_ema_7_minus_ema_100"
-    - "60_ema_14_minus_ema_25"
-    - "60_ema_14_minus_ema_50"
-    - "60_ema_14_minus_ema_100"
-    - "60_ema_25_minus_ema_50"
-    - "60_ema_25_minus_ema_100"
-    - "60_ema_50_minus_ema_100"
-    - "60_atr_14_ma_5_minus_atr_14"
-    - "60_natr_14_ma_5_minus_natr_14"
-    # ---- tf=60 — Group 3 (slopes, globally z-scored) ----
-    - "60_macd_12_26_9_slope"
-    - "60_macd_signal_12_26_9_slope"
-    - "60_macd_5_13_9_slope"
-    - "60_macd_signal_5_13_9_slope"
-    - "60_ema_7_slope"
-    - "60_ema_14_slope"
-    - "60_ema_25_slope"
-    - "60_ema_50_slope"
-    - "60_ema_100_slope"
-    - "60_adx_14_slope"
-    - "60_rsi_ma8_slope"
-    - "60_rsi_ma12_slope"
-    - "60_rsi_ma24_slope"
-    - "60_cci_14_ma_5_slope"
-    # ---- tf=60 — orthogonal + already-built ----
-    - "60_logret"
-    - "60_range_atr"
-    - "60_body_ratio"
-    - "60_wick_up"
-    - "60_wick_dn"
-    - "60_vol_regime"
-    - "60_sin_tod"
-    - "60_cos_tod"
-    - "60_sin_dow"
-    - "60_cos_dow"
-    - "60_align_240"
-    - "60_nn_rsi_ma8_norm_mean_20"
-    - "60_nn_close_diff_atr_14_ma_5"
-    # ---- tf=240 — Group 1 (raw, globally z-scored) ----
-    - "240_rsi_ma8_diff"
-    - "240_rsi_ma12_diff"
-    - "240_rsi_ma24_diff"
-    - "240_cci_diff"
-    - "240_atr_14_ma_5"
-    - "240_natr_14_ma_5"
-    - "240_close_diff_prc_rm_6"
-    - "240_close_diff_prc_rm_6_mean_above"
-    - "240_close_diff_prc_rm_6_mean_below"
-    - "240_high_diff_prc_rm_6"
-    - "240_high_diff_prc_rm_6_mean_above"
-    - "240_high_diff_prc_rm_6_mean_below"
-    - "240_low_diff_prc_rm_6"
-    - "240_low_diff_prc_rm_6_mean_above"
-    - "240_low_diff_prc_rm_6_mean_below"
-    - "240_macd_12_26_9"
-    - "240_macd_signal_12_26_9"
-    - "240_macd_5_13_9"
-    - "240_macd_signal_5_13_9"
-    - "240_rsi_14"
-    - "240_cci_14"
-    # ---- tf=240 — Group 2 (differences, globally z-scored) ----
-    - "240_bb_upper_20_2_minus_close"
-    - "240_bb_middle_20_2_minus_close"
-    - "240_bb_lower_20_2_minus_close"
-    - "240_ema_7_minus_close"
-    - "240_ema_14_minus_close"
-    - "240_ema_25_minus_close"
-    - "240_ema_50_minus_close"
-    - "240_ema_100_minus_close"
-    - "240_vol_ma_20_minus_volume"
-    - "240_ema_7_minus_ema_14"
-    - "240_ema_7_minus_ema_25"
-    - "240_ema_7_minus_ema_50"
-    - "240_ema_7_minus_ema_100"
-    - "240_ema_14_minus_ema_25"
-    - "240_ema_14_minus_ema_50"
-    - "240_ema_14_minus_ema_100"
-    - "240_ema_25_minus_ema_50"
-    - "240_ema_25_minus_ema_100"
-    - "240_ema_50_minus_ema_100"
-    - "240_atr_14_ma_5_minus_atr_14"
-    - "240_natr_14_ma_5_minus_natr_14"
-    # ---- tf=240 — Group 3 (slopes, globally z-scored) ----
-    - "240_macd_12_26_9_slope"
-    - "240_macd_signal_12_26_9_slope"
-    - "240_macd_5_13_9_slope"
-    - "240_macd_signal_5_13_9_slope"
-    - "240_ema_7_slope"
-    - "240_ema_14_slope"
-    - "240_ema_25_slope"
-    - "240_ema_50_slope"
-    - "240_ema_100_slope"
-    - "240_adx_14_slope"
-    - "240_rsi_ma8_slope"
-    - "240_rsi_ma12_slope"
-    - "240_rsi_ma24_slope"
-    - "240_cci_14_ma_5_slope"
-    # ---- tf=240 — orthogonal + already-built (no higher-TF align) ----
-    - "240_logret"
-    - "240_range_atr"
-    - "240_body_ratio"
-    - "240_wick_up"
-    - "240_wick_dn"
-    - "240_vol_regime"
-    - "240_sin_tod"
-    - "240_cos_tod"
-    - "240_sin_dow"
-    - "240_cos_dow"
-    - "240_nn_rsi_ma8_norm_mean_20"
-    - "240_nn_close_diff_atr_14_ma_5"
-  checkpoint_dir: "checkpoints/"

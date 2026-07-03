@@ -1,6 +1,6 @@
 """Unit tests for config_loader.py — Phase 00 Task 03."""
 
-from config_loader import load_candles_config, load_indicators_config, load_nn_config, CANDLES
+from config_loader import load_candles_config, load_indicators_config, CANDLES
 
 
 def test_candles_list():
@@ -25,13 +25,6 @@ def test_classification_applies_to_subset():
     assert 1 not in class_field.applies_to
     assert 5 not in class_field.applies_to
     assert 15 in class_field.applies_to
-
-
-def test_nn_config_keys():
-    nn = load_nn_config()
-    assert "feature_cols" in nn
-    assert "checkpoint_dir" in nn
-    assert len(nn["feature_cols"]) > 0
 
 
 def test_all_required_groups_present():

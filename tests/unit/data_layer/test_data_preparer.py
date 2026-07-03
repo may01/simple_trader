@@ -177,7 +177,6 @@ class TestPreparePipeline:
         mock_wide_df = _make_wide_df()
         mock_data_attrs = MagicMock()
         mock_data_attrs.compute = MagicMock()
-        mock_data_attrs.compute_nn_stats = MagicMock()
         mock_data_attrs.save = MagicMock()
 
         dp_mod = _import_data_preparer_with_mocks()
@@ -194,7 +193,7 @@ class TestPreparePipeline:
         dp._compute_base_attributes = lambda df: call_order.append("base_attributes")
         dp._compute_class_indicators = lambda df, start_ts=None: call_order.append("class_indicators")
         dp._compute_profit_labels = lambda df: call_order.append("profit_labels")
-        dp._compute_nn_attributes = lambda df: (call_order.append("nn_attributes"), mock_data_attrs)[1]
+        dp._data_attributes_container = lambda df: (call_order.append("data_attributes"), mock_data_attrs)[1]
 
         dp.prepare(raw_pkl)
 
@@ -205,7 +204,7 @@ class TestPreparePipeline:
             "base_attributes",
             "class_indicators",
             "profit_labels",
-            "nn_attributes",
+            "data_attributes",
         ]
         assert call_order == expected, f"Got: {call_order}"
 
@@ -229,7 +228,6 @@ class TestAtomicSave:
         mock_wide_df = _make_wide_df()
         mock_data_attrs = MagicMock()
         mock_data_attrs.compute = MagicMock()
-        mock_data_attrs.compute_nn_stats = MagicMock()
         mock_data_attrs.save = MagicMock()
 
         dp_mod = _import_data_preparer_with_mocks()
@@ -245,7 +243,7 @@ class TestAtomicSave:
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
         dp._compute_profit_labels = lambda df: None
-        dp._compute_nn_attributes = lambda df: mock_data_attrs
+        dp._data_attributes_container = lambda df: mock_data_attrs
 
         dp.prepare(raw_pkl)
         return output_path
@@ -435,7 +433,7 @@ class TestWarmupTrim:
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
         dp._compute_profit_labels = lambda df: seen.setdefault("index", df.index)
-        dp._compute_nn_attributes = lambda df: MagicMock()
+        dp._data_attributes_container = lambda df: MagicMock()
 
         dp.prepare(raw_pkl, data_start_ms=data_start_ms)
 
@@ -460,7 +458,7 @@ class TestWarmupTrim:
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
         dp._compute_profit_labels = lambda df: None
-        dp._compute_nn_attributes = lambda df: mock_data_attrs
+        dp._data_attributes_container = lambda df: mock_data_attrs
 
         dp.prepare(raw_pkl, data_start_ms=data_start_ms)
 
@@ -489,7 +487,7 @@ class TestWarmupTrim:
             lambda df, start_ts=None: received.setdefault("class", start_ts)
         )
         dp._compute_profit_labels = lambda df: None
-        dp._compute_nn_attributes = lambda df: MagicMock()
+        dp._data_attributes_container = lambda df: MagicMock()
 
         dp.prepare(raw_pkl, data_start_ms=data_start_ms)
 
@@ -509,7 +507,7 @@ class TestWarmupTrim:
         dp._compute_base_attributes = lambda df: None
         dp._compute_class_indicators = lambda df, start_ts=None: None
         dp._compute_profit_labels = lambda df: None
-        dp._compute_nn_attributes = lambda df: MagicMock()
+        dp._data_attributes_container = lambda df: MagicMock()
 
         dp.prepare(raw_pkl)
 

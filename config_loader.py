@@ -93,13 +93,6 @@ def load_indicators_config(path: str = "configs/indicators_config.yaml") -> list
     return _topological_sort(configs)
 
 
-def load_nn_config(path: str = "configs/indicators_config.yaml") -> dict:
-    """Returns the 'nn' section as a dict with feature_cols and checkpoint_dir."""
-    with open(path, "r") as fh:
-        data = yaml.safe_load(fh)
-    return data["nn"]
-
-
 @dataclass
 class LabelSpecConfig:
     """One profit-label family from the 'labels' config section."""

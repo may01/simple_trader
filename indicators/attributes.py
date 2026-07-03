@@ -12,17 +12,17 @@ import pandas as pd
 class DataAttributes:
     """Compute and persist dataset statistics for classification and normalisation.
 
-    Two types of stats are managed:
+    Stats managed (consumed by classification + target indicator fields):
     - ``rsi_classification.json``: RSI mean/std per TF, used by classification fields.
     - ``diff_stats.pkl``: Price diff mean/std per TF, used by target fields.
-    - ``column_stats``: per-column robust winsorised stats
-      ``{q01, q99, mean, std}`` for NN feature normalisation (in-memory).
+    - ``indicator_stats.json``: per-TF distance stats for classification fields.
+
+    NN feature normalisation is NOT handled here — it lives in the dataset
+    manifest (``NNDataset`` computes train-split winsorised stats and bundles
+    them into the checkpoint). See DECISIONS-LOG D13.
     """
 
     _STAT_TFS: list[int] = [15, 60, 240, 1440]
-
-    def __init__(self) -> None:
-        self.column_stats: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # Public compute entry-point
@@ -245,77 +245,6 @@ class DataAttributes:
             )
         with open(path, "r") as fh:
             return json.load(fh)
-
-    # ------------------------------------------------------------------
-    # NN column stats
-    # ------------------------------------------------------------------
-
-    def compute_nn_stats(self, df: pd.DataFrame, feature_cols: list) -> None:
-        """Compute robust winsorised z-score stats per feature column.
-
-        This is the single global normalisation layer for NN features. For each
-        column (closed-candle rows only) it stores four values:
-
-        - ``q01 = x.quantile(0.01)``, ``q99 = x.quantile(0.99)`` on the RAW column
-        - ``xw = x.clip(q01, q99)`` — winsorise to the 1st–99th percentile band
-        - ``mean = xw.mean()``, ``std = max(xw.std(), 1e-8)``
-
-        Winsorising before estimating ``mean``/``std`` ties the scale to the
-        central mass so fat-tail spikes cannot inflate ``std``. The apply sites
-        clip raw to ``[q01, q99]``, z-score with these stats, then clamp to
-        ``[-4, +4]``. Stats are estimated on the train split only and reused
-        verbatim at val/holdout/live — no leakage, never recomputed.
-
-        The TF is parsed from the column name prefix (e.g. ``"15_nn_rsi_ma8"``
-        → tf=15).  Only rows where ``{tf}_is_closed == True`` are used.
-
-        Args:
-            df:           Wide DataFrame.
-            feature_cols: List of column names to compute stats for.
-        """
-        for col in feature_cols:
-            # Parse TF from column prefix: "15_something" → tf=15
-            parts = col.split("_", 1)
-            try:
-                tf = int(parts[0])
-            except (ValueError, IndexError):
-                # Cannot parse TF — fall back to all rows
-                series = df[col].dropna()
-            else:
-                closed_col = f"{tf}_is_closed"
-                if closed_col in df.columns:
-                    series = df[df[closed_col] == True][col].dropna()  # noqa: E712
-                else:
-                    series = df[col].dropna()
-
-            q01 = float(series.quantile(0.01))
-            q99 = float(series.quantile(0.99))
-            winsorised = series.clip(q01, q99)
-            self.column_stats[col] = {
-                "q01": q01,
-                "q99": q99,
-                "mean": float(winsorised.mean()),
-                "std": max(float(winsorised.std()), 1e-8),
-            }
-
-    def get_stats(self, col: str) -> tuple:
-        """Return ``(q01, q99, mean, std)`` for *col*.
-
-        These four values drive the robust apply path: clip raw to
-        ``[q01, q99]`` → ``(x - mean) / std`` → clamp to ``[-4, +4]``.
-
-        Raises:
-            KeyError: If *col* is not in ``column_stats``.
-        """
-        if col not in self.column_stats:
-            raise KeyError(f"Column '{col}' not found in column_stats")
-        entry = self.column_stats[col]
-        return (
-            float(entry["q01"]),
-            float(entry["q99"]),
-            float(entry["mean"]),
-            float(entry["std"]),
-        )
 
     # ------------------------------------------------------------------
     # Persistence

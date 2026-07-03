@@ -397,10 +397,10 @@ class TestNormalisation:
         assert finite.min() >= -4.0 - 1e-6
         assert finite.max() <= 4.0 + 1e-6
 
-    def test_stats_match_compute_nn_stats_semantics(self, tmp_path):
-        """Stats match DataAttributes.compute_nn_stats: raw per-column values,
-        closed-candle rows only, each timestamp once, restricted to the train
-        split's timestamp span (no val/holdout leak)."""
+    def test_stats_match_winsorised_semantics(self, tmp_path):
+        """Manifest stats match the canonical winsorised formula: raw per-column
+        values, closed-candle rows only, each timestamp once, restricted to the
+        train split's timestamp span (no val/holdout leak)."""
         df = make_wide_df(rows=200)
         spec = small_spec(history_points=2)
         ds = NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
@@ -430,15 +430,6 @@ class TestNormalisation:
         assert got["q99"] == pytest.approx(q99, abs=1e-9)
         assert got["mean"] == pytest.approx(exp_mean, abs=1e-9)
         assert got["std"] == pytest.approx(exp_std, abs=1e-9)
-
-        # Cross-check against the production layer itself on the same train span.
-        attrs = DataAttributes()
-        attrs.compute_nn_stats(df.loc[in_train], feat_cols)
-        layer = attrs.column_stats[col]
-        assert got["q01"] == pytest.approx(layer["q01"], abs=1e-9)
-        assert got["q99"] == pytest.approx(layer["q99"], abs=1e-9)
-        assert got["mean"] == pytest.approx(layer["mean"], abs=1e-9)
-        assert got["std"] == pytest.approx(layer["std"], abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
