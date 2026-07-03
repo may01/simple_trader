@@ -156,6 +156,26 @@ class _Conv1dBlock(nn.Module):
         return x.mean(dim=2)
 
 
+class _Conv1dSeqBlock(nn.Module):
+    """Conv1d over the sequence dim that PRESERVES the time axis: (B,T,F) -> (B,T,C).
+
+    Unlike _Conv1dBlock (which mean-pools time to (B, C)), this keeps the
+    sequence so a following lstm/gru still receives a (B, T, C) tensor. The
+    caller is responsible for padding (kernel//2) so T is preserved.
+    """
+
+    def __init__(self, conv: nn.Conv1d, act: nn.Module) -> None:
+        super().__init__()
+        self.conv = conv
+        self.act = act
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: (B, T, F) → (B, F, T) for conv → (B, C, T) → (B, T, C)
+        x = x.transpose(1, 2)
+        x = self.act(self.conv(x))
+        return x.transpose(1, 2)
+
+
 # ---------------------------------------------------------------------------
 # The spec-built network
 # ---------------------------------------------------------------------------
@@ -177,7 +197,7 @@ class _SpecNet(nn.Module):
 
         layers = spec.layers
         kinds = {layer.kind for layer in layers}
-        sequence_mode = bool(kinds & {"lstm", "gru", "conv1d"})
+        sequence_mode = bool(kinds & {"lstm", "gru", "conv1d", "conv1d_seq"})
 
         backbone: list[nn.Module] = []
         # When any sequence layer is present, the window stays (B, T, F) until
@@ -259,6 +279,20 @@ class _SpecNet(nn.Module):
             )
             backbone.append(_Conv1dBlock(conv, _activation(spec.activation)))
             return layer.units, True
+
+        if kind == "conv1d_seq":
+            kernel = int(layer.params.get("kernel_size", 3))
+            padding = int(layer.params.get("padding", kernel // 2))
+            conv = nn.Conv1d(
+                in_channels=in_dim,
+                out_channels=layer.units,
+                kernel_size=kernel,
+                padding=padding,
+            )
+            backbone.append(_Conv1dSeqBlock(conv, _activation(spec.activation)))
+            # Does NOT collapse the time axis — a following lstm/gru still
+            # sees a sequence. seq_collapsed is passed through unchanged.
+            return layer.units, seq_collapsed
 
         raise ValueError(f"unknown layer kind {kind!r}")
 

@@ -5,8 +5,9 @@
 # nn_train into a "search for a better model": Optuna samples/prunes numeric
 # knobs within `search_space`, an optional NNStrategist (LLM) steers scope.
 #
-# MODEST defaults — fast, bounded, reproducible. Scale rounds/trials/caps up for
-# a real investigation. Per-run caps stop the loop at the FIRST cap reached.
+# Phase-17 locked starting values — bounded, reproducible, fast enough for a
+# single short round of 8 trials. Scale rounds/trials/caps up for a real
+# investigation. Per-run caps stop the loop at the FIRST cap reached.
 #
 # Cap overrides (read from env in Trainer when present, else the value here):
 #   NN_MAX_ROUNDS, NN_TRIALS_PER_ROUND, NN_MAX_WALL_CLOCK_S, NN_MAX_COMPUTE
@@ -14,10 +15,15 @@
 # NN_STRATEGIST), NOT this file.
 
 # How many propose -> Optuna study -> review rounds to run.
-max_rounds: 2
+max_rounds: 1
 
 # Optuna trials per round (each trial = one concrete spec trained + scored).
-trials_per_round: 3
+trials_per_round: 8
+
+# TPE startup trials: Optuna uses random sampling for the first n_startup_trials
+# then switches to its surrogate model. Set to half of trials_per_round so TPE
+# switches to model-guided sampling within a single short round.
+n_startup_trials: 4
 
 # Optuna sampler + pruner (the loop reads these names).
 sampler: tpe
@@ -26,12 +32,12 @@ pruner: median
 # Per-run caps. Whichever is hit first stops the loop regardless of the
 # strategist. max_compute = total trials across all rounds; null = unbounded
 # (bounded only by max_rounds * trials_per_round and the wall-clock cap).
-max_wall_clock_s: 1800
+max_wall_clock_s: 3600
 max_compute: null
 
 # Promotion margin: minimum holdout improvement over the incumbent to promote.
-# 0.0 = any strict improvement promotes (>= comparison in the tracker).
-margin: 0.0
+# 0.01 = require at least 1 pp improvement to promote (avoids noise promotions).
+margin: 0.01
 
 # Seed for reproducibility (spec.seed + Optuna TPE sampler seed).
 seed: 0
@@ -39,7 +45,7 @@ seed: 0
 # Numeric search space — hard bounds Optuna samples within (and the clamp limits
 # the strategist cannot exceed). [lo, hi] per knob.
 search_space:
+  # depth removed: architecture is reasoned, not searched (ADR-0001)
   lr: [1.0e-4, 1.0e-2]
-  depth: [1, 3]
   units: [16, 64]
   dropout: [0.0, 0.3]

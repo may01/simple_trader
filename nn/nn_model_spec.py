@@ -38,7 +38,9 @@ import yaml
 class LayerSpec:
     """One hidden layer in the network.
 
-    kind: "dense" | "lstm" | "gru" | "conv1d"
+    kind: "dense" | "lstm" | "gru" | "conv1d" | "conv1d_seq"
+        conv1d_seq — conv over time, preserves the sequence for a following
+        recurrent layer (unlike conv1d, which mean-pools the time axis away).
     units: layer width / hidden-state size
     params: kind-specific kwargs (e.g. kernel_size, bidirectional)
     """
@@ -85,7 +87,7 @@ class TargetSpec:
                 column is the positive class)
 
     direction / label fields (profit-labels pipeline, Phase 03 Task 07):
-        label_tf, label_m, label_x, strict
+        label_tf, label_m, label_x, strict; label_l, label_y for strict
 
     regression fields:
         transform — "logret"
@@ -103,6 +105,8 @@ class TargetSpec:
     label_m: float | None = None
     label_x: float | None = None
     strict: bool = False
+    label_l: int | None = None      # strict-only: clean-entry lookback window
+    label_y: float | None = None    # strict-only: clean-entry threshold (ATR mult)
 
     # regression
     transform: str = "logret"
@@ -287,6 +291,34 @@ class NNModelSpec:
             targets=targets,
             **raw,
         )
+
+    # ------------------------------------------------------------------
+    # Serialisation
+    # ------------------------------------------------------------------
+
+    def to_dict(self) -> dict:
+        """Return a plain nested dict representation of this spec.
+
+        Calls dataclasses.asdict(self), so all nested dataclasses (LayerSpec,
+        GroupingSpec, TargetSpec) become plain dicts.  device and seed are
+        included (unlike spec_hash, which excludes them).
+        """
+        return asdict(self)
+
+    def to_yaml(self, path: str) -> None:
+        """Write this spec to a YAML file at *path*.
+
+        Creates parent directories if they do not exist.  Dumps with
+        sort_keys=False to preserve dataclass field order for readability;
+        from_yaml reads by key so order does not affect the round-trip.
+        """
+        import os
+
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w") as f:
+            yaml.safe_dump(self.to_dict(), f, sort_keys=False)
 
     # ------------------------------------------------------------------
     # Default factory

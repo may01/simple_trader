@@ -88,9 +88,9 @@ class NNOrchestrator:
         (duck-typed; the real method lands on Trainer in task 11).
         """
         # Imported lazily so device-env reads happen at call time, not import.
-        from nn.device import nn_artefact_root
+        from nn.device import nn_artefact_root, nn_spec_path
 
-        base_spec = NNModelSpec.from_yaml("configs/nn_spec.yaml")
+        base_spec = NNModelSpec.from_yaml(nn_spec_path())
         artefact_root = nn_artefact_root(pair)
         checkpoint_dir = f"{artefact_root}/checkpoints/{base_spec.spec_hash}"
         dataset_dir = f"{artefact_root}/datasets"

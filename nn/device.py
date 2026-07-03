@@ -63,3 +63,12 @@ def nn_artefact_root(pair: str) -> Path:
     artefact_root = os.environ["NN_ARTEFACT_ROOT"]
     data_root = os.environ["DATA_ROOT"]
     return Path(artefact_root) / data_root / pair / "nn"
+
+
+def nn_spec_path() -> str:
+    """Return the path to the NN model spec YAML file.
+
+    Reads NN_SPEC_PATH from the environment at call time.
+    Falls back to "configs/nn_spec.yaml" when the variable is unset.
+    """
+    return os.environ.get("NN_SPEC_PATH", "configs/nn_spec.yaml")

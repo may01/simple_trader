@@ -5,8 +5,8 @@ round is ``propose → Optuna study → train+evaluate trials → record → rev
 
   - **NNStrategist** (LLM, optional) decides *which* indicators / timeframes /
     targets to explore and *when to stop* — the search *scope*.
-  - **Optuna** samples + prunes the numeric knobs (lr / depth / units / dropout)
-    *within* that scope.
+  - **Optuna** samples + prunes the numeric knobs (lr / units / dropout) *within*
+    that scope (architecture depth is reasoned, not searched — ADR-0001).
   - **NNOrchestrator** trains each concrete spec (one NNModel per group).
   - **ExperimentTracker** records every trial and gates promotion on a
     time-ordered holdout.
@@ -44,6 +44,39 @@ if TYPE_CHECKING:  # pragma: no cover — typing only
     from nn.experiment_tracker import ExperimentTracker
     from nn.nn_orchestrator import NNOrchestrator
     from nn.nn_strategist import NNStrategist, Proposal
+
+
+# ---------------------------------------------------------------------------
+# Holdout chunking
+# ---------------------------------------------------------------------------
+
+#: Maximum rows per ``run_batch`` call during holdout evaluation.
+#: Keeps GPU memory bounded regardless of holdout size (fix for OOM on large
+#: holdouts with LSTM models on constrained GPUs).
+HOLDOUT_EVAL_CHUNK: int = 4096
+
+
+def _chunked_predict(model, X_flat: np.ndarray, chunk_size: int) -> np.ndarray:
+    """Run ``model.run_batch`` in fixed-size chunks and concatenate results.
+
+    Args:
+        model:      Any object with a ``run_batch(X: np.ndarray) -> np.ndarray``
+                    method.
+        X_flat:     2-D float32 array of shape ``(n_rows, features)``.
+        chunk_size: Maximum number of rows per ``run_batch`` call.
+
+    Returns:
+        Predictions array of shape ``(n_rows, out_width)``, identical to a
+        single ``model.run_batch(X_flat)`` call but GPU-memory-bounded.
+    """
+    n_rows = X_flat.shape[0]
+    return np.concatenate(
+        [
+            model.run_batch(X_flat[i : i + chunk_size])
+            for i in range(0, n_rows, chunk_size)
+        ],
+        axis=0,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +135,7 @@ class TrainingLoop:
     search_config:
         Read (not invented): ``max_rounds``, ``trials_per_round``,
         ``sampler`` ("tpe"), ``pruner`` ("median"), ``search_space`` bounds +
-        clamps (lr/depth/units/dropout), ``max_wall_clock_s``, ``max_compute``,
+        clamps (lr/units/dropout), ``max_wall_clock_s``, ``max_compute``,
         ``seed``.
     """
 
@@ -162,7 +195,7 @@ class TrainingLoop:
                 proposal = self._propose(round_idx)
 
                 # 2. Per-round Optuna study (incumbent lives in the tracker).
-                sampler = optuna.samplers.TPESampler(seed=seed)
+                sampler = self._make_sampler(seed)
                 pruner = optuna.pruners.MedianPruner()
                 study = optuna.create_study(
                     direction=direction, sampler=sampler, pruner=pruner
@@ -357,8 +390,9 @@ class TrainingLoop:
         """Concrete spec for one trial.
 
         The proposal sets the *structural* scope (indicators / timeframes /
-        targets); Optuna suggests the *numeric* knobs (lr, depth, units,
-        dropout) within the CLAMPED bounds; ``spec.seed`` is set for
+        targets); Optuna suggests the *numeric* knobs (lr, units, dropout)
+        within the CLAMPED bounds (depth is a declared architectural choice, not
+        searched — ADR-0001); ``spec.seed`` is set for
         reproducibility. In degrade mode (proposal is None) the base_spec scope
         is kept unchanged and only the ``search_config`` bounds apply.
         """
@@ -375,20 +409,18 @@ class TrainingLoop:
 
         # Resolve the effective numeric bounds (proposal/clamped or config).
         lr_lo, lr_hi = self._bounds(space, "lr", (1e-5, 1e-2))
-        depth_lo, depth_hi = self._bounds(space, "depth", (1, 3))
         units_lo, units_hi = self._bounds(space, "units", (16, 128))
         drop_lo, drop_hi = self._bounds(space, "dropout", (0.0, 0.5))
 
         # Optuna suggestions within the clamped bounds.
         lr = trial.suggest_float("lr", lr_lo, lr_hi, log=True)
-        depth = trial.suggest_int("depth", int(round(depth_lo)), int(round(depth_hi)))
         units = trial.suggest_int("units", int(round(units_lo)), int(round(units_hi)))
         dropout = trial.suggest_float("dropout", drop_lo, drop_hi)
 
         spec.learning_rate = lr
         spec.dropout = dropout
-        # depth = number of hidden dense layers, each `units` wide.
-        spec.layers = [LayerSpec(kind="dense", units=int(units)) for _ in range(int(depth))]
+        # ADR-0001: keep declared architecture (kind/params/count); tune width only.
+        spec.layers = [dataclasses.replace(layer, units=int(units)) for layer in spec.layers]
         spec.seed = int(seed) if seed is not None else 0
 
         return spec
@@ -502,7 +534,7 @@ class TrainingLoop:
             n_rows_total += n_rows
             # Flatten (rows, T, F) → (rows, T*F) for run_batch.
             X_flat = np.asarray(X, dtype=np.float32).reshape(n_rows, -1)
-            preds = model.run_batch(X_flat)
+            preds = _chunked_predict(model, X_flat, HOLDOUT_EVAL_CHUNK)
             score, target_scores = self._score_predictions(spec, preds, y)
             if score is not None:
                 scores.append(score)
@@ -638,6 +670,22 @@ class TrainingLoop:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _make_sampler(self, seed: int) -> "optuna.samplers.TPESampler":
+        """Build the Optuna TPESampler with n_startup_trials from search_config.
+
+        Reads ``search_config["n_startup_trials"]`` (default 10 — matches the
+        optuna library default so an absent key is a no-op). Phase-17 locks this
+        to 4 (half of ``trials_per_round: 8``) so TPE switches from random
+        sampling to its surrogate model within a single short round.
+
+        Extracted from ``run()`` so the config-driven kwarg is directly testable
+        without invoking the heavy training path.
+        """
+        import optuna  # lazy — keeps module importable in the base image
+
+        n_startup = int(self.search_config.get("n_startup_trials", 10))
+        return optuna.samplers.TPESampler(seed=seed, n_startup_trials=n_startup)
 
     @staticmethod
     def _is_cuda_oom(exc: BaseException) -> bool:
