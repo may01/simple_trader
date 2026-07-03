@@ -708,11 +708,14 @@ class NNModel:
         self.output_size = self._compute_output_size(self.spec)
         self.device = resolve_device(self.spec.device)
 
+        # Restore the resolved feature_cols BEFORE build so the rebuilt net is
+        # sized to the trained (possibly ragged) width — input_size/_n_features
+        # read from feature_cols, not spec arithmetic.
+        self.manifest = bundle.get("manifest")
+        self.feature_cols = bundle.get("feature_cols")
+
         self.model = None
         self.build()
         self.model.load_state_dict(bundle["state_dict"])
         self.model.to(self.device)
-
-        self.manifest = bundle.get("manifest")
-        self.feature_cols = bundle.get("feature_cols")
         self.is_trained = True

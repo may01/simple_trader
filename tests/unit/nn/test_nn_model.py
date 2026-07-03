@@ -534,6 +534,38 @@ def test_load_rebuilds_from_embedded_spec_into_fresh_model(trained_model):
         os.unlink(path)
 
 
+def test_checkpoint_roundtrip_preserves_ragged_width(tmp_path):
+    from indicators import DataAttributes
+    from nn.nn_dataset import NNDataset
+    from tests.unit.nn.test_nn_dataset import make_wide_df, small_spec
+
+    # rows=300 (not the brief's 120): with the small_spec default
+    # history_points=4, tf=60 needs >=4 closed 60-candles before any row has
+    # full lookback depth; 120 rows only yields 2 closes, so every row is
+    # NaN-dropped and NNDataset.build raises "no usable rows". 300 rows give
+    # enough 60-closes (5) to leave a usable slice after the ragged 15/60 NaN
+    # drop while still exercising the same ragged feature_cols_by_tf shape.
+    df = make_wide_df(rows=300)
+    spec = small_spec(
+        timeframes=[15, 60], indicators=["logret", "rsi_14"],
+        layers=[LayerSpec(kind="dense", units=8)], epochs=1, device="cpu",
+    )
+    ds = NNDataset.build(df, DataAttributes(), spec, dataset_dir=str(tmp_path))
+    trained = NNModel(spec)
+    trained.train(ds)
+    assert trained.input_size == 3 * spec.history_points
+
+    path = str(tmp_path / "ckpt.pt")
+    trained.save_model(path)
+
+    loaded = NNModel(spec)
+    loaded.load_model(path)
+    assert loaded.feature_cols == trained.feature_cols
+    assert loaded.input_size == trained.input_size          # ragged width, NOT 2*2*hp
+    x = np.random.randn(loaded.input_size).astype("float32")
+    assert loaded.run(x).shape[0] == loaded.output_size
+
+
 def test_save_model_raises_when_not_built(small_model):
     with pytest.raises(RuntimeError):
         small_model.save_model("/tmp/should_not_exist_task05.pt")
