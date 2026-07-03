@@ -16,6 +16,16 @@ indicators:
   - range_atr
   - ema_50_minus_close
   - macd_12_26_9_slope
+  # Cyclical time features — now safely selectable via ragged per-TF selection:
+  # populated at every TF except 1440 (daily bars → constant intraday time),
+  # where they are dropped (logged), not an error.
+  - sin_tod
+  - cos_tod
+  # align_60 (cross-TF align ladder, tf=15 only) is enabled by ragged selection
+  # too — but the current df_with_indicators.pkl has it all-NaN (the align
+  # factories were registered in the D13 refactor; existing data predates a
+  # working computation). Regenerate df_with_indicators.pkl before enabling:
+  # - align_60
   # vol_regime omitted from the verification spec: its window (200) exceeded
   # INDICATOR_WINDOW_ROWS=105 in the prepare slice → all-NaN. Field default
   # fixed to <=105 (see DECISIONS-LOG D11); re-recalc to populate it, then re-add.
