@@ -32,6 +32,7 @@ from nn.experiment_tracker import ExperimentTracker
 from nn.nn_model import NNModel
 from nn.nn_model_spec import LayerSpec, NNModelSpec, TargetSpec
 from nn.nn_orchestrator import NNOrchestrator
+from nn import training_loop as tl_mod
 from nn.training_loop import (
     RunResult,
     TrainingLoop,
@@ -672,3 +673,70 @@ class TestScorePredictionsPrecisionGate:
         assert per_target["long15"] == 0.5
         assert overall == 0.5
         assert "long15__p@5" not in per_target  # no report extras in accuracy mode
+
+
+class _FakeGroupView:
+    def __init__(self, X, y):
+        self._X, self._y = X, y
+
+    def tensors(self):
+        return self._X, self._y
+
+
+class _FakeSplit:
+    def __init__(self, X, y):
+        self._gv = _FakeGroupView(X, y)
+
+    def group(self, key):
+        return self._gv
+
+
+class _FakeDataset:
+    def __init__(self, X, y):
+        self._split = _FakeSplit(X, y)
+
+    def split(self, name):
+        return self._split
+
+
+class _FakeModel:
+    def __init__(self, preds):
+        self._preds = preds
+
+    def run_batch(self, X):
+        return self._preds[: len(X)]
+
+
+class _FakeOrch:
+    dataset_dir = "/tmp"
+
+    def __init__(self, preds):
+        self.trained_models = {"long": _FakeModel(preds)}
+
+
+class TestEvaluateForwardsGateMetric:
+    X = np.zeros((4, 1, 2), dtype=np.float32)  # (rows, T, F); F must equal head width 2
+    Y = np.array([[1, 0], [0, 1], [1, 0], [0, 1]], dtype=np.float64)
+    PREDS = np.array([[0.9, 0.1], [0.8, 0.2], [0.3, 0.7], [0.1, 0.9]], dtype=np.float64)
+
+    def _loop(self, gate_metric, monkeypatch):
+        monkeypatch.setattr(
+            tl_mod.NNDataset, "build",
+            staticmethod(lambda *a, **k: _FakeDataset(self.X, self.Y)),
+        )
+        tl = TrainingLoop.__new__(TrainingLoop)
+        tl.orchestrator = _FakeOrch(self.PREDS)
+        tl.search_config = {"gate_metric": gate_metric}
+        return tl
+
+    def test_precision_gate_flips_holdout_score(self, monkeypatch):
+        tl = self._loop(GATE_METRIC_PRECISION_AT_K, monkeypatch)
+        out = tl.evaluate_on_holdout(_binary_spec(), df=None, data_attributes=None)
+        assert out["holdout_score"] == 1.0            # precision@5% of top-margin row
+        assert out["per_target"]["long15__p@5"] == 1.0
+
+    def test_accuracy_gate_holdout_score(self, monkeypatch):
+        tl = self._loop("accuracy", monkeypatch)
+        out = tl.evaluate_on_holdout(_binary_spec(), df=None, data_attributes=None)
+        # argmax match rate: row0 ✓, row1 ✗, row2 ✗, row3 ✓ = 2/4 = 0.5
+        assert out["holdout_score"] == 0.5
