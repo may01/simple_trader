@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Batch driver for the 12 profit_strict nn-features-only models.
+"""Batch driver for the 16 profit_strict nn-features-only models.
 
 Backbone = the promoted nn-features-only v2 winner (conv1d_seq -> lstm -> dense,
 46 nn_features x 6 TFs); each model swaps in ONE ``label`` (profit_strict) head
-(side long/short x TF 15/60/240 x horizon n1/n2). Specs live under
+(side long/short x TF 5/15/60/240 x horizon n1/n2). Specs live under
 ``configs/nn_specs/profit_strict/*.yaml``.
 
 Runs INSIDE the nn-train container (torch + volume mounts present):
@@ -35,7 +35,7 @@ from nn.device import nn_artefact_root
 
 SPEC_GLOB = os.environ.get("NN_SPEC_GLOB", "/code/configs/nn_specs/profit_strict/*.yaml")
 PAIR = os.environ.get("PAIR", "link_usdt")
-HEADS_SIDECAR = "df_with_nn_heads.pkl"  # canonical 12-head predictions (viewer ignores)
+HEADS_SIDECAR = "df_with_nn_heads.pkl"  # canonical 16-head predictions (viewer ignores)
 
 
 def _specs():
@@ -93,8 +93,8 @@ def infer(oos_dir):
         valid = int(res[cols[0]].notna().sum()) if cols else 0
         print(f"[infer] ({i}/{len(specs)}) {spec.name}: cols={cols} valid_rows={valid}",
               flush=True)
-    # Canonical 12-head source (viewer ignores it; derive modes read it) + the
-    # viewer artifact df_with_nn.pkl (the 12 heads, until a derive mode narrows it).
+    # Canonical 16-head source (viewer ignores it; derive modes read it) + the
+    # viewer artifact df_with_nn.pkl (the 16 heads, until a derive mode narrows it).
     for out in (os.path.join(oos_dir, HEADS_SIDECAR), os.path.join(oos_dir, "df_with_nn.pkl")):
         tmp = out + ".tmp"
         acc.to_pickle(tmp)
@@ -105,7 +105,7 @@ def infer(oos_dir):
 
 
 def _load_heads(oos_dir):
-    """Return (df, head_cols) of the canonical 12 per-head predictions.
+    """Return (df, head_cols) of the canonical 16 per-head predictions.
 
     Prefers {oos}/df_with_nn_heads.pkl; falls back to df_with_nn.pkl if it still
     carries per-head cols. Errors if neither does (run `infer`).
@@ -141,11 +141,11 @@ def signals(oos_dir, what):
     """Derive viewer signals from the canonical heads and expose *what*.
 
     what ∈ {heads, avg, diff, zdiff, all}:
-      avg   — mean of the 6 long / 6 short heads   (nn_res_avg_{long,short}_prob)
+      avg   — mean of the 8 long / 8 short heads   (nn_res_avg_{long,short}_prob)
       diff  — first difference of each avg          (nn_res_diff_{long,short})
       zdiff — z-score of each diff (over the series)(nn_res_zdiff_{long,short})
       all   — avg + zdiff together
-      heads — the raw 12 per-head predictions
+      heads — the raw 16 per-head predictions
     """
     df, heads = _load_heads(oos_dir)
     long_h = [c for c in heads if str(c).endswith("_long_prob")]
