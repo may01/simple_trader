@@ -32,7 +32,14 @@ from nn.experiment_tracker import ExperimentTracker
 from nn.nn_model import NNModel
 from nn.nn_model_spec import LayerSpec, NNModelSpec, TargetSpec
 from nn.nn_orchestrator import NNOrchestrator
-from nn.training_loop import RunResult, TrainingLoop, precision_at_k, long_base_rate, lift
+from nn.training_loop import (
+    RunResult,
+    TrainingLoop,
+    precision_at_k,
+    long_base_rate,
+    lift,
+    GATE_METRIC_PRECISION_AT_K,
+)
 
 
 # =====================================================================
@@ -628,3 +635,40 @@ class TestLift:
 
     def test_zero_base_rate_returns_zero(self):
         assert lift(0.5, 0.0) == 0.0
+
+
+def _binary_spec():
+    return NNModelSpec(
+        name="t",
+        targets=[
+            TargetSpec(name="long15", kind="direction_binary", horizons=[15], side="long")
+        ],
+    )
+
+
+class TestScorePredictionsPrecisionGate:
+    # 4 rows: cols = [prob_long, prob_other]; y col0 = long truth.
+    Y = np.array([[1, 0], [0, 1], [1, 0], [0, 1]], dtype=float)
+    PREDS = np.array(
+        [[0.9, 0.1], [0.8, 0.2], [0.3, 0.7], [0.1, 0.9]], dtype=float
+    )  # long-margin ranking: row0 > row1 > row2 > row3
+
+    def test_precision_gate_scores_top_k(self):
+        overall, per_target = TrainingLoop._score_predictions(
+            _binary_spec(), self.PREDS, self.Y, GATE_METRIC_PRECISION_AT_K
+        )
+        # k = ceil(0.05*4) = 1; top-margin row0 has y_long=1 → precision@5% = 1.0
+        assert per_target["long15"] == 1.0
+        assert per_target["long15__p@5"] == 1.0
+        assert per_target["long15__lift@5"] == pytest.approx(1.0 / 0.5)  # base_rate 0.5
+        assert "long15__p@1" in per_target and "long15__p@10" in per_target
+        assert overall == 1.0
+
+    def test_accuracy_gate_is_default_and_unchanged(self):
+        overall, per_target = TrainingLoop._score_predictions(
+            _binary_spec(), self.PREDS, self.Y
+        )
+        # argmax: row0 pred0==y0 ✓, row1 pred0 vs y1 ✗, row2 pred1 vs y0 ✗, row3 pred1==y1 ✓
+        assert per_target["long15"] == 0.5
+        assert overall == 0.5
+        assert "long15__p@5" not in per_target  # no report extras in accuracy mode

@@ -574,6 +574,7 @@ class TrainingLoop:
         scores: list[float] = []
         per_target: dict = {}
         n_rows_total = 0
+        gate_metric = str(self.search_config.get("gate_metric", GATE_METRIC_ACCURACY))
 
         for group_key, model in trained.items():
             try:
@@ -588,7 +589,7 @@ class TrainingLoop:
             # Flatten (rows, T, F) → (rows, T*F) for run_batch.
             X_flat = np.asarray(X, dtype=np.float32).reshape(n_rows, -1)
             preds = _chunked_predict(model, X_flat, HOLDOUT_EVAL_CHUNK)
-            score, target_scores = self._score_predictions(spec, preds, y)
+            score, target_scores = self._score_predictions(spec, preds, y, gate_metric)
             if score is not None:
                 scores.append(score)
             for name, val in target_scores.items():
@@ -603,13 +604,17 @@ class TrainingLoop:
         }
 
     @staticmethod
-    def _score_predictions(spec, preds: np.ndarray, y: np.ndarray):
+    def _score_predictions(
+        spec, preds: np.ndarray, y: np.ndarray, gate_metric: str = GATE_METRIC_ACCURACY
+    ):
         """Per-target holdout score from model outputs vs the holdout targets.
 
         Direction → argmax accuracy; label → (prob>0.5) accuracy; regression →
-        a bounded R-like score ``1/(1+MSE)``. Returns ``(overall_mean,
-        {target_name: score})`` over the classification heads (the tracker's
-        direction-accuracy metric); regression heads contribute their score too.
+        a bounded R-like score ``1/(1+MSE)``. ``direction_binary`` under
+        ``gate_metric="precision_at_k"`` → long-class precision@5%. Returns
+        ``(overall_mean, {target_name: score})`` over the classification heads
+        (the tracker's direction-accuracy metric); regression heads contribute
+        their score too.
         """
         preds = np.asarray(preds, dtype=np.float64)
         y = np.asarray(y, dtype=np.float64)
@@ -623,9 +628,24 @@ class TrainingLoop:
                     width = 3 if target.kind == "direction" else 2
                     p = preds[:, offset : offset + width]
                     t = y[:, offset : offset + width]
-                    acc = float((p.argmax(axis=1) == t.argmax(axis=1)).mean())
-                    per_target[target.name] = acc
-                    head_scores.append(acc)
+                    if (
+                        gate_metric == GATE_METRIC_PRECISION_AT_K
+                        and target.kind == "direction_binary"
+                    ):
+                        p_long = p[:, 0] - p[:, 1]
+                        y_long = t[:, 0]
+                        base = long_base_rate(y_long)
+                        for frac, tag in ((0.01, "1"), (0.05, "5"), (0.10, "10")):
+                            pk = precision_at_k(p_long, y_long, frac)
+                            per_target[f"{target.name}__p@{tag}"] = pk
+                            per_target[f"{target.name}__lift@{tag}"] = lift(pk, base)
+                        score = per_target[f"{target.name}__p@5"]
+                        per_target[target.name] = score
+                        head_scores.append(score)
+                    else:
+                        acc = float((p.argmax(axis=1) == t.argmax(axis=1)).mean())
+                        per_target[target.name] = acc
+                        head_scores.append(acc)
                 elif target.kind == "label":
                     width = 1
                     p = preds[:, offset : offset + width]
