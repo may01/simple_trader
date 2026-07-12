@@ -273,10 +273,24 @@ class DataViewer:
     # reads at a glance (up green / neutral gray / down red); other heads
     # (label prob, regression value) fall back to a neutral colour.
     _NN_RES_COLORS = {
+        "avg_long_prob": "green",
+        "avg_short_prob": "red",
+        "zdiff_long": "green",
+        "zdiff_short": "red",
+        "diff_long": "green",
+        "diff_short": "red",
         "prob_up": "green",
         "prob_neutral": "gray",
         "prob_down": "red",
     }
+
+    # Fallback palette for nn_res_* heads without a semantic suffix (e.g. many
+    # `label` heads whose columns all end `_prob`): give each a distinct colour
+    # so a full view of many heads stays legible instead of one colour.
+    _NN_RES_PALETTE = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b",
+        "#e377c2", "#17becf", "#bcbd22", "#7f7f7f", "#393b79", "#e7ba52",
+    ]
 
     @staticmethod
     def _nn_res_cols(df: pd.DataFrame) -> list[str]:
@@ -294,8 +308,8 @@ class DataViewer:
         if "nn" not in getattr(fig, "_subplot_rows", {}):
             return
         times = list(df_slice.index)
-        for col in self._nn_res_cols(df_slice):
-            color = "mediumpurple"
+        for idx, col in enumerate(self._nn_res_cols(df_slice)):
+            color = self._NN_RES_PALETTE[idx % len(self._NN_RES_PALETTE)]
             for suffix, c in self._NN_RES_COLORS.items():
                 if str(col).endswith(suffix):
                     color = c

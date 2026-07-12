@@ -817,6 +817,46 @@ def test_target_block_direction_binary_multi_horizon():
     np.testing.assert_array_equal(block[0], [1.0, 0.0, 0.0, 1.0])
 
 
+def test_target_block_label_long_reads_long_col():
+    from nn.nn_dataset import _target_block, _profit_long_col
+    t = TargetSpec(
+        name="ps15long", kind="label", side="long",
+        horizons=[1], label_tf=15, label_m=1.0, label_x=0.3,
+        strict=True, label_l=15, label_y=0.2,
+    )
+    col = _profit_long_col(t, 1)
+    df = pd.DataFrame({col: [1.0, 0.0, np.nan]})
+    block, entry = _target_block(df, t)
+    assert block.shape == (3, 1)
+    assert entry["out_columns"] == ["nn_res_ps15long_prob"]
+    assert entry["side"] == "long"
+    assert entry["source"] == {"column": col, "strict": True}
+    np.testing.assert_array_equal(block[:, 0], [1.0, 0.0, np.nan])
+
+
+def test_target_block_label_short_reads_short_col():
+    """A short label head must read the SHORT strict column, not the long one.
+
+    Regression for the long-only label bug: only the short column is present,
+    so the historical long-only path would raise 'missing profit-label column'.
+    """
+    from nn.nn_dataset import _target_block, _profit_short_col, _profit_long_col
+    t = TargetSpec(
+        name="ps15short", kind="label", side="short",
+        horizons=[1], label_tf=15, label_m=1.0, label_x=0.3,
+        strict=True, label_l=15, label_y=0.2,
+    )
+    short_col = _profit_short_col(t, 1)
+    long_col = _profit_long_col(t, 1)
+    assert short_col != long_col
+    df = pd.DataFrame({short_col: [1.0, 0.0]})
+    block, entry = _target_block(df, t)
+    assert block.shape == (2, 1)
+    assert entry["side"] == "short"
+    assert entry["source"] == {"column": short_col, "strict": True}
+    np.testing.assert_array_equal(block[:, 0], [1.0, 0.0])
+
+
 class TestTzAwareDatetimeIndex:
     """Regression test for NNDataset._materialise tz-aware index handling.
 

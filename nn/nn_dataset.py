@@ -211,13 +211,21 @@ def _target_block(
         )
 
     elif target.kind == "label":
+        # Side-aware: a short label head reads the SHORT profit column
+        # (strict → psshort). side None or "long" keeps the historical
+        # long-only behaviour (backward compatible).
         srcs = []
         for h in target.horizons:
-            long_col = _profit_long_col(target, h)
-            srcs.append(long_col)
-            if long_col not in df.columns:
-                raise ValueError(f"missing profit-label column {long_col!r}")
-            cols.append(df[long_col].to_numpy(dtype=np.float64).reshape(-1, 1))
+            col = (
+                _profit_short_col(target, h)
+                if target.side == "short"
+                else _profit_long_col(target, h)
+            )
+            srcs.append(col)
+            if col not in df.columns:
+                raise ValueError(f"missing profit-label column {col!r}")
+            cols.append(df[col].to_numpy(dtype=np.float64).reshape(-1, 1))
+        entry["side"] = target.side
         entry["source"] = (
             {"column": srcs[0], "strict": target.strict}
             if len(srcs) == 1
