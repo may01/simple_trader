@@ -83,24 +83,32 @@ labels:
 
 
 def test_real_config_ships_approved_label_set():
-    """indicators_config.yaml carries the approved 12-spec set (6 profit +
-    6 strict over tfs 15/60/240, n in {1,2})."""
+    """indicators_config.yaml carries the approved 14-spec set (6 profit +
+    8 strict over tfs 15/60/240 for profit, 5/15/60/240 for strict; n in {1,2})."""
     specs = load_labels_config("configs/indicators_config.yaml")
-    assert len(specs) == 12
+    assert len(specs) == 14
     plain = [s for s in specs if s.type == "profit"]
     strict = [s for s in specs if s.type == "profit_strict"]
-    assert len(plain) == 6 and len(strict) == 6
+    assert len(plain) == 6 and len(strict) == 8
 
-    expected_x = {15: 0.4, 60: 0.3, 240: 0.2}
-    for group in (plain, strict):
-        combos = {(s.tfs[0], s.n) for s in group}
-        assert combos == {(15, 1), (15, 2), (60, 1), (60, 2), (240, 1), (240, 2)}
-        for s in group:
-            assert s.m == 1
-            assert s.x == expected_x[s.tfs[0]]
+    # Verify plain profit entries: 6 entries over TF15/60/240
+    plain_combos = {(s.tfs[0], s.n) for s in plain}
+    assert plain_combos == {(15, 1), (15, 2), (60, 1), (60, 2), (240, 1), (240, 2)}
+    expected_x_profit = {15: 0.3, 60: 0.2, 240: 0.1}
+    for s in plain:
+        assert s.m == 1
+        assert s.x == expected_x_profit[s.tfs[0]]
+
+    # Verify strict entries: 8 entries over TF5/15/60/240
+    strict_combos = {(s.tfs[0], s.n) for s in strict}
+    assert strict_combos == {(5, 1), (5, 2), (15, 1), (15, 2), (60, 1), (60, 2), (240, 1), (240, 2)}
+    expected_x_strict = {5: 0.3, 15: 0.3, 60: 0.2, 240: 0.1}
+    expected_y_strict = {5: 0.2, 15: 0.2, 60: 0.1, 240: 0.1}
     for s in strict:
+        assert s.m == 1
         assert s.l == 15
-        assert s.y == expected_x[s.tfs[0]]
+        assert s.x == expected_x_strict[s.tfs[0]]
+        assert s.y == expected_y_strict[s.tfs[0]]
 
 
 def test_labels_never_registered_as_fields():
@@ -112,3 +120,19 @@ def test_labels_never_registered_as_fields():
     assert not any("plong" in k or "pshort" in k for k in _FIELD_REGISTRY)
     names = [f.name for f in load_indicators_config()]
     assert not any("plong" in n or "pshort" in n for n in names)
+
+
+def test_tf5_profit_strict_entries_present():
+    specs = load_labels_config("configs/indicators_config.yaml")
+    tf5_strict = [s for s in specs if s.type == "profit_strict" and s.tfs == [5]]
+    assert len(tf5_strict) == 2, "expected exactly two profit_strict tfs:[5] entries (n1, n2)"
+    by_n = {s.n: s for s in tf5_strict}
+    assert set(by_n) == {1, 2}
+    for s in tf5_strict:
+        assert s.m == 1.0 and s.x == 0.3 and s.l == 15 and s.y == 0.2
+
+
+def test_no_nonstrict_profit_tf5():
+    specs = load_labels_config("configs/indicators_config.yaml")
+    assert not [s for s in specs if s.type == "profit" and s.tfs == [5]], \
+        "strict only — no non-strict profit tf5 entries"
