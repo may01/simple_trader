@@ -1,0 +1,94 @@
+name: nnfo_p60_n1_long
+grouping:
+  mode: single
+  column: null
+  bins: null
+  classes: null
+timeframes:
+- 15
+- 60
+- 240
+indicators:
+- nn_rsi_ma8_norm_mean_20
+- nn_close_diff_atr_14_ma_5
+- bb_upper_20_2_minus_close
+- bb_middle_20_2_minus_close
+- bb_lower_20_2_minus_close
+- ema_7_minus_close
+- ema_14_minus_close
+- ema_25_minus_close
+- ema_50_minus_close
+- ema_100_minus_close
+- vol_ma_20_minus_volume
+- ema_7_minus_ema_14
+- ema_7_minus_ema_25
+- ema_7_minus_ema_50
+- ema_7_minus_ema_100
+- ema_14_minus_ema_25
+- ema_14_minus_ema_50
+- ema_14_minus_ema_100
+- ema_25_minus_ema_50
+- ema_25_minus_ema_100
+- ema_50_minus_ema_100
+- atr_14_ma_5_minus_atr_14
+- natr_14_ma_5_minus_natr_14
+- macd_12_26_9_slope
+- macd_signal_12_26_9_slope
+- macd_5_13_9_slope
+- macd_signal_5_13_9_slope
+- ema_7_slope
+- ema_14_slope
+- ema_25_slope
+- ema_50_slope
+- ema_100_slope
+- adx_14_slope
+- rsi_ma8_slope
+- rsi_ma12_slope
+- rsi_ma24_slope
+- cci_14_ma_5_slope
+- logret
+- range_atr
+- body_ratio
+- wick_up
+- wick_dn
+- sin_tod
+- cos_tod
+- sin_dow
+- cos_dow
+history_points: 8
+layers:
+- kind: conv1d_seq
+  units: 22
+  params:
+    kernel_size: 3
+- kind: lstm
+  units: 22
+  params: {}
+- kind: dense
+  units: 22
+  params: {}
+activation: relu
+dropout: 0.006230650430080004
+targets:
+- name: p60_n1_long
+  kind: label
+  side: long
+  horizons:
+  - 1
+  label_tf: 60
+  label_m: 1.0
+  label_x: 0.2
+  strict: false
+loss_fn: auto
+optimizer: adam
+learning_rate: 0.007609292035030056
+weight_decay: 0.0
+batch_size: 64
+epochs: 50
+validation_split: 0.2
+val_strategy: time_holdout
+early_stopping_patience: 8
+class_weight: balanced
+shuffle_train: true
+device: auto
+seed: 0
