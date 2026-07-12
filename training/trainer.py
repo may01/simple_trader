@@ -14,8 +14,6 @@ import json
 import os
 import pickle
 
-from nn.training_loop import GATE_METRIC_ACCURACY, VALID_GATE_METRICS
-
 
 class _DefaultStrategyFactory:
     """Picklable StrategyManager factory.
@@ -398,6 +396,7 @@ class Trainer:
         NN_TRIALS_PER_ROUND, NN_MAX_WALL_CLOCK_S, NN_MAX_COMPUTE, NN_SEED.
         """
         import yaml  # lazy
+        from nn.training_loop import GATE_METRIC_ACCURACY, VALID_GATE_METRICS  # lazy (deferred to keep module import light)
 
         path = os.path.join(self.config_path, "nn_search.yaml")
         with open(path) as f:
