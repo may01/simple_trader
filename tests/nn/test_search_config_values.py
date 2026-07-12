@@ -44,7 +44,7 @@ def test_searched_params_present():
 
 def test_gate_metric_defaults_to_accuracy_when_absent(tmp_path):
     cfg = _loader(tmp_path, "margin: 0.01\n")()
-    assert cfg.get("gate_metric", "accuracy") == "accuracy"  # no crash, absent is fine
+    assert cfg["gate_metric"] == "accuracy"
 
 def test_gate_metric_from_yaml(tmp_path):
     cfg = _loader(tmp_path, "gate_metric: precision_at_k\n")()

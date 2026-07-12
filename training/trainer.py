@@ -14,6 +14,8 @@ import json
 import os
 import pickle
 
+from nn.training_loop import GATE_METRIC_ACCURACY, VALID_GATE_METRICS
+
 
 class _DefaultStrategyFactory:
     """Picklable StrategyManager factory.
@@ -415,12 +417,13 @@ class Trainer:
         _override("max_compute", "NN_MAX_COMPUTE", int)
         _override("seed", "NN_SEED", int)
         _override("gate_metric", "NN_GATE_METRIC", str)
-        gate_metric = cfg.get("gate_metric", "accuracy")
-        if gate_metric not in ("accuracy", "precision_at_k"):
+        gate_metric = cfg.get("gate_metric", GATE_METRIC_ACCURACY)
+        if gate_metric not in VALID_GATE_METRICS:
             raise ValueError(
-                "gate_metric must be 'accuracy' or 'precision_at_k', "
-                f"got {gate_metric!r}"
+                "gate_metric must be one of "
+                f"{VALID_GATE_METRICS}, got {gate_metric!r}"
             )
+        cfg["gate_metric"] = gate_metric
         return cfg
 
     def _run_infer_nn(self) -> None:
