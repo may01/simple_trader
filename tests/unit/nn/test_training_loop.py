@@ -32,7 +32,7 @@ from nn.experiment_tracker import ExperimentTracker
 from nn.nn_model import NNModel
 from nn.nn_model_spec import LayerSpec, NNModelSpec, TargetSpec
 from nn.nn_orchestrator import NNOrchestrator
-from nn.training_loop import RunResult, TrainingLoop
+from nn.training_loop import RunResult, TrainingLoop, precision_at_k, long_base_rate, lift
 
 
 # =====================================================================
@@ -572,3 +572,59 @@ class TestScorePredictionsDirectionBinary:
         assert per_target["dir15"] == 1.0
         assert per_target["long15"] == 1.0   # FAILS before the fix (~0.976, MSE-scored on 1 col)
         assert overall == 1.0
+
+
+class TestPrecisionAtK:
+    def test_perfect_ranking_top_all_long(self):
+        p = np.array([0.9, 0.8, 0.1, 0.2])
+        y = np.array([1.0, 1.0, 0.0, 0.0])
+        # k = ceil(0.5*4) = 2; top-2 by score are both long → 1.0
+        assert precision_at_k(p, y, k_frac=0.5) == 1.0
+
+    def test_all_negative_zero(self):
+        p = np.array([0.9, 0.8, 0.1, 0.2])
+        y = np.zeros(4)
+        assert precision_at_k(p, y, k_frac=0.5) == 0.0
+
+    def test_k_ceil_rounding(self):
+        p = np.arange(10, 0, -1).astype(float)  # 10..1 descending
+        y = np.zeros(10); y[0] = 1.0
+        # k = ceil(0.05*10) = 1 → top-1 is the single long → 1.0
+        assert precision_at_k(p, y, k_frac=0.05) == 1.0
+
+    def test_k_ge_n_uses_all_rows(self):
+        p = np.array([1.0, 2.0, 3.0])
+        y = np.array([1.0, 0.0, 1.0])
+        assert precision_at_k(p, y, k_frac=1.0) == pytest.approx(2 / 3)
+
+    def test_empty_returns_zero(self):
+        assert precision_at_k(np.array([]), np.array([])) == 0.0
+
+    def test_ties_stable_sort(self):
+        p = np.array([0.5, 0.5, 0.5, 0.5])
+        y = np.array([1.0, 0.0, 0.0, 0.0])
+        # all tied; k=1; stable sort keeps index 0 first → the long → 1.0
+        assert precision_at_k(p, y, k_frac=0.05) == 1.0
+
+    def test_nan_labels_dropped(self):
+        p = np.array([0.9, 0.8, 0.1])
+        y = np.array([1.0, np.nan, 0.0])
+        # valid rows {0:long, 2:other}; k=ceil(0.5*2)=1 → top-1 idx0 long → 1.0
+        assert precision_at_k(p, y, k_frac=0.5) == 1.0
+
+
+class TestLongBaseRate:
+    def test_fraction_long_ignoring_nan(self):
+        y = np.array([1.0, 0.0, np.nan, 1.0])
+        assert long_base_rate(y) == pytest.approx(2 / 3)
+
+    def test_all_nan_returns_zero(self):
+        assert long_base_rate(np.array([np.nan, np.nan])) == 0.0
+
+
+class TestLift:
+    def test_normal(self):
+        assert lift(0.5, 0.1) == pytest.approx(5.0)
+
+    def test_zero_base_rate_returns_zero(self):
+        assert lift(0.5, 0.0) == 0.0

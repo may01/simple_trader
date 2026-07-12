@@ -55,6 +55,16 @@ if TYPE_CHECKING:  # pragma: no cover — typing only
 #: holdouts with LSTM models on constrained GPUs).
 HOLDOUT_EVAL_CHUNK: int = 4096
 
+#: Top-fraction of bars (ranked by long score) used for the precision@k gate.
+#: Single edit point to retune k.
+PRECISION_AT_K_FRAC: float = 0.05
+
+#: Promotion/search gate metric selector. "accuracy" preserves the legacy argmax
+#: gate; "precision_at_k" optimises long-class precision on rare-positive targets.
+GATE_METRIC_ACCURACY: str = "accuracy"
+GATE_METRIC_PRECISION_AT_K: str = "precision_at_k"
+VALID_GATE_METRICS: tuple[str, ...] = (GATE_METRIC_ACCURACY, GATE_METRIC_PRECISION_AT_K)
+
 
 def _chunked_predict(model, X_flat: np.ndarray, chunk_size: int) -> np.ndarray:
     """Run ``model.run_batch`` in fixed-size chunks and concatenate results.
@@ -77,6 +87,49 @@ def _chunked_predict(model, X_flat: np.ndarray, chunk_size: int) -> np.ndarray:
         ],
         axis=0,
     )
+
+
+def precision_at_k(
+    p_long: np.ndarray, y_long: np.ndarray, k_frac: float = PRECISION_AT_K_FRAC
+) -> float:
+    """Precision within the top ``k_frac`` of rows ranked by long score.
+
+    ``p_long`` = per-row long score (higher = more long, e.g. the logit margin
+    ``preds[:,0] - preds[:,1]``). ``y_long`` = 0/1 truth (1 = truly long). Rows
+    with NaN in either array are dropped. Returns ``TP / k`` over the top
+    ``k = ceil(k_frac * N_valid)`` rows (stable sort for ties). Degenerate input
+    (no valid rows) → ``0.0``.
+    """
+    p = np.asarray(p_long, dtype=np.float64).ravel()
+    y = np.asarray(y_long, dtype=np.float64).ravel()
+    valid = ~np.isnan(p) & ~np.isnan(y)
+    p = p[valid]
+    y = y[valid]
+    n = p.shape[0]
+    if n == 0:
+        return 0.0
+    k = int(np.ceil(k_frac * n))
+    k = max(1, min(k, n))
+    order = np.argsort(-p, kind="stable")
+    top = order[:k]
+    tp = float((y[top] == 1.0).sum())
+    return tp / k
+
+
+def long_base_rate(y_long: np.ndarray) -> float:
+    """Fraction of valid (non-NaN) rows that are truly long. Empty → ``0.0``."""
+    y = np.asarray(y_long, dtype=np.float64).ravel()
+    valid = ~np.isnan(y)
+    if not valid.any():
+        return 0.0
+    return float((y[valid] == 1.0).mean())
+
+
+def lift(precision: float, base_rate: float) -> float:
+    """``precision / base_rate``; ``0.0`` when ``base_rate <= 0`` (no div-by-zero)."""
+    if base_rate <= 0.0:
+        return 0.0
+    return precision / base_rate
 
 
 # ---------------------------------------------------------------------------
