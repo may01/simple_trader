@@ -414,6 +414,13 @@ class Trainer:
         _override("max_wall_clock_s", "NN_MAX_WALL_CLOCK_S", float)
         _override("max_compute", "NN_MAX_COMPUTE", int)
         _override("seed", "NN_SEED", int)
+        _override("gate_metric", "NN_GATE_METRIC", str)
+        gate_metric = cfg.get("gate_metric", "accuracy")
+        if gate_metric not in ("accuracy", "precision_at_k"):
+            raise ValueError(
+                "gate_metric must be 'accuracy' or 'precision_at_k', "
+                f"got {gate_metric!r}"
+            )
         return cfg
 
     def _run_infer_nn(self) -> None:

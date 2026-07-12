@@ -39,6 +39,9 @@ max_compute: null
 # 0.01 = require at least 1 pp improvement to promote (avoids noise promotions).
 margin: 0.01
 
+# Gate metric: accuracy | precision_at_k  (promotion + search gate)
+gate_metric: accuracy
+
 # Seed for reproducibility (spec.seed + Optuna TPE sampler seed).
 seed: 0
 
