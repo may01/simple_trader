@@ -294,6 +294,12 @@ class DataViewer:
     # (label prob, regression value) gets its own distinct per-head colour
     # (``_nn_distinct_color``) so a many-head coexist view stays legible.
     _NN_RES_COLORS = {
+        "avg_long_prob": "green",
+        "avg_short_prob": "red",
+        "zdiff_long": "green",
+        "zdiff_short": "red",
+        "diff_long": "green",
+        "diff_short": "red",
         "prob_up": "green",
         "prob_neutral": "gray",
         "prob_down": "red",

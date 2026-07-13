@@ -760,6 +760,22 @@ labels:
     l: 15
     y: 0.2
 
+  - type: profit_strict
+    tfs: [5]
+    n: 1
+    m: 1
+    x: 0.3
+    l: 15
+    y: 0.2
+
+  - type: profit_strict
+    tfs: [5]
+    n: 2
+    m: 1
+    x: 0.3
+    l: 15
+    y: 0.2
+
   - type: profit
     tfs: [60]
     n: 1
