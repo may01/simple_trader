@@ -111,17 +111,28 @@ class ChartRenderer:
         times: list,
         values: list,
         label: str,
-        color: str = "blue",
+        color: str = "",
+        dash: str | None = None,
+        width: float | None = None,
     ) -> None:
-        """Add a line (Scatter) trace to the specified subplot."""
+        """Add a line (Scatter) trace to the specified subplot.
+
+        ``dash``/``width`` are applied only when non-None, so omitting them
+        reproduces the default plotly line styling (backward-compatible).
+        """
         row = fig._subplot_rows[subplot]
+        line: dict = {"color": color}
+        if dash is not None:
+            line["dash"] = dash
+        if width is not None:
+            line["width"] = width
         fig.add_trace(
             go.Scatter(
                 x=times,
                 y=values,
                 mode="lines",
                 name=label,
-                line={"color": color},
+                line=line,
             ),
             row=row,
             col=1,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import colorsys
 import re
 from typing import Optional, Any
 
@@ -147,8 +148,27 @@ class DataViewer:
     # Overlay groups unchecked on first load (still drawable via their toggle).
     _DEFAULT_OVERLAYS_OFF = {"bb_x_10_15", "bb_x_20_3", "sar"}
 
-    # Target/stop-loss overlays — always drawn, never toggleable.
+    # Target/stop-loss overlays — always drawn (at the chart tf), never toggleable.
     _TARGET_OVERLAYS = ["tgt_long", "sl_long", "tgt_short", "sl_short"]
+
+    # Higher-TF target/SL overlay groups. The four target fields are computed
+    # only for these TFs (applies_to [15,60,240,1440]); on a chart finer than 15
+    # (tf 1/5) the native columns are absent, so each group re-draws its pinned
+    # source TF's target lines onto the finer chart. Toggleable; gated to tf<15
+    # (see _draw_price_overlays). group name -> source tf.
+    _TARGET_TF_GROUPS = {
+        "tgtsl_15m": 15, "tgtsl_60m": 60, "tgtsl_240m": 240, "tgtsl_1440m": 1440,
+    }
+
+    # Only the nearest (15m) group is on by first load; coarser TFs are one
+    # click away so the finer chart is not swamped with 16 lines.
+    _TARGET_TF_DEFAULT_OFF = {"tgtsl_60m", "tgtsl_240m", "tgtsl_1440m"}
+
+    # Source TF -> (line dash, width): nearest solid+bold, farther dashed+thin,
+    # so on a 1m chart the 15m levels read strongest and 1440m faintest.
+    _TARGET_TF_STYLE = {
+        15: (None, 2.0), 60: ("dash", 1.6), 240: ("dot", 1.3), 1440: ("dashdot", 1.0),
+    }
 
     _OVERLAY_COLORS = {
         "bb_upper_20_2": "royalblue", "bb_middle_20_2": "royalblue",
@@ -270,13 +290,27 @@ class DataViewer:
     # NN inference result columns are timeframe-agnostic (no ``{tf}_`` prefix),
     # produced by NNOrchestrator.run_inference and left-joined by
     # ``data.join_nn_results``. Colour by semantic suffix so a direction head
-    # reads at a glance (up green / neutral gray / down red); other heads
-    # (label prob, regression value) fall back to a neutral colour.
+    # reads at a glance (up green / neutral gray / down red); every other head
+    # (label prob, regression value) gets its own distinct per-head colour
+    # (``_nn_distinct_color``) so a many-head coexist view stays legible.
     _NN_RES_COLORS = {
         "prob_up": "green",
         "prob_neutral": "gray",
         "prob_down": "red",
     }
+
+    @staticmethod
+    def _nn_distinct_color(index: int) -> str:
+        """Deterministic distinct colour for the *index*-th non-semantic NN head.
+
+        Golden-angle hue stepping (0.618 turns per step) spreads consecutive
+        heads far apart on the colour wheel, so a 32-head coexist view reads as
+        distinct lines instead of one single-colour blob. Fixed saturation and
+        value keep every line legible on the subplot.
+        """
+        hue = (index * 0.61803398875) % 1.0
+        r, g, b = colorsys.hsv_to_rgb(hue, 0.65, 0.85)
+        return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
 
     @staticmethod
     def _nn_res_cols(df: pd.DataFrame) -> list[str]:
@@ -294,12 +328,16 @@ class DataViewer:
         if "nn" not in getattr(fig, "_subplot_rows", {}):
             return
         times = list(df_slice.index)
+        palette_i = 0
         for col in self._nn_res_cols(df_slice):
-            color = "mediumpurple"
+            color = None
             for suffix, c in self._NN_RES_COLORS.items():
                 if str(col).endswith(suffix):
                     color = c
                     break
+            if color is None:
+                color = self._nn_distinct_color(palette_i)
+                palette_i += 1
             self.renderer.draw_line(
                 fig, "nn", times, list(df_slice[col]), label=str(col), color=color
             )
@@ -419,20 +457,29 @@ class DataViewer:
         fields exists for at least one available TF, so the list is
         TF-independent and usable as one control for all TFs.
         """
-        tfs = self.available_tfs()
         cols = set(self.full_data.df.columns)
-        return [
+        tfs = self.available_tfs()
+        groups = [
             group
             for group, fields in self._OVERLAY_GROUPS.items()
             if any(f"{tf}_{f}" in cols for tf in tfs for f in fields)
         ]
+        # Higher-TF target/SL groups: included when the source TF's target
+        # columns exist AND there is a chart finer than 15min to draw them on
+        # (they are gated to tf<15). Without a sub-15 TF the toggle would be a
+        # dead checkbox, so it is omitted.
+        if any(tf < min(self._TARGET_TF_GROUPS.values()) for tf in tfs):
+            groups += [
+                group
+                for group, src_tf in self._TARGET_TF_GROUPS.items()
+                if any(f"{src_tf}_{f}" in cols for f in self._TARGET_OVERLAYS)
+            ]
+        return groups
 
     def default_overlays(self) -> list[str]:
-        """Overlay groups checked on first load — available minus the off set."""
-        return [
-            g for g in self.available_overlays()
-            if g not in self._DEFAULT_OVERLAYS_OFF
-        ]
+        """Overlay groups checked on first load — available minus the off sets."""
+        off = self._DEFAULT_OVERLAYS_OFF | self._TARGET_TF_DEFAULT_OFF
+        return [g for g in self.available_overlays() if g not in off]
 
     def build_window_figure(
         self,
@@ -796,6 +843,45 @@ class DataViewer:
             else:
                 self.renderer.draw_line(
                     fig, "price", times, values, label=name, color=color,
+                )
+
+        self._draw_higher_tf_targets(fig, df_slice, tf, overlays, times)
+
+    def _draw_higher_tf_targets(
+        self,
+        fig: go.Figure,
+        df_slice: pd.DataFrame,
+        tf: int,
+        overlays: list[str] | None,
+        times: list,
+    ) -> None:
+        """Overlay higher-TF target/SL step lines on charts finer than 15min.
+
+        Only fires for tf < 15 (tf 1/5); tf>=15 keeps its native always-on
+        target rendering untouched. Each enabled ``tgtsl_{H}m`` group draws its
+        pinned source TF's four target columns (already flat-per-row in the wide
+        df) as TF-suffixed lines styled by source TF. ``overlays=None`` draws all
+        groups; a list restricts to the named ones; ``[]`` draws none.
+        Skip-if-absent per column.
+        """
+        if tf >= min(self._TARGET_TF_GROUPS.values()):
+            return
+        # Draw descending TF so the nearest (15m) sits on top.
+        for group, src_tf in sorted(
+            self._TARGET_TF_GROUPS.items(), key=lambda kv: -kv[1]
+        ):
+            if overlays is not None and group not in overlays:
+                continue
+            dash, width = self._TARGET_TF_STYLE[src_tf]
+            for name in self._TARGET_OVERLAYS:
+                col = f"{src_tf}_{name}"
+                if col not in df_slice.columns:
+                    continue
+                self.renderer.draw_line(
+                    fig, "price", times, list(df_slice[col]),
+                    label=f"{name}·{src_tf}m",
+                    color=self._OVERLAY_COLORS.get(name, "gray"),
+                    dash=dash, width=width,
                 )
 
     def view_full(

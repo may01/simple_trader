@@ -102,6 +102,66 @@ def test_draw_nn_results_colors_by_suffix():
     assert colors["nn_res_dir15_prob_neutral"] == "gray"
 
 
+def _draw_and_collect_colors(df):
+    v = _viewer(df)
+    renderer = MagicMock()
+    fig = MagicMock()
+    fig._subplot_rows = {"price": 1, "nn": 2}
+    v.renderer = renderer
+    v._draw_nn_results(fig, df)
+    return {
+        c.kwargs["label"]: c.kwargs["color"]
+        for c in renderer.draw_line.call_args_list
+    }
+
+
+def _df_with_label_heads(heads, n=30, tf=15):
+    idx = pd.date_range("2024-01-01", periods=n, freq="1min", tz="UTC")
+    data = {
+        f"{tf}_open": np.linspace(100, 110, n),
+        f"{tf}_high": np.linspace(105, 115, n),
+        f"{tf}_low": np.linspace(95, 105, n),
+        f"{tf}_close": np.linspace(102, 112, n),
+        f"{tf}_volume": np.linspace(1000, 2000, n),
+    }
+    for i, h in enumerate(heads):
+        data[h] = np.linspace(0.1 + 0.01 * i, 0.5, n)
+    return pd.DataFrame(data, index=idx)
+
+
+def test_label_heads_get_distinct_colors():
+    """Every non-semantic (label _prob) head draws its own distinct colour —
+    not the single shared fallback."""
+    heads = [
+        "nn_res_ps15_n1_long_prob", "nn_res_ps15_n1_short_prob",
+        "nn_res_ps60_n2_long_prob", "nn_res_psh8_5_n1_short_prob",
+        "nn_res_psh8_240_n2_long_prob",
+    ]
+    colors = _draw_and_collect_colors(_df_with_label_heads(heads))
+    vals = [colors[h] for h in heads]
+    assert len(set(vals)) == len(heads), vals          # all distinct
+    assert all(c != "mediumpurple" for c in vals)      # not the old blob colour
+
+
+def test_label_head_colors_are_deterministic():
+    heads = ["nn_res_ps15_n1_long_prob", "nn_res_ps60_n2_short_prob"]
+    df = _df_with_label_heads(heads)
+    assert _draw_and_collect_colors(df) == _draw_and_collect_colors(df)
+
+
+def test_semantic_heads_keep_colors_alongside_label_heads():
+    """Direction heads keep green/red/gray even when label heads are present."""
+    heads = [
+        "nn_res_dir15_prob_up", "nn_res_dir15_prob_down",
+        "nn_res_dir15_prob_neutral", "nn_res_ps15_n1_long_prob",
+    ]
+    colors = _draw_and_collect_colors(_df_with_label_heads(heads))
+    assert colors["nn_res_dir15_prob_up"] == "green"
+    assert colors["nn_res_dir15_prob_down"] == "red"
+    assert colors["nn_res_dir15_prob_neutral"] == "gray"
+    assert colors["nn_res_ps15_n1_long_prob"] not in ("green", "red", "gray")
+
+
 def test_draw_nn_results_skips_when_subplot_hidden():
     df = _make_df(with_nn=True)
     v = _viewer(df)
