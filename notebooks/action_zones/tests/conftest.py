@@ -36,21 +36,6 @@ if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
 
-def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    """Treat "no tests collected" as success (exit 0), not pytest's default 5.
-
-    Task 0 ships this suite empty by design (later tasks add the first real
-    tests) and the Docker gate command is fixed as
-    ``pytest notebooks/action_zones/tests -v`` with no extra flags, so this
-    can't be handled via a CLI flag — it has to live here. Scoped to this
-    conftest only: running the repo's top-level `tests/` suite (a sibling,
-    unrelated directory) never loads this hook, so its exit-code behavior is
-    untouched.
-    """
-    if session.exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED:
-        session.exitstatus = pytest.ExitCode.OK
-
-
 # --- synthetic_wide_df fixture (Appendix A) ---------------------------------
 
 # Fixed seed constant. NEVER replace with time.time()/os.urandom/an unseeded
