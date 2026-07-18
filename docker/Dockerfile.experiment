@@ -1,0 +1,27 @@
+# Dockerfile.experiment — action_zones research image (JupyterLab + papermill)
+#
+# Build FROM simple_trader (the always-on trading image), matching the
+# pattern used by docker/Dockerfile.nn-train: the base image already carries
+# python3.12, pandas, numpy, TA-Lib and pytest, so this layer only adds the
+# notebook-authoring / modelling extras needed for the action_zones
+# experiment. These packages must never leak into the always-on image, so
+# they are installed HERE, not in the base Dockerfile/requirements.txt.
+
+FROM simple_trader:latest
+
+# jupyterlab/papermill: interactive + headless notebook execution.
+# scikit-learn/scipy: regression/classification (azlib.models, later tasks).
+# matplotlib/plotly: charting for notebooks (later chart/notebook layers).
+RUN pip install --no-cache-dir \
+    jupyterlab \
+    papermill \
+    scikit-learn \
+    scipy \
+    matplotlib \
+    plotly
+
+WORKDIR /code
+
+# Source code is mounted at /code via compose volume — NOT copied into image.
+# No CMD here — docker-compose.experiment.yml defines the default command
+# (jupyter lab) and later tasks override it (pytest, papermill) per-run.
