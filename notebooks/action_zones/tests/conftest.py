@@ -75,29 +75,39 @@ _TFS = (15, 60, 240)
 _START_PRICE = 20.0
 
 
-def _build_ohlcv(rng: np.random.Generator) -> pd.DataFrame:
+def _build_ohlcv(
+    rng: np.random.Generator, n_rows: int = _N_ROWS, vol_scale: float = 1.0
+) -> pd.DataFrame:
     """Base 1-minute OHLCV via a seeded log-return random walk.
 
     high/low are the close plus/minus an independent, strictly non-negative
     "wick" so every row satisfies ``high >= close >= low`` by construction
     (required: 1_high >= 1_close >= 1_low, per the task brief).
-    """
-    index = pd.date_range("2024-01-01", periods=_N_ROWS, freq="1min", name="timestamp")
 
-    log_returns = rng.normal(loc=0.0, scale=0.0015, size=_N_ROWS)
+    ``n_rows``/``vol_scale`` (Task 8 addition, default to the original
+    fixture's own 750/1.0 so every EXISTING caller of ``_build_ohlcv`` is
+    unaffected): ``vol_scale`` multiplies both the log-return std and the
+    wick means/stds uniformly, so a caller needing MORE label/zone
+    "reachability" within a short forward window (Task 8's
+    ``two_synthetic_datasets`` fixture — see below) can turn up realized
+    volatility without hand-tuning three separate scale constants.
+    """
+    index = pd.date_range("2024-01-01", periods=n_rows, freq="1min", name="timestamp")
+
+    log_returns = rng.normal(loc=0.0, scale=0.0015 * vol_scale, size=n_rows)
     close = _START_PRICE * np.exp(np.cumsum(log_returns))
 
     # abs() guarantees the wick is >= 0, so high >= close >= low always holds
     # (equality is fine — the brief only requires >=, not strict >). A small
     # additive floor keeps high strictly > low so true-range (used by ATR)
     # never collapses to exactly zero.
-    wick_up = np.abs(rng.normal(loc=0.0008, scale=0.0006, size=_N_ROWS)) * close + 1e-6
-    wick_dn = np.abs(rng.normal(loc=0.0008, scale=0.0006, size=_N_ROWS)) * close + 1e-6
+    wick_up = np.abs(rng.normal(loc=0.0008 * vol_scale, scale=0.0006 * vol_scale, size=n_rows)) * close + 1e-6
+    wick_dn = np.abs(rng.normal(loc=0.0008 * vol_scale, scale=0.0006 * vol_scale, size=n_rows)) * close + 1e-6
     high = close + wick_up
     low = close - wick_dn
     open_ = np.concatenate(([close[0]], close[:-1]))
-    volume = rng.uniform(50.0, 500.0, size=_N_ROWS)
-    taker_base_vol = volume * rng.uniform(0.3, 0.7, size=_N_ROWS)
+    volume = rng.uniform(50.0, 500.0, size=n_rows)
+    taker_base_vol = volume * rng.uniform(0.3, 0.7, size=n_rows)
 
     return pd.DataFrame(
         {
@@ -214,9 +224,17 @@ def _add_tf_columns(df: pd.DataFrame, tf: int) -> None:
     df[f"{tf}_ema_25"] = ema_25
 
 
-def _make_synthetic_wide_df() -> pd.DataFrame:
-    rng = np.random.default_rng(_SEED)
-    df = _build_ohlcv(rng)
+def _make_synthetic_wide_df(
+    seed: int = _SEED, n_rows: int = _N_ROWS, vol_scale: float = 1.0
+) -> pd.DataFrame:
+    """Build one synthetic wide df. ``seed``/``n_rows``/``vol_scale`` default
+    to the original fixture's own values (Task 8 addition — every EXISTING
+    caller, i.e. the plain ``synthetic_wide_df`` fixture below, is
+    unaffected). See ``two_synthetic_datasets`` (Task 8) for why a second,
+    independently-seeded/higher-volatility variant is needed.
+    """
+    rng = np.random.default_rng(seed)
+    df = _build_ohlcv(rng, n_rows=n_rows, vol_scale=vol_scale)
 
     # 1_high/1_low/1_close: tf=1 case of the same aggregation (see
     # _add_tf_columns docstring) — equal to the raw high/low/close.
@@ -430,4 +448,109 @@ def synthetic_pipeline_full(synthetic_wide_df) -> dict:
         "direction": direction,
         "zone_limit": zone_limit,
         "levels": levels,
+    }
+
+
+# --- two_synthetic_datasets fixture (Task 8's own integration test) --------
+#
+# task-8-brief.md's required RED integration test:
+#   def test_train_then_oos_metrics(monkeypatch, two_synthetic_datasets):
+#       rp = run_train("train.env", tf=15, direction="long")
+#       zoos = run_oos(rp, "oos.env")
+#       m = metrics(zoos, 15, "long", label_params={})
+#       assert 0 <= m["strict_coverage"] <= 1 and "realized_rr" in m
+#
+# `run_train`/`run_oos` are "env-driven": they set os.environ from a passed
+# env-FILE path (azlib.validate._apply_env_file, a real KEY=VALUE parser --
+# see that module) and then call `load_wide_df()` (env-driven itself, via
+# helpers.wide_df_path()). This fixture therefore does two, and only two,
+# things a real Docker-mounted-volume run does NOT need:
+#   1. Writes two REAL, tiny env files (KEY=VALUE, same format as
+#      configs/*.env) to `tmp_path` -- `_apply_env_file` itself is exercised
+#      for real, un-mocked, against these files.
+#   2. Monkeypatches `azlib.validate.load_wide_df` (per the global
+#      constraint: never load the real 6 GB volume df in tests) to a fake
+#      that picks train_df/oos_df by reading `os.environ["DATA_SET_NAME"]`
+#      -- the exact env var the two files set to different values -- so the
+#      fake genuinely proves `run_train`/`run_oos` applied the RIGHT env
+#      file before loading data, not a hardcoded stub.
+#   Also monkeypatches `azlib.validate.dataset_folder` (env-driven artifact
+#   root -- see validate.py's `_results_dir`) to `tmp_path`, so
+#   ResultsFile + every sidecar this task writes lands under `tmp_path`,
+#   never the real (and, for ROOT_FOLDER="short", not even mounted in this
+#   Docker service) `/trader_data*` volume root -- satisfies the global
+#   constraint "artifacts write to a caller/env-supplied path; in tests use
+#   tmp_path. Never write into the worktree."
+#
+# `train_df`/`oos_df`: two INDEPENDENTLY-seeded synthetic wide dfs (seeds 42
+# and 99 -- 42 matches `synthetic_wide_df`'s own `_SEED`, reused here only
+# for a familiar/reproducible train seed, not because it needs to be THAT
+# specific value; 99 is arbitrary but fixed), each bumped to 2000 rows (up
+# from the base fixture's 750) and 3x the base fixture's volatility
+# (`vol_scale=3.0`). Both bumps exist for the SAME reason: Task 8's own
+# `run_train` default-label-params pipeline (`azlib.config
+# .default_label_params`, m=2.0/x=2.0 ATR-multiples, n=1 -> only a
+# `1*15=15`-minute forward window at tf=15) needs a real, non-vacuous
+# strict-positive count AND real zone/label overlap to keep
+# `metrics()["strict_coverage"]` non-NaN (`0 <= nan <= 1` is `False` in
+# Python -- the brief's own integration-test assertion would fail on a
+# vacuous 0-positive fixture) -- test_layer1_loader.py hit the exact same
+# vacuous-positives risk with the BASE (750-row, 1x-vol) fixture and worked
+# around it with much looser label params (m=0.3/x=0.3); Task 8 cannot loosen
+# `run_train`'s own INTERNAL default-label-params choice for the brief's
+# verbatim-signature integration test (`run_train(train_env, tf, direction)`
+# takes no label_params override in that call), so the fixture's DATA is
+# tuned upward instead. Chosen empirically (see task-8-report.md) against
+# the actual `run_train` pipeline -- not derived from a closed-form
+# probability calculation.
+_VALIDATE_N_ROWS = 2000
+_VALIDATE_VOL_SCALE = 3.0
+
+
+def _write_env_file(path, data_set_name: str) -> None:
+    path.write_text(
+        "ROOT_FOLDER=short\n"
+        "DATA_ROOT=az_test\n"
+        f"DATA_SET_NAME={data_set_name}\n"
+        "PAIR=test_pair\n"
+        "EXCHANGE_FEE=0.001\n"
+    )
+
+
+@pytest.fixture
+def two_synthetic_datasets(tmp_path, monkeypatch) -> dict:
+    """Everything `tests/test_layer8_validate.py` needs to drive
+    `run_train`/`run_oos` end to end without the real 6 GB volume df or the
+    real `/trader_data*` mount -- see the module-level comment block above
+    for the full rationale.
+
+    Returns ``{"train_env", "oos_env", "train_df", "oos_df"}`` -- the two
+    env-file PATHS (str) `run_train`/`run_oos` are meant to be called with,
+    plus the two underlying frames themselves (for tests that want to
+    hand-inspect them, e.g. to independently recompute an expected metric).
+    """
+    train_df = _make_synthetic_wide_df(seed=42, n_rows=_VALIDATE_N_ROWS, vol_scale=_VALIDATE_VOL_SCALE)
+    oos_df = _make_synthetic_wide_df(seed=99, n_rows=_VALIDATE_N_ROWS, vol_scale=_VALIDATE_VOL_SCALE)
+
+    train_env_path = tmp_path / "train.env"
+    oos_env_path = tmp_path / "oos.env"
+    _write_env_file(train_env_path, "train")
+    _write_env_file(oos_env_path, "oos")
+
+    frames = {"train": train_df, "oos": oos_df}
+
+    def fake_load_wide_df():
+        import os
+
+        return frames[os.environ["DATA_SET_NAME"]].copy()
+
+    artifacts_root = tmp_path / "artifacts" / ""  # trailing sep, matches dataset_folder()'s own convention
+    monkeypatch.setattr("azlib.validate.load_wide_df", fake_load_wide_df)
+    monkeypatch.setattr("azlib.validate.dataset_folder", lambda: str(artifacts_root) + "/")
+
+    return {
+        "train_env": str(train_env_path),
+        "oos_env": str(oos_env_path),
+        "train_df": train_df,
+        "oos_df": oos_df,
     }
