@@ -376,3 +376,58 @@ def synthetic_pipeline(synthetic_wide_df) -> dict:
         "strict_label": strict_label,
         "rr_fn": rr_fn,
     }
+
+
+# --- synthetic_pipeline_full fixture (Task 7's own integration test) -------
+#
+# task-7-brief.md's integration test, `test_zoned_dataset_and_results_roundtrip`:
+#   zdf = build_zoned_dataset(**synthetic_pipeline_full)
+# so this fixture is a plain dict of every `azlib.zones.build_zoned_dataset`
+# keyword arg (`wide_df`, `tf`, `direction`, `zone_limit`, `levels`).
+
+
+@pytest.fixture
+def synthetic_pipeline_full(synthetic_wide_df) -> dict:
+    """kwargs for `azlib.zones.build_zoned_dataset` (Task 7's own integration test).
+
+    - `wide_df`/`tf`/`direction`: `synthetic_wide_df` (see that fixture),
+      tf=15, direction="long" -- matching the integration test's own
+      hard-coded `az_zone_long_15` column-name assertion.
+    - `zone_limit`: built from the SAME `_bracketing_price_levels` stub
+      `synthetic_pipeline` uses (a constant, NaN-free band bracketing every
+      row's `1_low`/`1_high`) at a fixed mid-band coeff (0.5) -- deliberately
+      NOT Task 2's real `azlib.space.price_levels` (which has warm-up NaN
+      rows) for the ENTRY threshold, so the integration test's zone column
+      has a real, deterministic mix of True/False rows regardless of Task
+      2's own warm-up window. `build_zoned_dataset`'s `az_tgt`/`az_sl`
+      columns still go through the REAL `azlib.space.price_levels`
+      internally (not injected -- see that function's own docstring), so
+      those two columns legitimately carry Task 2's warm-up NaNs; only the
+      zone-membership/entry threshold here is stubbed.
+    - `levels`: a plausible, already-selected (design spec §6's
+      `azlib.rr.select_levels` output shape) `{"tgt_x", "sl_x", "rr",
+      "exp_ret"}` dict -- not itself produced via a real R/R grid search
+      here (that is `azlib.zones.build_rr_levels`'s job, exercised directly
+      by its own unit tests elsewhere in this file), just a fixed,
+      profitable-looking combo standing in for one.
+    """
+    wide_df = synthetic_wide_df
+    tf = 15
+    direction = "long"
+
+    price_high_level, price_low_level = _bracketing_price_levels(wide_df, tf)
+    coeff_y = 0.5
+    zone_limit = (
+        price_low_level.to_numpy()
+        + coeff_y * (price_high_level.to_numpy() - price_low_level.to_numpy())
+    )
+
+    levels = {"tgt_x": 1.5, "sl_x": 1.0, "rr": 1.3, "exp_ret": 0.02}
+
+    return {
+        "wide_df": wide_df,
+        "tf": tf,
+        "direction": direction,
+        "zone_limit": zone_limit,
+        "levels": levels,
+    }
