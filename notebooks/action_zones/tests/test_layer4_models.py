@@ -147,6 +147,61 @@ def test_fit_regression_rejects_unknown_kind(rng_matrix):
         fit_regression(X[:, :1], y, "bogus")
 
 
+@pytest.fixture
+def region_varying_noise_data() -> tuple[np.ndarray, np.ndarray]:
+    """1D data where residual noise is much larger in one prediction
+    region than another -- the real regression guard for the gbr binned-
+    residual-std fix (task-4-brief.md / plan line 329: "residual std by
+    binned prediction"). ``y`` tracks ``X`` closely (mean = X), so gbr's
+    own in-sample prediction is itself close to ``X`` -- binning by
+    PREDICTED value (what predict_reg actually does) therefore reproduces
+    this X-region split. Quiet region (X < 5): noise std 0.05. Noisy
+    region (X >= 5): noise std 2.0, a 40x difference -- a single GLOBAL
+    residual-std scalar (the pre-fix behavior) could not possibly reflect
+    this; a per-bin std must.
+    """
+    rng = np.random.default_rng(11)
+    n = 300
+    X = rng.uniform(0.0, 10.0, size=(n, 1))
+    noise_std = np.where(X[:, 0] < 5.0, 0.05, 2.0)
+    y = X[:, 0] + rng.normal(scale=noise_std)
+    return X, y
+
+
+def test_predict_reg_gbr_std_varies_by_prediction_region(region_varying_noise_data):
+    X, y = region_varying_noise_data
+    res = fit_regression(X, y, "gbr")
+
+    quiet_X = np.array([[1.0], [2.0], [3.0]])
+    noisy_X = np.array([[7.0], [8.0], [9.0]])
+    _, quiet_std = predict_reg(res, quiet_X)
+    _, noisy_std = predict_reg(res, noisy_X)
+
+    # The real guard: std must not be one constant scalar across regions,
+    # and must be clearly higher where the training noise actually was.
+    assert not np.allclose(quiet_std, noisy_std)
+    assert noisy_std.mean() > quiet_std.mean() * 2
+
+
+def test_save_load_result_gbr_round_trip_identical_predictions_and_std(
+    region_varying_noise_data, tmp_path
+):
+    X, y = region_varying_noise_data
+    res = fit_regression(X, y, "gbr")
+    path = str(tmp_path / "gbr_result.json")
+
+    save_result(res, path)
+    loaded = load_result(path)
+
+    assert loaded.params["bin_edges"] == res.params["bin_edges"]
+    assert loaded.params["bin_std"] == res.params["bin_std"]
+
+    mean_orig, std_orig = predict_reg(res, X)
+    mean_loaded, std_loaded = predict_reg(loaded, X)
+    np.testing.assert_array_equal(mean_orig, mean_loaded)
+    np.testing.assert_array_equal(std_orig, std_loaded)
+
+
 # --- fit_classification / predict_clf ---------------------------------------
 
 
@@ -211,6 +266,10 @@ def test_groups_ma_3d_empty():
 
 def test_groups_ma_2d_one_pair():
     assert groups("ma", 2) == [("position", "slope")]
+
+
+def test_groups_ma_1d_two_singletons():
+    assert groups("ma", 1) == [("position",), ("slope",)]
 
 
 # --- save_result / load_result ------------------------------------------------

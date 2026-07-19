@@ -16,22 +16,25 @@ Two model families, each with a small fixed set of allowed ``kind``s
   (profitable/action) class; the error of interest is the FALSE-POSITIVE
   rate (label=0 mistaken for label=1), per §9.2.1.
 
-Regression std choice (brief's "Constraints / notes", explicitly a
-document-your-choice decision): std is the fit's IN-SAMPLE residual std
-(``np.std(y - model.predict(X), ddof=1)``), a single scalar per fitted
-model, broadcast to every point by ``predict_reg`` — for ALL THREE kinds,
-including ``gbr``. The brief explicitly allows this as an alternative to
-quantile regressors / binned residual std for ``gbr``
-("...OR a simple global residual std — document your choice"); chosen here
-for implementation simplicity and so every ``kind`` shares one
-uncertainty-estimation code path (a single ``resid_std`` metric feeds
-``predict_reg`` identically regardless of ``kind``). Known limitation: for
-``gbr`` specifically, in-sample residual std likely UNDERESTIMATES true
-predictive uncertainty relative to linear/poly2, since gradient boosting
-with enough estimators/depth can overfit small training sets far more than
-a 1-2 term linear model can — flagged in task-4-report.md, not fixed here
-(the two harder alternatives are both legitimate future upgrades, not
-required by this task).
+Regression std choice (task-4-brief.md's "Constraints / notes": "For
+`gbr`, use quantile regressors or residual std by binned prediction —
+document choice"): ``linear``/``poly2`` use the fit's IN-SAMPLE residual
+std (``np.std(y - model.predict(X), ddof=1)``), a single scalar per fitted
+model, broadcast to every point by ``predict_reg`` — the brief allows a
+plain global scalar for those two kinds. ``gbr`` uses the brief's OTHER
+named option, RESIDUAL STD BINNED BY PREDICTION (not quantile
+regressors): training points are bucketed into quantile bins of the
+model's own in-sample predicted value (``_binned_residual_std``), residual
+std is computed WITHIN each bin, and ``predict_reg`` looks up the bin a
+new point's prediction falls into (clipping outside the training range
+into the nearest outer bin) to return a PER-POINT, prediction-dependent
+std — never one constant number for ``gbr``. Bin edges + per-bin std are
+stored in ``RegResult.params`` (JSON-safe lists), so they round-trip
+through ``save_result``/``load_result`` exactly like every other param. A
+bin with too few points to estimate a std (``< _GBR_MIN_BIN_SIZE``) falls
+back to the global in-sample residual std (also kept in
+``metrics["resid_std"]`` as a summary number for every kind, ``gbr``
+included).
 
 ``save_result``/``load_result`` split each ``RegResult``/``ClfResult``
 across two files sharing one path stem: a JSON file (``kind``, ``params``,
@@ -98,6 +101,73 @@ CLF_KINDS = ("logistic", "gbc")
 # reproducible, per this module's "reproducible" contract.
 _GB_PARAMS = {"n_estimators": 100, "max_depth": 3, "learning_rate": 0.1, "random_state": 42}
 
+# gbr's binned-residual-std knobs (module docstring's "Regression std
+# choice"). Up to 10 quantile bins of the in-sample predicted value; a bin
+# needs at least 3 points to trust its own std estimate, else it borrows the
+# global in-sample residual std for that bin.
+_GBR_N_BINS = 10
+_GBR_MIN_BIN_SIZE = 3
+
+
+def _bin_edges(values: np.ndarray, n_bins: int) -> np.ndarray:
+    """Quantile-based bin edges over ``values`` (``n_bins + 1`` edges).
+
+    ``n_bins`` is capped to ``values.size`` (never more bins than points).
+    Duplicate quantiles (e.g. many repeated predicted values) collapse via
+    ``np.unique``; if that leaves fewer than 2 distinct edges (``values``
+    is fully constant), falls back to one degenerate bin spanning
+    ``[v - 1, v + 1]`` so callers always get a usable (edges.size >= 2)
+    result.
+    """
+    n_bins = max(1, min(n_bins, values.size))
+    edges = np.unique(np.quantile(values, np.linspace(0.0, 1.0, n_bins + 1)))
+    if edges.size < 2:
+        v = float(edges[0]) if edges.size == 1 else 0.0
+        edges = np.array([v - 1.0, v + 1.0])
+    return edges
+
+
+def _assign_bins(values: np.ndarray, edges: np.ndarray) -> np.ndarray:
+    """Bin index (``0`` .. ``len(edges) - 2``) for each of ``values``.
+
+    Only the INTERIOR edges (``edges[1:-1]``) are used as split points, so
+    the two outer bins are open-ended — a ``predict_reg`` point whose
+    prediction falls outside the training predictions' range clips into
+    the nearest outer bin instead of erroring or needing a separate NaN
+    case.
+    """
+    interior = edges[1:-1]
+    idx = np.digitize(values, interior, right=False)
+    return np.clip(idx, 0, edges.size - 2)
+
+
+def _binned_residual_std(
+    y_pred: np.ndarray, resid: np.ndarray, n_bins: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """(edges, per-bin residual std) for gbr's prediction-dependent std.
+
+    Bins the TRAINING points by their (in-sample) predicted value into up
+    to ``n_bins`` quantile bins (``_bin_edges``/``_assign_bins``), then
+    computes the residual std WITHIN each bin — this is what makes
+    ``predict_reg``'s ``gbr`` std vary by prediction region instead of
+    being one constant scalar (task-4-brief.md: "residual std by binned
+    prediction"). A bin with fewer than ``_GBR_MIN_BIN_SIZE`` points falls
+    back to the GLOBAL in-sample residual std for that bin (guards
+    noisy/undefined std estimates from too few points).
+    """
+    edges = _bin_edges(y_pred, n_bins)
+    bin_idx = _assign_bins(y_pred, edges)
+    global_std = float(np.std(resid, ddof=1)) if resid.size > 1 else 0.0
+
+    stds = np.empty(edges.size - 1, dtype=float)
+    for b in range(edges.size - 1):
+        bin_resid = resid[bin_idx == b]
+        if bin_resid.size >= _GBR_MIN_BIN_SIZE:
+            stds[b] = float(np.std(bin_resid, ddof=1))
+        else:
+            stds[b] = global_std
+    return edges, stds
+
 
 # --- result dataclasses --------------------------------------------------------
 
@@ -144,8 +214,11 @@ def fit_regression(X: np.ndarray, y: np.ndarray, kind: str) -> RegResult:
     ``params`` records the hyperparameters the model was constructed with
     (not fitted weights — those live inside ``model``, persisted separately
     by ``save_result``). ``metrics["resid_std"]`` is the IN-SAMPLE residual
-    std of ``y - model.predict(X)`` (module docstring's std choice) — the
-    value ``predict_reg`` broadcasts back out as its ``std`` return.
+    std of ``y - model.predict(X)`` — a single global scalar, kept for every
+    ``kind`` as a summary metric. For ``kind="gbr"`` only, ``params`` ALSO
+    gets ``"bin_edges"``/``"bin_std"`` (module docstring's std choice) —
+    ``predict_reg`` uses those, not the global scalar, to return a
+    prediction-dependent std for ``gbr``.
     """
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -174,6 +247,11 @@ def fit_regression(X: np.ndarray, y: np.ndarray, kind: str) -> RegResult:
     rmse = float(np.sqrt(np.mean(resid**2)))
     resid_std = float(np.std(resid, ddof=1)) if resid.size > 1 else 0.0
 
+    if kind == "gbr":
+        edges, bin_std = _binned_residual_std(y_pred, resid, _GBR_N_BINS)
+        params["bin_edges"] = edges.tolist()
+        params["bin_std"] = bin_std.tolist()
+
     metrics = {"r2": r2, "rmse": rmse, "resid_std": resid_std}
     return RegResult(kind=kind, params=params, metrics=metrics, model=model)
 
@@ -181,14 +259,27 @@ def fit_regression(X: np.ndarray, y: np.ndarray, kind: str) -> RegResult:
 def predict_reg(res: RegResult, X: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(mean, std) from a fitted ``RegResult``.
 
-    ``mean`` = ``res.model.predict(X)``. ``std`` = ``res.metrics
-    ["resid_std"]`` broadcast to every point (module docstring's std
-    choice) — the SAME scalar for every row of ``X``, regardless of
-    ``kind``.
+    ``mean`` = ``res.model.predict(X)``. For ``res.kind == "gbr"`` (with
+    binned params present), ``std`` is looked up PER POINT from
+    ``res.params["bin_edges"]``/``["bin_std"]`` — the bin each point's
+    predicted value falls into (``_assign_bins``, clipping outside the
+    training range into the nearest outer bin) — so it varies by
+    prediction region. For every other ``kind`` (or a ``gbr`` result
+    without binned params, e.g. hand-constructed), ``std`` is
+    ``res.metrics["resid_std"]`` broadcast to every point — one constant
+    scalar.
     """
     X = np.asarray(X, dtype=float)
     mean = np.asarray(res.model.predict(X), dtype=float)
-    std = np.full(mean.shape, res.metrics["resid_std"], dtype=float)
+
+    if res.kind == "gbr" and "bin_edges" in res.params:
+        edges = np.asarray(res.params["bin_edges"], dtype=float)
+        bin_std = np.asarray(res.params["bin_std"], dtype=float)
+        bin_idx = _assign_bins(mean, edges)
+        std = bin_std[bin_idx]
+    else:
+        std = np.full(mean.shape, res.metrics["resid_std"], dtype=float)
+
     return mean, std
 
 
