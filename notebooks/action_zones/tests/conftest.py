@@ -232,3 +232,37 @@ def synthetic_wide_df() -> pd.DataFrame:
     across the suite.
     """
     return _make_synthetic_wide_df()
+
+
+# --- rng_matrix fixture (Task 4/5 cross-layer) ------------------------------
+
+# Task 4's brief specifies its Layer-5 forward integration test verbatim,
+# `test_regression_feeds_fusion(rng_matrix)` -- a plain (X, y) numpy matrix,
+# independent of synthetic_wide_df's wide-df/indicator-column shape (Task 4's
+# azlib.models and Task 5's azlib.infer operate on bare numpy arrays, not
+# wide dfs). Not specified further anywhere in the plan/design doc beyond
+# that one usage (`X, y = rng_matrix`; `X[:, :1]`, `X[:, 1:2]` both used, so
+# X needs >= 2 columns), so this fixture's exact shape/distribution is this
+# task's own design choice, documented here for later tasks (Task 5) that
+# reuse it.
+_RNG_MATRIX_SEED = 123
+_RNG_MATRIX_N = 200
+
+
+@pytest.fixture
+def rng_matrix() -> tuple[np.ndarray, np.ndarray]:
+    """Small deterministic (X, y) numpy matrix for azlib.models/azlib.infer.
+
+    X: (200, 2) independent standard-normal columns. y: a mix of a linear
+    term in column 0 and a quadratic term in column 1 (plus small noise), so
+    that `fit_regression(X[:, :1], y, "linear")` and
+    `fit_regression(X[:, 1:2], y, "poly2")` each have real, non-degenerate
+    signal to fit -- not just noise -- without needing azlib.indicators/
+    azlib.space at all. Seeded (see _RNG_MATRIX_SEED) for reproducibility,
+    independent of synthetic_wide_df's own _SEED.
+    """
+    rng = np.random.default_rng(_RNG_MATRIX_SEED)
+    X = rng.normal(size=(_RNG_MATRIX_N, 2))
+    noise = rng.normal(scale=0.05, size=_RNG_MATRIX_N)
+    y = 0.5 * X[:, 0] + 0.3 * X[:, 1] ** 2 + noise
+    return X, y
