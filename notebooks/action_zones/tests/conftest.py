@@ -43,11 +43,27 @@ if str(_PACKAGE_ROOT) not in sys.path:
 # so a failure is reproducible from the seed alone.
 _SEED = 42
 
-# "A few hundred rows" per Appendix A. 400 one-minute rows gives every
-# rolling/EWM warmup used below (atr_14_ma_5 needs ~18 rows, rsi/macd/ema
-# unstable periods need ~35) a comfortable amount of settled, non-NaN data
-# while staying small enough to build+use in every test with no I/O.
-_N_ROWS = 400
+# "A few hundred rows" per Appendix A, bumped from the original 400 for
+# Task 2's rework (see task-2-report.md): azlib.space.price_levels now
+# reduces {tf}_high/{tf}_low to COMPLETED {tf}_is_closed candles before
+# computing anything (task-2-brief.md's completed-candle reduction) rather
+# than the prior — wrong — per-minute .shift(1). That needs real elapsed
+# time, not just elapsed rows: the first non-NaN level for a given tf/window
+# requires (window + 1) completed candles (to fill the rolling window on the
+# closed-candle sequence) plus a few more minutes into the following forming
+# candle to observe the held-constant broadcast, i.e. roughly
+# (window + 2) * tf minutes. With the function's *default* window=6 that is
+# (6+2)*240 = 1920 minutes for tf=240 alone -- too large for a fixture this
+# fixture's other consumers (talib warmup, label coverage) need to stay
+# small. 750 rows (12.5h) is chosen instead so that test_layer2_space.py's
+# synthetic-fixture sanity test can use an explicit smaller window=2
+# override for the label_coeff parametrization -- (2+1)*240 = 720 minutes
+# fully closed (3 completed 240-candles) plus 30 forming-candle minutes
+# fits inside 750 rows, giving every tf in {15, 60, 240} at least one
+# non-NaN row with window=2. The full algorithmic proof (default window,
+# exact hand-computed values, held-constant, no-look-ahead, warm-up) lives
+# in that same file's dedicated tiny hand-crafted tf=15 frame, not here.
+_N_ROWS = 750
 
 # Appendix A: "for tf in {15, 60, 240}".
 _TFS = (15, 60, 240)
@@ -128,14 +144,30 @@ def _add_tf_columns(df: pd.DataFrame, tf: int) -> None:
     df[f"{tf}_low"] = tf_low
     df[f"{tf}_close"] = tf_close
 
-    # --- diff_prc / diff_prc_rm_6 (Task 2 formulas, precomputed here so the
-    # fixture also exercises azlib.space's "prefer existing columns" path) ---
-    high_diff = tf_high.pct_change() * 100.0
-    low_diff = tf_low.pct_change() * 100.0
-    df[f"{tf}_high_diff_prc"] = high_diff
-    df[f"{tf}_high_diff_prc_rm_6"] = high_diff.rolling(6).mean()
-    df[f"{tf}_low_diff_prc"] = low_diff
-    df[f"{tf}_low_diff_prc_rm_6"] = low_diff.rolling(6).mean()
+    # --- {tf}_is_closed: True at the last 1-min row of each tf-period
+    # candle -- mirrors data.py::_build_wide_df's real per-tf branches
+    # exactly (see data.py lines ~219-239). Required by azlib.space's Task
+    # 2 rework: price_levels reduces to completed candles via this column
+    # before computing anything (task-2-brief.md's "completed-candle
+    # reduction") -- {tf}_high/{tf}_low above are the *forming*
+    # cummax/cummin within the current bucket, not that candle's final
+    # value, until the row where {tf}_is_closed is True.
+    idx = df.index
+    if tf == 1:
+        is_closed = pd.Series(True, index=idx)
+    elif tf == 5:
+        is_closed = idx.minute % 5 == 4
+    elif tf == 15:
+        is_closed = idx.minute % 15 == 14
+    elif tf == 60:
+        is_closed = idx.minute == 59
+    elif tf == 240:
+        is_closed = (idx.minute == 59) & (idx.hour % 4 == 3)
+    elif tf == 1440:
+        is_closed = (idx.minute == 59) & (idx.hour == 23)
+    else:
+        is_closed = (idx + pd.Timedelta(minutes=1)).floor(f"{tf}min") != idx.floor(f"{tf}min")
+    df[f"{tf}_is_closed"] = is_closed
 
     # --- {tf}_atr_14_ma_5: strictly positive once warmed up -------------
     # true_range = tf_high - tf_low >= high - low > 0 at every row (cummax
@@ -181,10 +213,10 @@ def _make_synthetic_wide_df() -> pd.DataFrame:
 def synthetic_wide_df() -> pd.DataFrame:
     """Small, deterministic, multi-timeframe wide df for azlib tests.
 
-    ~400 rows of 1-minute-indexed synthetic OHLCV plus, for tf in {1, 15, 60,
-    240}: {tf}_high/{tf}_low/{tf}_close, {tf}_high_diff_prc(_rm_6),
-    {tf}_low_diff_prc(_rm_6), {tf}_atr_14_ma_5, {tf}_rsi_14, {tf}_rsi_ma8,
-    {tf}_macd_12_26_9, {tf}_macd_hist_12_26_9, {tf}_ema_25 (Appendix A of
+    ~750 rows of 1-minute-indexed synthetic OHLCV plus, for tf in {1, 15, 60,
+    240}: {tf}_high/{tf}_low/{tf}_close, {tf}_is_closed, {tf}_atr_14_ma_5,
+    {tf}_rsi_14, {tf}_rsi_ma8, {tf}_macd_12_26_9, {tf}_macd_hist_12_26_9,
+    {tf}_ema_25 (Appendix A of
     external/docs/superpowers/plans/2026-07-19-zone-selection-experiment.md).
 
     Built from a seeded numpy Generator (fixed integer seed, see _SEED) so
@@ -192,6 +224,8 @@ def synthetic_wide_df() -> pd.DataFrame:
     reproducible test failures. Guarantees, by construction:
       - 1_high >= 1_close >= 1_low (and same for every {tf}_high/_low/_close)
       - {tf}_atr_14_ma_5 > 0 for every non-warmup row
+      - {tf}_is_closed True at exactly the last 1-min row of each {tf}-period
+        candle (see data.py::_build_wide_df, mirrored in _add_tf_columns)
 
     Function-scoped (a fresh frame per test): later tasks' `add_labels()`
     mutates the wide df in place, so tests must not share one frame instance

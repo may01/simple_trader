@@ -3,25 +3,55 @@
 Implements design spec §1-2
 (external/docs/superpowers/specs/2026-07-18-zone-selection-design.md):
 percentage-change levels (``diff_prc_ma +/- X*std``), converted to price
-levels referenced against the *previous same-TF candle*, then a price-space
-``coeff`` mapping any price onto ``[0, 1]`` between those two levels.
-``label_coeff`` plugs the entry extreme (pessimistic fill: 1-min low for
-long, 1-min high for short) through that mapping — the regression target
+levels referenced against the *previous completed same-TF candle*, then a
+price-space ``coeff`` mapping any price onto ``[0, 1]`` between those two
+levels. ``label_coeff`` plugs the entry extreme (pessimistic fill: 1-min low
+for long, 1-min high for short) through that mapping — the regression target
 for later layers.
 
+Completed-candle reduction (the core correctness requirement — see
+.superpowers/sdd/task-2-brief.md and the design spec's §1). ``{tf}_high`` /
+``{tf}_low`` on the wide df are per-minute *forming* cummax/cummin within the
+current tf-period bucket — NOT a candle's final high/low until the row where
+``{tf}_is_closed`` is True. ``price_levels`` therefore:
+
+  1. Reduces to one row per COMPLETED candle via ``{tf}_is_closed`` — that
+     closed row's ``{tf}_high``/``{tf}_low`` is the candle's final value.
+  2. Computes ``diff_prc``/``diff_prc_ma``/``diff_prc_std`` on that
+     per-candle sequence (candle-to-candle), never on the 1-minute forming
+     series.
+  3. For a forming candle *c*, uses the PREVIOUS completed candle's
+     (index *c-1*) ma/std/reference-high/reference-low — never *c*'s own
+     (still-forming, not-yet-final) data. This is what makes the result
+     look-ahead free: a forming candle's own high/low can be mutated freely
+     without changing its own levels (see
+     ``test_price_levels_no_look_ahead_from_own_forming_candle`` in
+     ``tests/test_layer2_space.py``).
+  4. Broadcasts each candle's two level values to every 1-minute row of
+     that candle (held constant for the whole bucket, including that
+     candle's own closing minute — the closing minute is still part of
+     *that* candle's forming period, not the next one's).
+
+This is a rework of the version implemented in commit 40b5fe7, which
+computed levels via a plain ``.shift(1)`` on the 1-minute *forming*
+``{tf}_high``/``{tf}_low`` columns — a minute-to-minute forming increment,
+not the candle-to-candle change the design spec calls for, and not
+held-constant/look-ahead-free. See task-2-report.md for the full
+before/after writeup.
+
 Reuse vs compute (see the design spec's Reuse map and task-2-brief.md):
-  - ``{tf}_{side}_diff_prc`` and ``{tf}_{side}_diff_prc_rm_{window}`` are
-    already columns on the real wide df (``indicators/library/
-    price_derivatives.py``) — ``price_levels`` uses them when present
-    instead of recomputing, falling back to raw ``{tf}_high``/``{tf}_low``
-    (via ``diff_prc``/``diff_prc_ma`` below) only when absent.
+  - The wide df's ``{tf}_{side}_diff_prc`` / ``{tf}_{side}_diff_prc_rm_{w}``
+    1-minute columns are NEVER reused here, even when present — they are
+    forming-candle (minute-to-minute) values, not the closed-candle
+    (candle-to-candle) sequence this module needs. ``price_levels`` always
+    computes its own diff/ma/std internally from the completed-candle
+    reduction described above.
   - Plain (whole-window) std is NEVER precomputed anywhere in the existing
     codebase — only one-sided ``_std_above``/``_std_below`` subsets exist,
     and per the design spec's reuse map those are explicitly NOT used here
     (a one-sided std of a skewed window is a different, smaller statistic
     than a plain std of the whole window — using it would silently narrow
-    every level). ``diff_prc_std`` is therefore always computed fresh from
-    the (possibly reused) diff_prc column.
+    every level). ``diff_prc_std`` is therefore always computed fresh.
 
 All functions here are pure and read-only on their ``wide_df`` argument —
 no column is added or mutated in place.
@@ -34,14 +64,17 @@ import pandas as pd
 
 
 def diff_prc(series: pd.Series) -> pd.Series:
-    """1-step percentage change of a price series, in PERCENT (already x100).
+    """1-step percentage change of a series, in PERCENT (already x100).
 
     ``(s - s.shift(1)) / s.shift(1) * 100``. First row is NaN (no previous
-    value to diff against). Reimplements — does not import — the identical
-    formula in ``indicators.library.price_derivatives._DiffPrcBase.compute``:
-    azlib is read-only on existing simple_trader code and that formula lives
-    inside an ``IndicatorField`` class tied to the production indicator
-    framework, not importable as a standalone function.
+    value to diff against). Generic Series->Series helper — the caller
+    decides what series to feed it; ``price_levels`` below feeds it the
+    *completed-candle* high/low sequence, never the raw 1-minute forming
+    series. Reimplements — does not import — the identical formula in
+    ``indicators.library.price_derivatives._DiffPrcBase.compute``: azlib is
+    read-only on existing simple_trader code and that formula lives inside
+    an ``IndicatorField`` class tied to the production indicator framework,
+    not importable as a standalone function.
     """
     prev = series.shift(1)
     return (series - prev) / prev * 100.0
@@ -50,10 +83,9 @@ def diff_prc(series: pd.Series) -> pd.Series:
 def diff_prc_ma(diff: pd.Series, window: int = 6) -> pd.Series:
     """Rolling mean of a diff_prc series over ``window`` rows.
 
-    Equivalent to the existing ``{src}_diff_prc_rm_{window}`` wide-df column
-    when ``window`` matches what that column was built with (``price_levels``
-    below reuses that column directly rather than calling this when
-    possible; this function is the fallback / the plain building block).
+    Generic Series->Series helper — whatever index ``diff`` carries (raw
+    1-minute or, as ``price_levels`` uses it, the completed-candle
+    sequence), the rolling window is over that series' own rows.
     """
     return diff.rolling(window).mean()
 
@@ -74,31 +106,20 @@ def diff_prc_std(diff: pd.Series, window: int = 6) -> pd.Series:
     return diff.rolling(window).std()
 
 
-def _diff_and_ma(wide_df: pd.DataFrame, tf: int, side: str, window: int) -> tuple[pd.Series, pd.Series]:
-    """Return (diff, ma) for one side ("high" or "low"), preferring existing
-    wide-df columns over recomputing from raw ``{tf}_{side}``.
+def _completed_candle_high_low(wide_df: pd.DataFrame, tf: int) -> tuple[pd.Series, pd.Series]:
+    """Reduce ``wide_df`` to one row per COMPLETED ``tf`` candle.
 
-    Three cases, checked independently (a real wide df may have diff_prc
-    without the matching *_rm_{window} column, e.g. if window != 6):
-      1. Both ``{tf}_{side}_diff_prc`` and ``{tf}_{side}_diff_prc_rm_{window}``
-         present -> both reused as-is.
-      2. Only ``{tf}_{side}_diff_prc`` present -> ma computed from it.
-      3. Neither present -> both recomputed from raw ``{tf}_{side}``.
+    Selects rows where ``{tf}_is_closed`` is True — at that row,
+    ``{tf}_high``/``{tf}_low`` (the forming cummax/cummin) equal that
+    candle's final high/low, since it's the candle's last minute. Returned
+    Series are indexed by each candle's own closing-row timestamp, in
+    chronological order — one entry per completed candle, in the order
+    those candles closed.
     """
-    diff_col = f"{tf}_{side}_diff_prc"
-    ma_col = f"{tf}_{side}_diff_prc_rm_{window}"
-
-    if diff_col in wide_df.columns:
-        diff = wide_df[diff_col]
-    else:
-        diff = diff_prc(wide_df[f"{tf}_{side}"])
-
-    if ma_col in wide_df.columns:
-        ma = wide_df[ma_col]
-    else:
-        ma = diff_prc_ma(diff, window)
-
-    return diff, ma
+    closed = wide_df[f"{tf}_is_closed"].astype(bool)
+    high = wide_df.loc[closed, f"{tf}_high"]
+    low = wide_df.loc[closed, f"{tf}_low"]
+    return high, low
 
 
 def price_levels(
@@ -108,35 +129,66 @@ def price_levels(
 
     ::
 
-        high_level(x) = high_diff_prc_ma + x * high_std
-        low_level(x)  = low_diff_prc_ma  - x * low_std
-        price_high_level = prev_high * (1 + high_level(x) / 100)
-        price_low_level  = prev_low  * (1 + low_level(x)  / 100)
+        # per COMPLETED candle k:
+        high_diff_prc[k] = (high[k] - high[k-1]) / high[k-1] * 100   # candle-to-candle
+        high_diff_prc_ma[k] = rolling mean over the last `window` completed candles
+        high_std[k]         = plain rolling std over the last `window` completed candles
 
-    ``prev_high``/``prev_low`` are ``{tf}_high``/``{tf}_low`` shifted by one
-    same-TF row — the previous same-TF candle, matching diff_prc's own
-    reference (see module docstring / diff_prc). ``high_std``/``low_std``
-    are the PLAIN rolling std of the high/low diff_prc series (never the
-    sided ``_std_above``/``_std_below`` columns — see ``diff_prc_std``).
+        # for forming candle c, from the PREVIOUS completed candle c-1:
+        high_level = high_diff_prc_ma[c-1] + x * high_std[c-1]
+        low_level  = low_diff_prc_ma[c-1]  - x * low_std[c-1]
+        price_high_level = high[c-1] * (1 + high_level / 100)
+        price_low_level  = low[c-1]  * (1 + low_level  / 100)
+
+    Every 1-minute row of candle *c* (its whole forming period, including
+    its own closing minute) gets the SAME ``(price_high_level,
+    price_low_level)`` pair — computed purely from candle *c-1* and earlier,
+    never from candle *c*'s own (possibly still-forming) high/low. This is
+    what makes the result look-ahead free.
+
+    Implementation: the per-candle level is computed once, at each closed
+    candle's own closing-row timestamp (using that candle's OWN final
+    high/low + its own trailing window's ma/std) — call this
+    ``level_at_close[k]``. That is exactly the level candle *k+1* needs
+    (its "c-1" reference). Reindexing ``level_at_close`` onto every 1-minute
+    row (non-NaN only at each candle's closing minute), shifting by exactly
+    one row, and forward-filling delays each candle's own computed level so
+    it first becomes visible at the FIRST minute of the FOLLOWING candle and
+    then stays constant (via ffill) through every minute of that following
+    candle, including that candle's own closing minute — which is superseded
+    only starting at the first minute of the candle after that. This relies
+    on the wide df being contiguous 1-minute data (every row immediately
+    following a closing row is the first row of the next candle), which
+    holds throughout this experiment.
 
     Returns ``(price_high_level, price_low_level)``, each a ``pd.Series``
-    aligned to ``wide_df``'s index (NaN wherever the rolling window or the
-    one-row shift hasn't warmed up yet).
+    aligned to ``wide_df``'s full index. NaN wherever there is no previous
+    completed candle at all (the very first candle) or fewer than ``window``
+    completed candles are available yet (rolling-window warm-up).
     """
-    high_diff, high_ma = _diff_and_ma(wide_df, tf, "high", window)
-    low_diff, low_ma = _diff_and_ma(wide_df, tf, "low", window)
+    closed_high, closed_low = _completed_candle_high_low(wide_df, tf)
 
+    high_diff = diff_prc(closed_high)
+    low_diff = diff_prc(closed_low)
+    high_ma = diff_prc_ma(high_diff, window)
+    low_ma = diff_prc_ma(low_diff, window)
     high_std = diff_prc_std(high_diff, window)
     low_std = diff_prc_std(low_diff, window)
 
-    high_level = high_ma + x * high_std
-    low_level = low_ma - x * low_std
+    high_level_pct = high_ma + x * high_std
+    low_level_pct = low_ma - x * low_std
 
-    prev_high = wide_df[f"{tf}_high"].shift(1)
-    prev_low = wide_df[f"{tf}_low"].shift(1)
+    # Value computed AT each completed candle's own closing minute, using
+    # that candle's own final high/low as the reference price — this is
+    # exactly the "previous completed candle" payload the FOLLOWING
+    # (forming) candle must broadcast to all of its own 1-minute rows.
+    level_at_close_high = closed_high * (1.0 + high_level_pct / 100.0)
+    level_at_close_low = closed_low * (1.0 + low_level_pct / 100.0)
 
-    price_high_level = prev_high * (1.0 + high_level / 100.0)
-    price_low_level = prev_low * (1.0 + low_level / 100.0)
+    # Delay by one row (own closing minute -> next candle's first minute),
+    # then hold constant (ffill) through the whole of the next candle.
+    price_high_level = level_at_close_high.reindex(wide_df.index).shift(1).ffill()
+    price_low_level = level_at_close_low.reindex(wide_df.index).shift(1).ffill()
 
     price_high_level = price_high_level.rename("price_high_level")
     price_low_level = price_low_level.rename("price_low_level")
@@ -182,11 +234,13 @@ def label_coeff(
     to illustrate the general ``coeff`` price->position map; the concrete
     price plugged in here is decided by use, and label_coeff's use is the
     entry extreme, matching the profit-label definitions in
-    ``indicators.labels``).
+    ``indicators.labels``). Each row's entry price is mapped through that
+    SAME row's held-constant, previous-completed-candle
+    ``price_low_level``/``price_high_level`` (see ``price_levels``).
 
     Defined for every row of ``wide_df`` (independent of any label column) —
-    NaN only where ``price_levels``' rolling windows/shift haven't warmed up.
-    Returns a ``pd.Series`` aligned to ``wide_df``'s index.
+    NaN only where ``price_levels``' completed-candle warm-up hasn't
+    happened yet. Returns a ``pd.Series`` aligned to ``wide_df``'s index.
     """
     if direction not in ("long", "short"):
         raise ValueError(f"direction must be 'long' or 'short', got {direction!r}")

@@ -4,15 +4,28 @@ Covers: diff_prc, diff_prc_ma, diff_prc_std, price_levels, coeff, label_coeff
 (azlib/space.py). See .superpowers/sdd/task-2-brief.md and
 external/docs/superpowers/specs/2026-07-18-zone-selection-design.md §1-2.
 
+This is a REWORK of the module (see task-2-report.md): the original
+implementation (commit 40b5fe7) computed levels via a plain ``.shift(1)`` on
+the 1-minute *forming* ``{tf}_high``/``{tf}_low`` columns — a minute-to-minute
+forming increment, not the candle-to-candle change the design spec calls
+for, and not held-constant/look-ahead-free. The ``price_levels``/
+``label_coeff`` tests below were rewritten from scratch against a hand-built
+tiny frame that spans several COMPLETED ``{tf}``-candles (marked via
+``{tf}_is_closed``) so every number can be independently hand-verified — the
+now-invalid tests that asserted the old "prefer existing 1-minute diff_prc
+columns" reuse behavior were deleted (that reuse path no longer exists:
+``price_levels`` always computes its own diff/ma/std from the
+completed-candle reduction, never from any wide-df diff_prc column — see
+task-2-brief.md's explicit "Do NOT reuse ... those are forming per-minute"
+constraint).
+
 Filename carries "layer2" so `pytest -k layer2` selects every test in this
 module (pytest -k matches against each item's full ancestry of names, which
 includes the containing module's basename).
 
 Every test in this module depends on azlib.space existing, so — unlike
 test_layer1_loader.py, where only one forward-looking test needed a guard —
-the whole module imports it at top level. Before azlib/space.py exists this
-produces a single collection error (RED), which is the expected/desired
-signal per the brief's TDD requirement.
+the whole module imports it at top level.
 """
 from __future__ import annotations
 
@@ -35,9 +48,15 @@ def test_label_coeff_feeds_indicator_join(synthetic_wide_df):
     decision as Task 1's test_labels_feed_action_space (see
     task-1-report.md) — the azlib.indicators import boundary is guarded with
     importorskip rather than left as a permanent hard failure. Everything
-    Layer 2 owns (label_coeff itself) is exercised unconditionally first.
+    Layer 2 owns (label_coeff itself) is exercised unconditionally first,
+    with window=2 (see the tf=240 note on
+    test_label_coeff_bounded_0_1_on_synthetic_fixture below for why the
+    default window=6 would not warm up within the fixture for every tf; here
+    only tf=15 is used, which warms up fine even at the default, but window
+    is pinned explicitly anyway so this test's warm-up assumption doesn't
+    silently depend on the fixture's row count).
     """
-    lc = label_coeff(synthetic_wide_df, tf=15, direction="long")
+    lc = label_coeff(synthetic_wide_df, tf=15, direction="long", window=2)
     assert lc.between(0, 1).dropna().shape[0] > 0
 
     azlib_indicators = pytest.importorskip(
@@ -114,114 +133,198 @@ def test_diff_prc_std_is_plain_not_sided():
     assert std.iloc[3] != pytest.approx(above_only_sided_std)
 
 
-# --- price_levels -----------------------------------------------------------
+# --- price_levels: hand-crafted completed-candle frame -----------------------
+#
+# 4 completed tf=15 candles (indices 0-3, one {tf}_is_closed=True row each,
+# at minute 14 of its own 15-row bucket) followed by a 5th, still-forming
+# candle (index 4, {tf}_is_closed all False). window=2 keeps the warm-up
+# region short enough that all 3 warm-up cases (no c-1 at all; c-1 exists
+# but its own window isn't full; first fully-warmed level) show up within
+# just 4 completed candles, and the forming candle's OWN levels are
+# reachable by hand.
+#
+# Candle-final highs/lows are chosen so each step is exactly +/-10%:
+#   high: 100.0 -> 110.0 (+10%) -> 99.0 (-10%) -> 108.9 (+10%)
+#   low:   50.0 ->  45.0 (-10%) -> 49.5 (+10%) ->  44.55 (-10%)
+# so diff_prc/ma/std are exact, round, hand-checkable numbers.
+
+_TF = 15
+_WINDOW = 2
+_CANDLE_HIGH = [100.0, 110.0, 99.0, 108.9]
+_CANDLE_LOW = [50.0, 45.0, 49.5, 44.55]
+_N_FORMING_ROWS = 5
 
 
-def test_price_levels_recomputes_from_raw_when_diff_columns_absent():
-    """No {tf}_*_diff_prc / *_rm_* columns at all -> full raw-recompute path."""
-    tf = 15
-    window = 2
-    x = 2.0
-    # high: +10% then +10% again -> diff_prc = [nan, 10.0, 10.0] -> std=0 (both equal)
-    high = pd.Series([100.0, 110.0, 121.0])
-    # low: -10% then -10% again -> diff_prc = [nan, -10.0, -10.0] -> std=0
-    low = pd.Series([50.0, 45.0, 40.5])
-    wide_df = pd.DataFrame({f"{tf}_high": high, f"{tf}_low": low})
-    assert f"{tf}_high_diff_prc" not in wide_df.columns  # sanity: no reuse path available
+def _candle_frame(mutate_forming_high_row: int | None = None, mutate_forming_high_value: float = 99999.0):
+    """Build the 1-min hand-crafted frame described above.
 
-    price_high_level, price_low_level = price_levels(wide_df, tf=tf, window=window, x=x)
-
-    # high_level = ma(10,10) + x*std(=0) = 10.0 -> price = prev_high(110.0)*1.10 = 121.0
-    assert price_high_level.iloc[2] == pytest.approx(121.0)
-    # low_level = ma(-10,-10) - x*std(=0) = -10.0 -> price = prev_low(45.0)*0.90 = 40.5
-    assert price_low_level.iloc[2] == pytest.approx(40.5)
-
-    # positive x -> high_level pushes price_high_level above prev_high, and
-    # low_level pushes price_low_level below prev_low
-    assert price_high_level.iloc[2] > high.iloc[1]
-    assert price_low_level.iloc[2] < low.iloc[1]
-
-
-def test_price_levels_uses_existing_diff_prc_when_rm_column_absent():
-    """{tf}_*_diff_prc present but no *_rm_{window} column -> ma/std computed
-    from the *existing* diff_prc column (not recomputed from raw high/low).
+    ``{tf}_high``/``{tf}_low`` are held constant at each candle's own final
+    value across every one of that candle's rows (the intra-candle forming
+    SHAPE doesn't matter here — only the value at the closing row is ever
+    consumed by ``price_levels``, which is exactly what the no-look-ahead
+    test below exploits). The forming candle (index 4) gets
+    ``_N_FORMING_ROWS`` rows of arbitrary (row-varying) high/low, optionally
+    with one row's high overwritten via ``mutate_forming_high_row`` — used
+    by the no-look-ahead test to prove that mutating a forming candle's OWN
+    data never changes that candle's OWN broadcast levels.
     """
-    tf = 15
-    window = 3
-    x = 2.0
-    n = 4
-    high = pd.Series([100.0, 100.0, 150.0, 100.0])
-    low = pd.Series([50.0, 50.0, 80.0, 50.0])
-    high_diff = pd.Series([np.nan, -10.0, 0.0, 10.0])
-    low_diff = pd.Series([np.nan, 5.0, 0.0, -5.0])
+    high_col: list[float] = []
+    low_col: list[float] = []
+    is_closed: list[bool] = []
+
+    for h, low in zip(_CANDLE_HIGH, _CANDLE_LOW):
+        for m in range(_TF):
+            high_col.append(h)
+            low_col.append(low)
+            is_closed.append(m == _TF - 1)
+
+    forming_start_row = len(high_col)
+    for i in range(_N_FORMING_ROWS):
+        high_col.append(_CANDLE_HIGH[-1] + 1.0 + i)  # arbitrary, row-varying forming values
+        low_col.append(_CANDLE_LOW[-1] - 1.0 - i * 0.1)
+        is_closed.append(False)
+
+    if mutate_forming_high_row is not None:
+        high_col[forming_start_row + mutate_forming_high_row] = mutate_forming_high_value
+
+    n = len(high_col)
     wide_df = pd.DataFrame(
         {
-            f"{tf}_high": high,
-            f"{tf}_low": low,
-            f"{tf}_high_diff_prc": high_diff,
-            f"{tf}_low_diff_prc": low_diff,
+            f"{_TF}_high": high_col,
+            f"{_TF}_low": low_col,
+            f"{_TF}_is_closed": is_closed,
         },
         index=pd.RangeIndex(n),
     )
-    assert f"{tf}_high_diff_prc_rm_{window}" not in wide_df.columns
-
-    price_high_level, price_low_level = price_levels(wide_df, tf=tf, window=window, x=x)
-
-    # window=[-10,0,10] -> mean=0, std(ddof=1)=10 -> high_level = 0+2*10=20
-    # price_high_level = prev_high(150.0) * 1.20 = 180.0
-    assert price_high_level.iloc[3] == pytest.approx(180.0)
-    # window=[5,0,-5] -> mean=0, std(ddof=1)=5 -> low_level = 0-2*5=-10
-    # price_low_level = prev_low(80.0) * 0.90 = 72.0
-    assert price_low_level.iloc[3] == pytest.approx(72.0)
-
-    assert price_high_level.iloc[3] > high.iloc[2]  # prev_high
-    assert price_low_level.iloc[3] < low.iloc[2]  # prev_low
+    return wide_df, forming_start_row
 
 
-def test_price_levels_prefers_existing_columns_over_recompute():
-    """{tf}_*_diff_prc AND *_rm_{window} both present -> used as-is, proven
-    by making raw high/low inconsistent with the injected diff columns (a
-    constant raw series would recompute to diff_prc==0.0 everywhere, which
-    would NOT match the nonzero injected diff below if recompute happened).
+def _expected_level(prev_high_seq, prev_low_seq, window, x):
+    """Hand-derive (price_high_level, price_low_level) straight from the
+    design spec's formulas via plain numpy — independent of price_levels'
+    own pandas-rolling implementation.
+
+    ``prev_high_seq``/``prev_low_seq`` = chronological completed-candle
+    highs/lows up to AND INCLUDING the reference candle c-1 (its own value
+    is the last element).
     """
-    tf = 60
-    window = 6
-    x = 2.0
-    n = 8
-    high = pd.Series([300.0] * n)  # constant -> raw pct_change would be 0.0
-    low = pd.Series([200.0] * n)
-    high_diff = pd.Series([2.0] * n)  # constant, non-zero, inconsistent w/ raw
-    low_diff = pd.Series([-3.0] * n)
-    wide_df = pd.DataFrame(
-        {
-            f"{tf}_high": high,
-            f"{tf}_low": low,
-            f"{tf}_high_diff_prc": high_diff,
-            f"{tf}_low_diff_prc": low_diff,
-            f"{tf}_high_diff_prc_rm_{window}": high_diff.rolling(window).mean(),
-            f"{tf}_low_diff_prc_rm_{window}": low_diff.rolling(window).mean(),
-        }
+    high = np.array(prev_high_seq, dtype=float)
+    low = np.array(prev_low_seq, dtype=float)
+    high_diff = (high[1:] - high[:-1]) / high[:-1] * 100.0
+    low_diff = (low[1:] - low[:-1]) / low[:-1] * 100.0
+    h_window = high_diff[-window:]
+    l_window = low_diff[-window:]
+    high_ma = h_window.mean()
+    low_ma = l_window.mean()
+    high_std = h_window.std(ddof=1)
+    low_std = l_window.std(ddof=1)
+    price_high_level = high[-1] * (1.0 + (high_ma + x * high_std) / 100.0)
+    price_low_level = low[-1] * (1.0 + (low_ma - x * low_std) / 100.0)
+    return price_high_level, price_low_level
+
+
+def test_price_levels_warmup_nan_before_window_completed_candles():
+    """Candles 0, 1, 2's own buckets must ALL be NaN:
+      - candle 0's bucket: no c-1 at all (it's the very first candle).
+      - candle 1's bucket: c-1=candle 0, but candle 0 alone has zero
+        completed diff_prc values (there's no candle -1) -> ma/std undefined.
+      - candle 2's bucket: c-1=candle 1, but window=2 needs 2 diff_prc
+        values ending at candle 1 (diff[0], diff[1]); diff[0] is itself
+        undefined (candle 0 has no predecessor) -> still not enough.
+    """
+    wide_df, _ = _candle_frame()
+    price_high_level, price_low_level = price_levels(wide_df, tf=_TF, window=_WINDOW, x=2.0)
+
+    for candle_idx in (0, 1, 2):
+        bucket = slice(candle_idx * _TF, (candle_idx + 1) * _TF)
+        assert price_high_level.iloc[bucket].isna().all(), f"candle {candle_idx} high_level should be all-NaN"
+        assert price_low_level.iloc[bucket].isna().all(), f"candle {candle_idx} low_level should be all-NaN"
+
+
+def test_price_levels_hand_computed_from_previous_completed_candle():
+    """Candle 3's bucket is the first with a fully-warmed window=2: its
+    reference is candle 2 (c-1), whose own window=2 diff_prc's are
+    diff[1] (candle0->1) and diff[2] (candle1->2) -- both defined. Every
+    1-min row of candle 3's bucket must equal the SAME hand-computed value
+    derived only from candles 0, 1, 2.
+    """
+    wide_df, _ = _candle_frame()
+    price_high_level, price_low_level = price_levels(wide_df, tf=_TF, window=_WINDOW, x=2.0)
+
+    expected_high, expected_low = _expected_level(_CANDLE_HIGH[:3], _CANDLE_LOW[:3], window=_WINDOW, x=2.0)
+
+    bucket = slice(3 * _TF, 4 * _TF)
+    assert price_high_level.iloc[bucket].to_numpy() == pytest.approx(expected_high)
+    assert price_low_level.iloc[bucket].to_numpy() == pytest.approx(expected_low)
+
+    # positive x -> the high bound reaches above the reference high, the low
+    # bound reaches below the reference low (design spec §1's asymmetry)
+    assert expected_high > _CANDLE_HIGH[2]
+    assert expected_low < _CANDLE_LOW[2]
+
+
+def test_price_levels_held_constant_across_forming_candle_rows():
+    """Every 1-min row of the still-forming candle 4 must share the exact
+    same (price_high_level, price_low_level) pair -- computed from candle 3
+    (c-1), never varying minute to minute within the bucket.
+    """
+    wide_df, forming_start_row = _candle_frame()
+    price_high_level, price_low_level = price_levels(wide_df, tf=_TF, window=_WINDOW, x=2.0)
+
+    forming_high = price_high_level.iloc[forming_start_row : forming_start_row + _N_FORMING_ROWS]
+    forming_low = price_low_level.iloc[forming_start_row : forming_start_row + _N_FORMING_ROWS]
+
+    assert forming_high.nunique(dropna=False) == 1
+    assert forming_low.nunique(dropna=False) == 1
+    assert not forming_high.isna().any()  # candle 3 (c-1) is fully warmed -> non-NaN
+
+    expected_high, expected_low = _expected_level(_CANDLE_HIGH, _CANDLE_LOW, window=_WINDOW, x=2.0)
+    assert forming_high.iloc[0] == pytest.approx(expected_high)
+    assert forming_low.iloc[0] == pytest.approx(expected_low)
+    assert expected_high > _CANDLE_HIGH[3]
+    assert expected_low < _CANDLE_LOW[3]
+
+
+def test_price_levels_no_look_ahead_from_own_forming_candle():
+    """Mutating the still-forming candle 4's OWN {tf}_high at one of its own
+    rows must NOT change candle 4's broadcast levels -- they depend only on
+    candles <= c-1 (candle 3 and earlier), never on candle 4's own
+    (necessarily incomplete, still-changing) data.
+
+    This is exactly the property the OLD (pre-rework) implementation
+    violated: it computed ``prev_high = wide_df[f"{tf}_high"].shift(1)`` on
+    the raw 1-minute forming column directly, so a later row within the
+    SAME forming bucket could see an EARLIER row's mutated value from that
+    very same bucket -- a form of look-ahead/self-reference this test would
+    have caught.
+    """
+    baseline_df, forming_start_row = _candle_frame()
+    mutated_df, _ = _candle_frame(mutate_forming_high_row=2, mutate_forming_high_value=99999.0)
+
+    # sanity: the mutation actually changed the forming candle's own high
+    assert (
+        baseline_df[f"{_TF}_high"].iloc[forming_start_row + 2]
+        != mutated_df[f"{_TF}_high"].iloc[forming_start_row + 2]
     )
 
-    price_high_level, price_low_level = price_levels(wide_df, tf=tf, window=window, x=x)
+    baseline_high, baseline_low = price_levels(baseline_df, tf=_TF, window=_WINDOW, x=2.0)
+    mutated_high, mutated_low = price_levels(mutated_df, tf=_TF, window=_WINDOW, x=2.0)
 
-    # std of a constant series is 0 -> level == ma exactly == injected diff value
-    row = window
-    expected_high = 300.0 * (1 + 2.0 / 100.0)  # 306.0, NOT 300.0 (raw recompute value)
-    expected_low = 200.0 * (1 + -3.0 / 100.0)  # 194.0, NOT 200.0
-    assert price_high_level.iloc[row] == pytest.approx(expected_high)
-    assert price_low_level.iloc[row] == pytest.approx(expected_low)
+    forming = slice(forming_start_row, forming_start_row + _N_FORMING_ROWS)
+    pd.testing.assert_series_equal(
+        baseline_high.iloc[forming], mutated_high.iloc[forming], check_names=False
+    )
+    pd.testing.assert_series_equal(
+        baseline_low.iloc[forming], mutated_low.iloc[forming], check_names=False
+    )
 
 
 def test_price_levels_default_window_and_x():
-    tf = 15
-    wide_df = pd.DataFrame(
-        {f"{tf}_high": pd.Series(np.linspace(100, 120, 20)), f"{tf}_low": pd.Series(np.linspace(90, 110, 20))}
-    )
-    high6, low6 = price_levels(wide_df, tf=tf)  # defaults: window=6, x=2.0
-    high6_explicit, low6_explicit = price_levels(wide_df, tf=tf, window=6, x=2.0)
-    pd.testing.assert_series_equal(high6, high6_explicit)
-    pd.testing.assert_series_equal(low6, low6_explicit)
+    wide_df, _ = _candle_frame()
+    high_default, low_default = price_levels(wide_df, tf=_TF)  # defaults: window=6, x=2.0
+    high_explicit, low_explicit = price_levels(wide_df, tf=_TF, window=6, x=2.0)
+    pd.testing.assert_series_equal(high_default, high_explicit)
+    pd.testing.assert_series_equal(low_default, low_explicit)
 
 
 # --- coeff --------------------------------------------------------------
@@ -265,66 +368,79 @@ def test_coeff_degenerate_equal_levels_returns_zero_no_warning():
 # --- label_coeff --------------------------------------------------------
 
 
-def _tiny_levels_frame():
-    """4-row frame reproducing test_price_levels_uses_existing_diff_prc_...'s
-    setup (price_high_level=180.0, price_low_level=72.0 at row 3), plus
-    1_low/1_high entry-extreme columns for label_coeff.
+def _labeled_candle_frame():
+    """Extend the shared hand-crafted candle frame with 1_low/1_high entry
+    columns on the forming candle's rows, for label_coeff's long/short
+    entry-extreme dispatch.
     """
-    tf = 15
-    high = pd.Series([100.0, 100.0, 150.0, 100.0])
-    low = pd.Series([50.0, 50.0, 80.0, 50.0])
-    high_diff = pd.Series([np.nan, -10.0, 0.0, 10.0])
-    low_diff = pd.Series([np.nan, 5.0, 0.0, -5.0])
-    entry_low = pd.Series([np.nan, np.nan, np.nan, 100.0])
-    entry_high = pd.Series([np.nan, np.nan, np.nan, 150.0])
-    wide_df = pd.DataFrame(
-        {
-            f"{tf}_high": high,
-            f"{tf}_low": low,
-            f"{tf}_high_diff_prc": high_diff,
-            f"{tf}_low_diff_prc": low_diff,
-            "1_low": entry_low,
-            "1_high": entry_high,
-        }
-    )
-    return tf, wide_df
+    wide_df, forming_start_row = _candle_frame()
+    n = len(wide_df)
+    entry_low = pd.Series(np.nan, index=wide_df.index)
+    entry_high = pd.Series(np.nan, index=wide_df.index)
+    # forming candle 4's rows: distinct, known low/high entry extremes
+    entry_low.iloc[forming_start_row : forming_start_row + _N_FORMING_ROWS] = 100.0
+    entry_high.iloc[forming_start_row : forming_start_row + _N_FORMING_ROWS] = 150.0
+    wide_df["1_low"] = entry_low
+    wide_df["1_high"] = entry_high
+    return wide_df, forming_start_row
 
 
 def test_label_coeff_long_uses_entry_low_not_high():
-    tf, wide_df = _tiny_levels_frame()
-    lc = label_coeff(wide_df, tf=tf, direction="long", window=3, x=2.0)
+    wide_df, forming_start_row = _labeled_candle_frame()
+    lc = label_coeff(wide_df, tf=_TF, direction="long", window=_WINDOW, x=2.0)
 
-    # price_low_level=72.0, price_high_level=180.0 (see test_price_levels_
-    # uses_existing_diff_prc_when_rm_column_absent for the derivation);
-    # long uses 1_low=100.0 -> coeff = (100-72)/(180-72)
-    assert lc.iloc[3] == pytest.approx((100.0 - 72.0) / (180.0 - 72.0))
+    expected_high, expected_low = _expected_level(_CANDLE_HIGH, _CANDLE_LOW, window=_WINDOW, x=2.0)
+    expected_coeff = coeff(np.array([100.0]), np.array([expected_low]), np.array([expected_high]))[0]
+
+    assert lc.iloc[forming_start_row] == pytest.approx(expected_coeff)
 
 
 def test_label_coeff_short_uses_entry_high_not_low():
-    tf, wide_df = _tiny_levels_frame()
-    lc = label_coeff(wide_df, tf=tf, direction="short", window=3, x=2.0)
+    wide_df, forming_start_row = _labeled_candle_frame()
+    lc = label_coeff(wide_df, tf=_TF, direction="short", window=_WINDOW, x=2.0)
 
-    # short uses 1_high=150.0 -> coeff = (150-72)/(180-72)
-    assert lc.iloc[3] == pytest.approx((150.0 - 72.0) / (180.0 - 72.0))
+    expected_high, expected_low = _expected_level(_CANDLE_HIGH, _CANDLE_LOW, window=_WINDOW, x=2.0)
+    expected_coeff = coeff(np.array([150.0]), np.array([expected_low]), np.array([expected_high]))[0]
+
+    assert lc.iloc[forming_start_row] == pytest.approx(expected_coeff)
 
 
 def test_label_coeff_long_and_short_differ_when_low_ne_high():
-    tf, wide_df = _tiny_levels_frame()
-    long_lc = label_coeff(wide_df, tf=tf, direction="long", window=3, x=2.0)
-    short_lc = label_coeff(wide_df, tf=tf, direction="short", window=3, x=2.0)
+    wide_df, forming_start_row = _labeled_candle_frame()
+    long_lc = label_coeff(wide_df, tf=_TF, direction="long", window=_WINDOW, x=2.0)
+    short_lc = label_coeff(wide_df, tf=_TF, direction="short", window=_WINDOW, x=2.0)
 
-    assert long_lc.iloc[3] != pytest.approx(short_lc.iloc[3])
+    assert long_lc.iloc[forming_start_row] != pytest.approx(short_lc.iloc[forming_start_row])
+
+
+def test_label_coeff_held_constant_across_forming_candle_rows():
+    wide_df, forming_start_row = _labeled_candle_frame()
+    lc = label_coeff(wide_df, tf=_TF, direction="long", window=_WINDOW, x=2.0)
+
+    forming = lc.iloc[forming_start_row : forming_start_row + _N_FORMING_ROWS]
+    assert forming.nunique(dropna=False) == 1
+    assert not forming.isna().any()
 
 
 def test_label_coeff_rejects_bad_direction():
-    tf, wide_df = _tiny_levels_frame()
+    wide_df, _ = _labeled_candle_frame()
     with pytest.raises(ValueError):
-        label_coeff(wide_df, tf=tf, direction="sideways")
+        label_coeff(wide_df, tf=_TF, direction="sideways")
 
 
 @pytest.mark.parametrize("tf", [15, 60, 240])
 def test_label_coeff_bounded_0_1_on_synthetic_fixture(synthetic_wide_df, tf):
+    # window=2 (not the function's default 6) is pinned explicitly here so
+    # tf=240 gets a non-vacuous (non-empty-after-dropna) warm-up within the
+    # fixture's 750 rows: 750 // 240 == 3 completed candles, which is
+    # exactly enough for window=2's first valid level (see
+    # conftest.py::_N_ROWS's docstring for the full arithmetic). The
+    # default-window algorithmic correctness itself is proven exactly by
+    # the dedicated hand-crafted-frame tests above; this test is a
+    # tf-parameterized smoke check on realistic (non-hand-crafted) data.
     for direction in ("long", "short"):
-        lc = label_coeff(synthetic_wide_df, tf=tf, direction=direction)
-        assert lc.dropna().between(0, 1).all()
+        lc = label_coeff(synthetic_wide_df, tf=tf, direction=direction, window=2)
+        non_nan = lc.dropna()
+        assert non_nan.shape[0] > 0, f"tf={tf} direction={direction} produced zero non-NaN rows"
+        assert non_nan.between(0, 1).all()
         assert lc.index.equals(synthetic_wide_df.index)
