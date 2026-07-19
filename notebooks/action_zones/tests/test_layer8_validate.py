@@ -141,6 +141,12 @@ def _tiny_zoned_df(zoned, strict, non_strict) -> pd.DataFrame:
             "az_zone_long_15": np.array(zoned, dtype=bool),
             "az_label_strict": np.array(strict, dtype=bool),
             "az_label_nonstrict": np.array(non_strict, dtype=bool),
+            # metrics() requires az_reach_drift_max to be PRESENT (raises if
+            # absent — see _reach_drift_max_from_column's docstring); these
+            # coverage-only hand-checks don't care about its value, so an
+            # explicit NaN column (present, just not a real number) is the
+            # correct way to opt out of that one metric.
+            "az_reach_drift_max": np.full(n, np.nan),
         },
         index=pd.RangeIndex(n),
     )
@@ -199,6 +205,7 @@ def test_metrics_realized_rr_hand_check_target_and_stop_outcomes():
             "az_sl": sl,
             "1_high": one_high,
             "1_low": one_low,
+            "az_reach_drift_max": np.full(n, np.nan),  # present but unused by this test -- see _tiny_zoned_df
         },
         index=pd.RangeIndex(n),
     )
@@ -220,6 +227,7 @@ def test_metrics_realized_rr_nan_when_no_zoned_rows_resolve():
             "az_sl": np.array([95.0] + [np.nan] * (n - 1)),
             "1_high": np.full(n, 100.0),
             "1_low": np.full(n, 100.0),
+            "az_reach_drift_max": np.full(n, np.nan),
         },
         index=pd.RangeIndex(n),
     )
@@ -227,36 +235,94 @@ def test_metrics_realized_rr_nan_when_no_zoned_rows_resolve():
     assert math.isnan(m["realized_rr"])
 
 
-# --- metrics: reach_drift_max (train P vs OOS realized freq) ---------------
+# --- reach_drift_max: _compute_reach_drift_max (pure array math) -----------
 
 
-def test_metrics_reach_drift_max_near_zero_for_identical_train_oos():
+def test_compute_reach_drift_max_near_zero_for_identical_train_oos():
+    from azlib.validate import _compute_reach_drift_max
+
     rng = np.random.default_rng(7)
     diff = rng.normal(0.0, 1.0, 500)
 
+    # identical train/oos on BOTH sides -> realized OOS frequency should
+    # track the train-frozen estimator closely at every x_grid level.
+    drift_max = _compute_reach_drift_max(
+        train_up=diff, train_down=diff, oos_up=diff, oos_down=diff
+    )
+
+    assert drift_max == pytest.approx(0.0, abs=0.05)
+
+
+def test_compute_reach_drift_max_nan_when_train_array_too_small():
+    from azlib.validate import _compute_reach_drift_max
+
+    drift_max = _compute_reach_drift_max(
+        train_up=np.array([1.0]),  # < 2 points -> reach_prob_estimator can't fit
+        train_down=np.array([1.0, 2.0]),
+        oos_up=np.zeros(5),
+        oos_down=np.zeros(5),
+    )
+    assert math.isnan(drift_max)
+
+
+# --- metrics: reach_drift_max is read from the az_reach_drift_max column ---
+
+
+def test_metrics_reads_reach_drift_max_from_column():
+    zdf = _tiny_zoned_df(zoned=[True, False], strict=[True, False], non_strict=[True, False])
+    zdf["az_reach_drift_max"] = 0.42  # broadcast, as run_oos would write it
+
+    m = metrics(zdf, 15, "long", label_params={})
+
+    assert m["reach_drift_max"] == pytest.approx(0.42)
+
+
+def test_metrics_raises_when_reach_drift_max_column_absent():
+    # Deliberately NOT using _tiny_zoned_df (which always includes the
+    # column) -- a caller-constructed frame missing az_reach_drift_max
+    # entirely must get a loud, clear error, NOT a silent NaN that looks
+    # like "no zoned entries" (task-8 coordinator review).
     zdf = pd.DataFrame(
         {
-            "az_zone_long_15": np.zeros(500, dtype=bool),
-            "15_high_diff_prc": diff,
-            "15_low_diff_prc": -diff,  # so -low_diff_prc == diff too (down side identical to up side here)
+            "az_zone_long_15": [True, False],
+            "az_label_strict": [True, False],
+            "az_label_nonstrict": [True, False],
         },
-        index=pd.RangeIndex(500),
+        index=pd.RangeIndex(2),
     )
-    zdf.attrs["train_high_diff_prc"] = diff.copy()
-    zdf.attrs["train_low_diff_prc_neg"] = diff.copy()
-
-    m = metrics(zdf, 15, "long", label_params={})
-
-    assert m["reach_drift_max"] == pytest.approx(0.0, abs=0.05)
+    with pytest.raises(KeyError, match="az_reach_drift_max"):
+        metrics(zdf, 15, "long", label_params={})
 
 
-def test_metrics_reach_drift_max_nan_when_no_frozen_train_data():
-    zdf = pd.DataFrame(
-        {"az_zone_long_15": np.zeros(5, dtype=bool), "15_high_diff_prc": np.zeros(5), "15_low_diff_prc": np.zeros(5)},
-        index=pd.RangeIndex(5),
-    )
-    m = metrics(zdf, 15, "long", label_params={})
-    assert math.isnan(m["reach_drift_max"])
+# --- reach_drift_max survives row-filtering / .copy() (regression guard) ---
+
+
+def test_reach_drift_max_survives_row_filtering_and_copy(two_synthetic_datasets):
+    # Regression guard for the .attrs -> column fix (task-8 coordinator
+    # review): pandas .attrs can be silently dropped by ordinary
+    # row-filtering/.copy()/concat, AND (even where .attrs survives)
+    # recomputing "OOS realized frequency" from a row-filtered zoned_df
+    # silently changes the answer -- a Task 9 notebook that filters
+    # zoned_df to a date range before calling metrics() must NOT silently
+    # get a different (or missing) drift number. az_reach_drift_max is an
+    # ordinary broadcast COLUMN, computed ONCE by run_oos against the FULL
+    # OOS data, precisely so it survives exactly this kind of transform.
+    #
+    # This test is RED under the old .attrs-recompute-from-zoned_df design
+    # (verified during this fix: filtering to zoos.iloc[10:] changed the
+    # recomputed value from ~0.0205 to ~0.0209 -- a real, silent drift in
+    # the metric, not just an .attrs-dropped-to-NaN failure) and GREEN now.
+    ds = two_synthetic_datasets
+    rp = run_train(ds["train_env"], tf=15, direction="long")
+    zoos = run_oos(rp, ds["oos_env"])
+
+    baseline = metrics(zoos, 15, "long", label_params={})["reach_drift_max"]
+    assert not math.isnan(baseline)  # sanity: a real number to preserve
+
+    filtered = zoos.iloc[10:].copy()  # row-filter + .copy() -- attrs-dropping transform
+    m_filtered = metrics(filtered, 15, "long", label_params={})
+
+    assert m_filtered["reach_drift_max"] == pytest.approx(baseline)
 
 
 # --- integration: task-8-brief.md's own required RED test ------------------

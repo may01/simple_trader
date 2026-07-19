@@ -77,11 +77,18 @@ needed to locate them):
   - `reach_train.json`  -- the two frozen TRAIN extreme-diff arrays
     (`{tf}_high_diff_prc`, negated `{tf}_low_diff_prc` — the exact
     `azlib.rr` sign convention `build_rr_levels` itself uses) needed to
-    rebuild the SAME `reach_prob_estimator` callables `metrics()`'s
-    `reach_drift_max` compares OOS realized frequency against
-    (`azlib.rr.reach_freq_drift` takes a CALLABLE, not a precomputed array
-    — reconstructing it from its own frozen input is the only way to get
-    that callable back without re-fitting it on OOS).
+    rebuild the SAME `reach_prob_estimator` callables `run_oos` computes
+    `reach_drift_max` against, ONCE, right there (`azlib.rr
+    .reach_freq_drift` takes a CALLABLE, not a precomputed array —
+    reconstructing it from its own frozen input is the only way to get
+    that callable back without re-fitting it on OOS). The resulting scalar
+    is written onto the returned zoned df as an ordinary broadcast column,
+    `az_reach_drift_max` — NOT recomputed later by `metrics()` from
+    whatever rows/columns happen to still be present on its own `zoned_df`
+    argument (see `run_oos`'s own docstring for why: a caller-filtered
+    `zoned_df`, e.g. a Task 9 notebook slicing to a date range, must not
+    silently get a different — or a bare, easily-confused-with-"no zoned
+    entries" — drift number).
 
 Reuse (task-8-brief.md: "REUSE select_levels_safe + build_rr_levels ... DO
 NOT duplicate that logic in validate.py")
@@ -91,7 +98,7 @@ calls `select_levels_safe` — see that module) to get the R/R `levels` dict,
 and `azlib.zones.build_zoned_dataset` (which recognizes
 `select_levels_safe`'s NaN sentinel and produces an all-False zone / NaN
 tgt-sl-rr automatically) for the actual per-row zoned columns, on BOTH the
-train-side sweep's `rr_fn` (see `_run_train`'s own docstring) and OOS. No
+train-side sweep's `rr_fn` (see `run_train`'s own docstring) and OOS. No
 R/R selection or down-side-negation logic is reimplemented here.
 """
 
@@ -341,20 +348,15 @@ def _predict_all_groups(
 # --- run_train ---------------------------------------------------------------
 
 
-def run_train(
-    train_env: str, tf: int, direction: str, label_params: dict | None = None
-) -> str:
+def run_train(train_env: str, tf: int, direction: str) -> str:
     """Run the full pipeline (Layers 1-7) on the TRAIN set; freeze every fit
     statistic + write a ``ResultsFile`` (+ sidecars, see module docstring);
     return the ``ResultsFile``'s path.
 
-    ``label_params``: optional override of ``azlib.config
-    .default_label_params(tf)`` (that experiment default is used when
-    omitted/``None`` — matches the brief's own exact call signature,
-    ``run_train(train_env, tf, direction)``, for the common case). Exposed
-    as a keyword-only-in-practice extra so unit tests can hand-tune label
-    reachability on a small synthetic frame without needing a second,
-    parallel "loose defaults" constant in ``azlib.config``.
+    Uses ``azlib.config.default_label_params(tf)`` unconditionally for the
+    labels this run's target/coverage are built against — matches the
+    brief's own exact call signature (``run_train(train_env, tf,
+    direction)``, no further knobs).
 
     Pipeline, in order (design spec §8):
       1. ``_apply_env_file(train_env)`` + ``load_wide_df()`` -- env-driven
@@ -402,7 +404,7 @@ def run_train(
     _apply_env_file(train_env)
     wide_df = load_wide_df()
 
-    p = LabelParams(**label_params) if label_params else default_label_params(tf)
+    p = default_label_params(tf)
     add_labels(wide_df, p)
 
     stats = fit_stats(wide_df, tf)
@@ -477,7 +479,7 @@ def run_oos(results_path: str, oos_env: str) -> pd.DataFrame:
     ``test_run_oos_never_refits_frozen_artifacts``).
 
     Returns the zoned OOS ``pd.DataFrame`` (``azlib.zones
-    .build_zoned_dataset``'s own columns), PLUS the extra columns/``.attrs``
+    .build_zoned_dataset``'s own columns), PLUS the extra columns
     ``metrics()`` needs and ``build_zoned_dataset`` itself does not produce
     (it only ever sees a plain ``wide_df``/``zone_limit``/``levels``, not
     this module's own label/reach bookkeeping):
@@ -493,18 +495,31 @@ def run_oos(results_path: str, oos_env: str) -> pd.DataFrame:
       - ``1_high``/``1_low`` (float): OOS's own 1-minute extremes --
         ``metrics()``'s ``realized_rr`` needs these for its own
         forward-touch walk.
-      - ``{tf}_high_diff_prc``/``{tf}_low_diff_prc`` (float): OOS's own
-        per-tf diff_prc columns -- ``metrics()``'s ``reach_drift_max`` needs
-        these as the "realized OOS frequency" side of the drift comparison.
-      - ``.attrs["train_high_diff_prc"]``/``["train_low_diff_prc_neg"]``
-        (np.ndarray): the frozen TRAIN extreme-diff arrays from
-        ``reach_train.json`` -- the "train P" side of that SAME comparison,
-        as the raw array ``reach_prob_estimator`` needs to REBUILD (not
-        refit on OOS — reconstructing a deterministic callable from its own
-        frozen input is not fitting) the identical callable
-        ``azlib.rr.reach_freq_drift`` takes. ``pd.DataFrame.attrs`` is the
-        pandas-idiomatic place for exactly this kind of non-tabular (not
-        one-value-per-row), whole-frame sidecar metadata.
+      - ``az_reach_drift_max`` (float, BROADCAST — same value every row):
+        the max ``|train P - OOS realized reach-freq|`` drift (module
+        docstring's "reach_train.json" section; ``azlib.rr
+        .reach_freq_drift``, REUSED), computed HERE, ONCE, from the FULL
+        frozen train arrays (``reach_train.json``) and the FULL OOS
+        ``{tf}_high_diff_prc``/``{tf}_low_diff_prc`` series straight off
+        ``wide_df`` — deliberately NOT left for ``metrics()`` to recompute
+        from whatever rows/columns happen to still be present on its own
+        ``zoned_df`` argument. An earlier version of this module stashed
+        the frozen train arrays on ``zoned_df.attrs`` and had ``metrics()``
+        recompute the drift from there + the (possibly already row-
+        filtered) ``zoned_df`` — broken two ways: (1) `pandas.DataFrame
+        .attrs` is dropped by common operations (concat, some merges,
+        older-pandas `.copy()`), and (2) even where `.attrs` DOES survive,
+        recomputing the "OOS realized frequency" side from a row-FILTERED
+        `zoned_df` silently changes the answer (fewer/different rows ->
+        a different empirical frequency) — a Task 9 notebook that slices
+        `zoned_df` to a date range before calling `metrics()` would get a
+        subtly WRONG drift number either way, not just a missing one. A
+        plain broadcast COLUMN fixes both: it is computed once against the
+        complete OOS data right here, and an ordinary column (unlike
+        `.attrs`) survives row-filtering/`.copy()`/concat intact — see
+        `tests/test_layer8_validate.py`'s
+        `test_reach_drift_max_survives_row_filtering_and_copy` (this exact
+        scenario, RED under the old `.attrs` design, GREEN now).
     """
     rf = ResultsFile.load(results_path)
     _apply_env_file(oos_env)
@@ -531,13 +546,14 @@ def run_oos(results_path: str, oos_env: str) -> pd.DataFrame:
 
     zdf["1_high"] = wide_df["1_high"].to_numpy()
     zdf["1_low"] = wide_df["1_low"].to_numpy()
-    zdf[f"{rf.tf}_high_diff_prc"] = wide_df[f"{rf.tf}_high_diff_prc"].to_numpy()
-    zdf[f"{rf.tf}_low_diff_prc"] = wide_df[f"{rf.tf}_low_diff_prc"].to_numpy()
 
     with open(os.path.join(results_dir, "reach_train.json")) as f:
         reach = json.load(f)
-    zdf.attrs["train_high_diff_prc"] = np.asarray(reach["high_diff_prc"], dtype=float)
-    zdf.attrs["train_low_diff_prc_neg"] = np.asarray(reach["low_diff_prc_neg"], dtype=float)
+    train_up = np.asarray(reach["high_diff_prc"], dtype=float)
+    train_down = np.asarray(reach["low_diff_prc_neg"], dtype=float)
+    oos_up = wide_df[f"{rf.tf}_high_diff_prc"].to_numpy(dtype=float)
+    oos_down = (-wide_df[f"{rf.tf}_low_diff_prc"]).to_numpy(dtype=float)
+    zdf["az_reach_drift_max"] = _compute_reach_drift_max(train_up, train_down, oos_up, oos_down)
 
     return zdf
 
@@ -659,22 +675,30 @@ def _realized_rr(zoned_df: pd.DataFrame, tf: int, direction: str, n: int) -> flo
     return float(np.mean(r_multiple[resolved]))
 
 
-def _reach_drift_max(zoned_df: pd.DataFrame, tf: int) -> float:
+def _compute_reach_drift_max(
+    train_up: np.ndarray, train_down: np.ndarray, oos_up: np.ndarray, oos_down: np.ndarray
+) -> float:
     """Max ``|train P - OOS realized reach-freq|`` across ``_X_GRID``, both
     up (high) and down (negated low) sides, via ``azlib.rr
     .reach_freq_drift`` (REUSED, not reimplemented -- task-8-brief.md).
 
-    Rebuilds the train-side callable from ``zoned_df.attrs``' frozen arrays
-    (``run_oos``'s own docstring) and reads OOS's realized diff_prc columns
-    straight off ``zoned_df``. NaN-safe: missing ``.attrs``/columns, or a
-    frozen array too small for ``reach_prob_estimator`` (< 2 points) -> NaN.
-    """
-    train_up = zoned_df.attrs.get("train_high_diff_prc")
-    train_down = zoned_df.attrs.get("train_low_diff_prc_neg")
-    up_col, down_col = f"{tf}_high_diff_prc", f"{tf}_low_diff_prc"
-    if train_up is None or train_down is None or up_col not in zoned_df.columns or down_col not in zoned_df.columns:
-        return float("nan")
+    Pure-array helper — takes the frozen TRAIN extreme-diff arrays and the
+    FULL OOS extreme-diff arrays directly (both already the exact `up`/
+    `down`-side-convention arrays `azlib.rr` expects — see
+    `azlib.zones.build_rr_levels`'s own "down-side reach wiring" docstring:
+    `up` = `{tf}_high_diff_prc`, `down` = NEGATED `{tf}_low_diff_prc`, on
+    BOTH sides here). Called exactly ONCE, by `run_oos`, against the
+    complete OOS series — never re-derived later from a possibly row-
+    filtered `zoned_df` (see `run_oos`'s own docstring for why: this is
+    what makes the resulting `az_reach_drift_max` COLUMN a stable, filter-
+    proof broadcast value rather than something `metrics()` recomputes).
 
+    NaN-safe: a frozen train array too small for `reach_prob_estimator`
+    (< 2 points) -> NaN (documented "not computable" case — distinct from a
+    caller-built frame simply missing the `az_reach_drift_max` column
+    entirely, which `metrics()` treats as a hard error — see that
+    function's docstring).
+    """
     train_up = np.asarray(train_up, dtype=float)
     train_down = np.asarray(train_down, dtype=float)
     if train_up.size < 2 or train_down.size < 2:
@@ -683,13 +707,39 @@ def _reach_drift_max(zoned_df: pd.DataFrame, tf: int) -> float:
     reach_up_est = reach_prob_estimator(train_up)
     reach_down_est = reach_prob_estimator(train_down)
 
-    oos_up = zoned_df[up_col].to_numpy(dtype=float)
-    oos_down = (-zoned_df[down_col]).to_numpy(dtype=float)
-
-    drift_up = reach_freq_drift(reach_up_est, oos_up, _X_GRID)
-    drift_down = reach_freq_drift(reach_down_est, oos_down, _X_GRID)
+    drift_up = reach_freq_drift(reach_up_est, np.asarray(oos_up, dtype=float), _X_GRID)
+    drift_down = reach_freq_drift(reach_down_est, np.asarray(oos_down, dtype=float), _X_GRID)
 
     return float(max(drift_up["drift"].abs().max(), drift_down["drift"].abs().max()))
+
+
+def _reach_drift_max_from_column(zoned_df: pd.DataFrame) -> float:
+    """Extract ``reach_drift_max`` from ``zoned_df``'s ``az_reach_drift_max``
+    column (a broadcast scalar, ``run_oos`` computes it once against the
+    FULL OOS data and writes the SAME value to every row — see that
+    function's own docstring for why a real column, not ``.attrs``).
+
+    Raises ``KeyError`` if the column is ABSENT — deliberately NOT a silent
+    NaN default: a bare NaN here would be indistinguishable from "no zoned
+    entries" (this pipeline's existing NaN-safe convention for
+    ``strict_coverage``/``realized_rr``), the wrong failure mode for a
+    regime-drift SAFETY check whose whole point is to be noticed. A
+    ``zoned_df`` produced by ``run_oos`` always has this column already; a
+    hand-constructed test frame that does not care about this ONE metric
+    must add the column explicitly (even as an explicit NaN value) rather
+    than get a silent pass-through default — see
+    ``tests/test_layer8_validate.py``'s hand-check tests for the pattern.
+    """
+    if "az_reach_drift_max" not in zoned_df.columns:
+        raise KeyError(
+            "metrics(): zoned_df is missing the 'az_reach_drift_max' "
+            "column -- run_oos() always adds it (a broadcast scalar "
+            "computed once against the FULL OOS data); a caller-"
+            "constructed zoned_df must add it explicitly (even as an "
+            "explicit NaN) rather than silently getting a NaN "
+            "reach_drift_max indistinguishable from 'no zoned entries'"
+        )
+    return float(zoned_df["az_reach_drift_max"].iloc[0])
 
 
 def metrics(zoned_df: pd.DataFrame, tf: int, direction: str, label_params: dict) -> dict:
@@ -704,7 +754,9 @@ def metrics(zoned_df: pd.DataFrame, tf: int, direction: str, label_params: dict)
     ``run_oos``'s docstring) that fall inside ``az_zone_{direction}_{tf}``.
 
     ``realized_rr``: see ``_realized_rr``'s own docstring for the exact
-    definition. ``reach_drift_max``: see ``_reach_drift_max``'s.
+    definition. ``reach_drift_max``: read straight off ``zoned_df``'s
+    ``az_reach_drift_max`` column — see ``_reach_drift_max_from_column``'s
+    docstring (raises if that column is absent, rather than a silent NaN).
 
     ``label_params`` is used ONLY to size ``realized_rr``'s forward-touch
     window (``label_params.get("n", 1)``, defaulting to ``1`` — the same
@@ -742,5 +794,5 @@ def metrics(zoned_df: pd.DataFrame, tf: int, direction: str, label_params: dict)
         "strict_coverage": strict_coverage,
         "non_strict_coverage": non_strict_coverage,
         "realized_rr": _realized_rr(zoned_df, tf, direction, n),
-        "reach_drift_max": _reach_drift_max(zoned_df, tf),
+        "reach_drift_max": _reach_drift_max_from_column(zoned_df),
     }
