@@ -41,3 +41,33 @@ def default_label_params(tf: int) -> LabelParams:
     through to ``LabelParams``' own dataclass defaults (14/5).
     """
     return LabelParams(tf=tf, n=1, m=2.0, x=2.0, l=tf, y=1.0)
+
+
+# --- Task 3: indicator attribute column names (azlib/indicators.py) --------
+#
+# Exact wide-df column suffixes (after the "{tf}_" prefix each wide-df
+# column carries) that azlib.indicators.raw_attribute reads for each
+# indicator's position/slope/distance attrs (design spec §7). Values
+# confirmed against configs/indicators_config.yaml's `name:` entries — every
+# one of these is an `applies_to: all` field the production indicator
+# pipeline already computes for every tf, so no new indicator computation is
+# introduced here, only column-name selection:
+#
+#   - rsi_14      (configs/indicators_config.yaml: momentum, talib RSI period=14)
+#   - rsi_ma8     (configs/indicators_config.yaml: EMA-of-RSI, depends_on [rsi_14];
+#                  the "8" period is the one this experiment standardizes on
+#                  out of the available rsi_ma8/rsi_ma12/rsi_ma24 family)
+#   - macd_12_26_9 / macd_hist_12_26_9
+#                 (configs/indicators_config.yaml: the 12/26/9 MACD family,
+#                  not the alternate macd_5_13_9 family)
+#   - ema_25      (configs/indicators_config.yaml: the "ma" indicator's
+#                  reference EMA, out of the ema_7/14/25/50/100 family)
+#
+# Kept as plain module-level constants (not a dict) so callers/tests can
+# import exactly the name they need without an extra lookup indirection —
+# mirrors this module's existing flat-constant style.
+RSI_COL = "rsi_14"
+RSI_MA_COL = "rsi_ma8"
+MACD_COL = "macd_12_26_9"
+MACD_HIST_COL = "macd_hist_12_26_9"
+MA_COL = "ema_25"
