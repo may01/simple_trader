@@ -177,6 +177,25 @@ def _add_tf_columns(df: pd.DataFrame, tf: int) -> None:
     atr_14 = true_range.rolling(14).mean()
     df[f"{tf}_atr_14_ma_5"] = atr_14.rolling(5).mean()
 
+    # --- {tf}_high_diff_prc / {tf}_low_diff_prc --------------------------
+    # Task 6 (azlib/rr.py) reach-probability estimator input. Mirrors
+    # indicators/library/price_derivatives.py's real `HighDiffPrcField` /
+    # `LowDiffPrcField` production columns EXACTLY (same 1-step
+    # `(series - series.shift(1)) / series.shift(1) * 100` formula, applied
+    # to the FORMING `{tf}_high`/`{tf}_low` cummax/cummin columns above) --
+    # a per-1-minute-row, minute-to-minute series, DELIBERATELY NOT the
+    # completed-candle-to-candle sequence `azlib.space.price_levels`
+    # computes internally (see that module's docstring: this wide-df column
+    # is "NEVER reused" by azlib.space, for that exact reason). For
+    # reach-probability's own touch/first-passage semantics (design spec
+    # §6.1) this forming series is actually the RIGHT input, not a
+    # substitute: `{tf}_high` is a running cummax within the still-forming
+    # candle, so its row-to-row diff_prc directly tracks whether/how far a
+    # new high-water mark was touched at each passing minute -- exactly
+    # "has the candle touched this level yet", not just its final close.
+    df[f"{tf}_high_diff_prc"] = (tf_high - tf_high.shift(1)) / tf_high.shift(1) * 100.0
+    df[f"{tf}_low_diff_prc"] = (tf_low - tf_low.shift(1)) / tf_low.shift(1) * 100.0
+
     # --- indicator columns (see docstring: EWM-smoothed close proxy) -----
     span = max(tf // 5, 2)
     close_proxy = tf_close.ewm(span=span, adjust=False).mean().to_numpy(dtype=float)
@@ -215,8 +234,8 @@ def synthetic_wide_df() -> pd.DataFrame:
 
     ~750 rows of 1-minute-indexed synthetic OHLCV plus, for tf in {1, 15, 60,
     240}: {tf}_high/{tf}_low/{tf}_close, {tf}_is_closed, {tf}_atr_14_ma_5,
-    {tf}_rsi_14, {tf}_rsi_ma8, {tf}_macd_12_26_9, {tf}_macd_hist_12_26_9,
-    {tf}_ema_25 (Appendix A of
+    {tf}_high_diff_prc/{tf}_low_diff_prc, {tf}_rsi_14, {tf}_rsi_ma8,
+    {tf}_macd_12_26_9, {tf}_macd_hist_12_26_9, {tf}_ema_25 (Appendix A of
     external/docs/superpowers/plans/2026-07-19-zone-selection-experiment.md).
 
     Built from a seeded numpy Generator (fixed integer seed, see _SEED) so
@@ -322,14 +341,20 @@ def synthetic_pipeline(synthetic_wide_df) -> dict:
       37th row True) -- enough strict-labeled rows to make
       `strict_coverage` well-defined (non-NaN) without labeling most of
       the frame.
-    - `rr_fn`: a stub standing in for Task 6's real R/R (`azlib.rr` does
-      not exist yet, see `azlib/infer.py`'s module docstring) --
-      `2 * zone_marking.mean()`, which crosses `select_y`'s `> 1.0`
-      "profitable" threshold once a given `Y`'s zone covers more than half
-      of `wide_df`'s rows. Combined with `_bracketing_price_levels`
-      guaranteeing zone coverage sweeps from ~0% to ~100% across the
-      `y_grid`, this ensures the integration test exercises `select_y`'s
-      PROFITABLE-row branch (not only its NaN-safe default) at least once.
+    - `rr_fn`: a stub standing in for Task 6's real R/R (`azlib.rr`'s
+      `reach_prob_estimator`/`rr_grid`/`select_levels` -- see
+      `azlib/infer.py`'s module docstring) -- `2 * zone_marking.mean() -
+      0.1`, which crosses `select_y`'s `> 0.0` fee-aware
+      expected-return-after-fees "profitable" threshold once a given `Y`'s
+      zone covers more than 5% of `wide_df`'s rows (mirrors Task 6's own
+      contract: `rr_fn` returns an expected-return-after-fees number, not a
+      raw R/R ratio -- the `- 0.1` stands in for a small fixed fee/cost so
+      an EMPTY zone, `2*0 - 0.1 = -0.1`, is correctly non-profitable rather
+      than sitting exactly on the boundary). Combined with
+      `_bracketing_price_levels` guaranteeing zone coverage sweeps from ~0%
+      to ~100% across the `y_grid`, this ensures the integration test
+      exercises `select_y`'s PROFITABLE-row branch (not only its NaN-safe
+      default) at least once.
     """
     wide_df = synthetic_wide_df
     mean = pd.Series(0.5, index=wide_df.index)
@@ -339,7 +364,7 @@ def synthetic_pipeline(synthetic_wide_df) -> dict:
     strict_label.iloc[::37] = True
 
     def rr_fn(zone_marking: pd.Series) -> float:
-        return 2.0 * float(zone_marking.mean())
+        return 2.0 * float(zone_marking.mean()) - 0.1
 
     return {
         "fused_mean": mean,

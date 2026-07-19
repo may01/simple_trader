@@ -278,15 +278,59 @@ def test_sweep_y_rejects_bad_direction(sweep_inputs):
         sweep_y(**sweep_inputs, direction="sideways", y_grid=[0.0], rr_fn=_count_rr_fn)
 
 
+# --- sweep_y: alignment guard (task-6-brief.md's required carry-forward) ---
+
+
+def test_sweep_y_rejects_misaligned_fused_mean_series(sweep_inputs):
+    inputs = dict(sweep_inputs)
+    inputs["fused_mean"] = inputs["fused_mean"].iloc[:-1]  # index no longer == wide_df.index
+    with pytest.raises(ValueError):
+        sweep_y(**inputs, direction="long", y_grid=[0.0], rr_fn=_count_rr_fn)
+
+
+def test_sweep_y_rejects_misaligned_fused_std_series(sweep_inputs):
+    inputs = dict(sweep_inputs)
+    bad_std = inputs["fused_std"].copy()
+    bad_std.index = bad_std.index[::-1]  # same length, wrong order -> not .equals()
+    inputs["fused_std"] = bad_std
+    with pytest.raises(ValueError):
+        sweep_y(**inputs, direction="long", y_grid=[0.0], rr_fn=_count_rr_fn)
+
+
+def test_sweep_y_rejects_misaligned_strict_label_series(sweep_inputs):
+    inputs = dict(sweep_inputs)
+    inputs["strict_label"] = inputs["strict_label"].iloc[:-1]
+    with pytest.raises(ValueError):
+        sweep_y(**inputs, direction="long", y_grid=[0.0], rr_fn=_count_rr_fn)
+
+
+def test_sweep_y_accepts_aligned_series_and_bare_arrays(sweep_inputs):
+    # Sanity/regression check for the guard above: it must not reject the
+    # ordinary, already-aligned case (Series built straight off
+    # wide_df.index), nor a plain numpy array (which carries no index to
+    # check -- still purely positional, unchanged from before).
+    inputs = dict(sweep_inputs)
+    sweep = sweep_y(**inputs, direction="long", y_grid=[0.0], rr_fn=_count_rr_fn)
+    assert len(sweep) == 1
+
+    inputs["fused_mean"] = inputs["fused_mean"].to_numpy()
+    inputs["fused_std"] = inputs["fused_std"].to_numpy()
+    sweep2 = sweep_y(**inputs, direction="long", y_grid=[0.0], rr_fn=_count_rr_fn)
+    assert len(sweep2) == 1
+
+
 # --- select_y ----------------------------------------------------------------
 
 
 def test_select_y_picks_profitable_max_coverage_row():
+    # realized_rr here is Task 6's expected-return-AFTER-FEES (profitable
+    # when > 0.0 -- see azlib.rr / task-6-brief.md's fee-aware carry-forward
+    # from Task 5), NOT the raw R/R ratio these values used to represent.
     sweep = pd.DataFrame(
         {
             "y": [-1.0, 0.0, 1.0, 2.0],
             "strict_coverage": [0.9, 0.2, 0.5, 0.8],
-            "realized_rr": [0.5, 1.5, 1.2, 1.1],  # y=-1.0 not profitable
+            "realized_rr": [-0.01, 0.02, 0.015, 0.01],  # y=-1.0 not profitable (<=0)
             "n_zoned": [10, 20, 30, 40],
         }
     )
@@ -301,13 +345,28 @@ def test_select_y_returns_documented_default_when_none_profitable():
         {
             "y": [-1.0, 0.0, 1.0],
             "strict_coverage": [0.9, 0.5, 0.1],
-            "realized_rr": [0.5, 0.8, 0.99],  # none > 1.0
+            "realized_rr": [-0.02, -0.001, 0.0],  # none > 0.0 (0.0 itself excluded too)
             "n_zoned": [5, 10, 15],
         }
     )
     y = select_y(sweep)
     assert y == pytest.approx(0.0)
     assert -2.0 <= y <= 2.0
+
+
+def test_select_y_fee_aware_expected_return_profitable_boundary_is_strictly_positive():
+    # task-6-brief.md's required carry-forward test: expected-return > 0.0
+    # is profitable, <= 0.0 is not -- verified at the exact boundary (a
+    # literal 0.0 row must be excluded despite having the best coverage).
+    sweep = pd.DataFrame(
+        {
+            "y": [0.0, 1.0, 2.0],
+            "strict_coverage": [0.9, 0.5, 0.1],
+            "realized_rr": [0.0, -0.001, 0.001],  # only y=2.0 (0.001 > 0) is profitable
+            "n_zoned": [5, 10, 15],
+        }
+    )
+    assert select_y(sweep) == pytest.approx(2.0)
 
 
 def test_select_y_empty_sweep_returns_default():

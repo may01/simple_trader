@@ -17,13 +17,28 @@ Implements design spec §11
       ``Y``. ``select_y`` picks the ``Y`` that maximizes ``strict_coverage``
       among rows whose ``realized_rr`` is profitable.
 
-Dependency inversion (task-5-brief.md): Task 6 (``azlib/rr.py``, the real
-realized-R/R calculation from reach-probabilities) does not exist yet.
-``sweep_y`` therefore takes an INJECTED ``rr_fn`` callback
-(``zone_marking -> float``) instead of importing anything from a not-yet-
-existent module -- this keeps Layer 5 fully testable today (tests pass a
-stub ``rr_fn``) and Layer 6 pluggable later without any signature change
-here. ``sweep_y`` similarly takes an injected ``price_levels_fn`` (matching
+Dependency inversion (task-5-brief.md, resolved by task-6-brief.md):
+``sweep_y`` takes an INJECTED ``rr_fn`` callback (``zone_marking -> float``)
+rather than importing ``azlib.rr`` (Task 6) directly -- this keeps Layer 5
+fully testable independent of Layer 6 (tests pass a stub ``rr_fn``) and
+lets a real driver (Task 7/8/9) wire in the real one
+(``azlib.rr.reach_prob_estimator``/``rr_grid``/``select_levels``) without
+any signature change here.
+
+**``rr_fn``'s contract (Task 6 carry-forward, resolved)**: ``rr_fn`` returns
+the **expected-return-after-fees** for a given ``Y``'s zone (design spec
+§5/§6: R/R aligned against candle size + fees -- see ``azlib.rr``'s module
+docstring for the exact formula), profitable when **> 0.0** -- NOT a raw
+R/R ratio (that was this module's OWN placeholder interpretation before
+Task 6 existed; see ``_PROFITABLE_EXP_RETURN_THRESHOLD``'s comment below
+and ``select_y``'s docstring). A real ``rr_fn`` closure typically calls
+``azlib.rr.select_levels(azlib.rr.rr_grid(...))["exp_ret"]`` for the given
+zone's underlying train data and returns that number; the raw R/R
+``["rr"]`` ratio from that same call can be kept as a separate reporting
+column by the CALLER if useful -- ``sweep_y``'s own ``realized_rr`` column
+only ever carries the single float ``rr_fn`` returns.
+
+``sweep_y`` similarly takes an injected ``price_levels_fn`` (matching
 ``azlib.space.price_levels``'s ``(wide_df, tf) -> (price_high_level,
 price_low_level)`` signature) rather than importing ``azlib.space``
 directly -- Task 5's OWN tests use a fully controllable stub instead of
@@ -141,14 +156,17 @@ def inferred_coeff(mean: np.ndarray, std: np.ndarray, y: float) -> np.ndarray:
 # --- sweep_y ------------------------------------------------------------------
 
 # "Profitable" threshold for select_y (task-5-brief.md: "rr > 1 or
-# exp-return>0 -- define clearly"). realized_rr here is whatever `rr_fn`
-# returns for a given Y's zone marking; until Task 6 (azlib.rr) exists,
-# that is a reward:risk RATIO (the classic R/R convention design spec §5
-# and §11 both use, "R/R = P(target) / P(stop)") -- profitable means that
-# ratio exceeds 1 (expected reward bigger than expected risk), not an
-# absolute expected-return-after-fees test (that quantity only exists once
-# Task 6's real p_target/p_stop/fee machinery is wired in).
-_PROFITABLE_RR_THRESHOLD = 1.0
+# exp-return>0 -- define clearly"; RESOLVED by task-6-brief.md's required
+# carry-forward). realized_rr is whatever `rr_fn` returns for a given Y's
+# zone marking -- Task 6 (azlib.rr) now exists and fixes that contract: it
+# is the EXPECTED-RETURN-AFTER-FEES (design spec §5/§6: reward*p_target -
+# risk*p_stop - fees, see azlib.rr's module docstring for the exact
+# formula), profitable when that number is > 0.0 (breaks even at exactly
+# 0.0, still not "profitable") -- NOT the raw R/R ratio this constant used
+# to gate on (renamed from `_PROFITABLE_RR_THRESHOLD`/`1.0` accordingly; a
+# ratio > 1 and an expected-return > 0 are two different tests of two
+# different quantities, not interchangeable).
+_PROFITABLE_EXP_RETURN_THRESHOLD = 0.0
 
 # select_y's NaN-safe default when NO row in the sweep is profitable
 # (task-5-brief.md: "returns a documented default"). 0.0 -- the midpoint
@@ -158,6 +176,28 @@ _PROFITABLE_RR_THRESHOLD = 1.0
 # to the plain fused mean (inferred_coeff(mean, std, 0.0) == mean), the
 # least-opinionated fallback available.
 _SELECT_Y_DEFAULT = 0.0
+
+
+def _check_aligned(name: str, value, wide_df_index: pd.Index) -> None:
+    """Alignment guard (task-6-brief.md's required carry-forward): if
+    ``value`` is a ``pd.Series``, its ``.index`` must ``.equals()``
+    ``wide_df_index`` exactly (same length AND same order) -- ``sweep_y``
+    consumes ``fused_mean``/``fused_std``/``strict_label`` PURELY
+    POSITIONALLY (see ``sweep_y``'s own docstring), so a Series whose index
+    silently disagrees with ``wide_df``'s own row order would previously
+    produce a no-error, wrong-answer result (every value quietly
+    lined up against the wrong row) instead of a clear failure. A bare
+    array (``isinstance`` check fails) carries no index to check at all --
+    unaffected, still purely positional as before.
+    """
+    if isinstance(value, pd.Series) and not value.index.equals(wide_df_index):
+        raise ValueError(
+            f"{name}'s index does not match wide_df's index -- sweep_y "
+            "aligns fused_mean/fused_std/strict_label to wide_df PURELY "
+            "BY ROW POSITION, so a mismatched Series index is almost "
+            "certainly a caller bug (wrong row order/filtering) rather "
+            "than something safe to silently re-wrap positionally."
+        )
 
 
 def _entry_price_column(direction: str) -> str:
@@ -193,12 +233,19 @@ def sweep_y(
     ----------
     fused_mean, fused_std : array-like, one value per row of ``wide_df``
         ``fuse_inverse_variance``'s output (or any per-row (mean, std)
-        pair) -- IN THE SAME ROW ORDER as ``wide_df`` (a bare numpy array
-        is taken positionally; a ``pd.Series`` has its OWN index discarded
-        and is re-wrapped onto ``wide_df.index`` positionally too -- this
-        function never re-aligns by label, only by row position, matching
-        how ``fuse_inverse_variance`` and ``predict_reg`` produce plain
-        arrays in the caller's original row order).
+        pair) -- IN THE SAME ROW ORDER as ``wide_df``. A bare numpy array
+        is taken purely positionally (it carries no index to check). A
+        ``pd.Series`` is ALSO used purely positionally (its own index is
+        never used to re-align against ``wide_df``'s), but its index is
+        now (task-6-brief.md's required alignment-guard carry-forward)
+        CHECKED against ``wide_df.index`` first -- ``ValueError`` if they
+        are not ``.equals()`` (same length AND same order). This turns the
+        previous silent-miscompute risk (a caller accidentally handing in a
+        differently-sorted/filtered Series would previously get a
+        no-error, wrong-answer result) into a loud failure instead; the
+        actual row-position semantics used once alignment is confirmed are
+        unchanged from before. Same check applies to ``strict_label``
+        below.
     wide_df : the wide df those predictions were made over.
     tf : timeframe the zone applies to (passed through to
         ``price_levels_fn``).
@@ -222,10 +269,12 @@ def sweep_y(
         §11.4: ``Y in [-2.0, 2.0]``, step 0.1 typical -- this function does
         not itself clamp/validate the grid, the caller decides its range).
     rr_fn : ``(zone_marking: pd.Series[bool]) -> float`` -- Task 6's
-        realized-R/R calculation, injected (dependency inversion:
-        ``azlib/rr.py`` does not exist yet, see module docstring). Called
-        once per ``Y`` with that ``Y``'s zone-membership boolean Series
-        (indexed like ``wide_df``).
+        realized-R/R calculation, injected (dependency inversion, see
+        module docstring). Called once per ``Y`` with that ``Y``'s
+        zone-membership boolean Series (indexed like ``wide_df``). Returns
+        the EXPECTED-RETURN-AFTER-FEES for that zone (module docstring's
+        "``rr_fn``'s contract" section) -- profitable when > 0.0 (see
+        ``select_y``).
 
     Zone construction (per ``Y``, design spec §11.5/§7):
 
@@ -275,6 +324,10 @@ def sweep_y(
     """
     entry_col = _entry_price_column(direction)
     index = wide_df.index
+
+    _check_aligned("fused_mean", fused_mean, index)
+    _check_aligned("fused_std", fused_std, index)
+    _check_aligned("strict_label", strict_label, index)
 
     mean_arr = fused_mean.to_numpy(dtype=float) if isinstance(fused_mean, pd.Series) else np.asarray(fused_mean, dtype=float)
     std_arr = fused_std.to_numpy(dtype=float) if isinstance(fused_std, pd.Series) else np.asarray(fused_std, dtype=float)
@@ -327,10 +380,11 @@ def sweep_y(
 def select_y(sweep: pd.DataFrame) -> float:
     """``Y`` maximizing ``strict_coverage`` among profitable rows.
 
-    "Profitable" = ``realized_rr > _PROFITABLE_RR_THRESHOLD`` (``1.0`` --
-    see that constant's docstring above: a reward:risk RATIO greater than
-    1, the design spec's own R/R convention, not an absolute
-    expected-return test). Among rows passing that filter, returns the
+    "Profitable" = ``realized_rr > _PROFITABLE_EXP_RETURN_THRESHOLD``
+    (``0.0`` -- see that constant's docstring above: ``realized_rr`` is
+    Task 6's fee-aware EXPECTED-RETURN-AFTER-FEES, not a raw R/R ratio;
+    profitable means that number is strictly positive, a break-even
+    ``0.0`` does not count). Among rows passing that filter, returns the
     ``y`` of whichever has the largest ``strict_coverage`` (NaN
     ``strict_coverage`` values, e.g. from a sweep with zero strict-labeled
     rows, are skipped by ``pandas``' default ``idxmax`` ``skipna=True``
@@ -348,7 +402,7 @@ def select_y(sweep: pd.DataFrame) -> float:
     if sweep.empty:
         return _SELECT_Y_DEFAULT
 
-    profitable = sweep["realized_rr"] > _PROFITABLE_RR_THRESHOLD
+    profitable = sweep["realized_rr"] > _PROFITABLE_EXP_RETURN_THRESHOLD
     candidates = sweep.loc[profitable]
 
     if candidates.empty or candidates["strict_coverage"].isna().all():
