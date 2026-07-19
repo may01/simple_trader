@@ -21,7 +21,7 @@ import pandas as pd
 import pytest
 from scipy.stats import genpareto
 
-from azlib.rr import reach_freq_drift, reach_prob_estimator, rr_grid, select_levels
+from azlib.rr import _PROB_FLOOR, reach_freq_drift, reach_prob_estimator, rr_grid, select_levels
 
 
 # --- reach_prob_estimator -----------------------------------------------------
@@ -123,8 +123,56 @@ def test_tail_and_body_agree_exactly_at_the_crossover_threshold():
     sorted_arr = np.sort(arr)
     u = sorted_arr[n - min_bin]
 
+    # AT `u` itself, `tail_mask = levels > self._u` is False (strict `>`)
+    # -- this level only exercises the BODY branch, not the GPD tail
+    # (`_HybridReachEstimator.__call__`'s `tail_mask` is strict, matching
+    # `u`'s OWN definition as "the level with exactly min_bin supporting
+    # points", i.e. still solidly in the body). Kept as a sanity check on
+    # the shared boundary value; the actual TAIL code path is exercised
+    # separately below, by construction (see that test's own docstring).
     got = est(np.array([u]))[0]
     assert got == pytest.approx(min_bin / n, rel=1e-9)
+
+
+def test_tail_branch_is_genuinely_exercised_and_continuous_past_the_threshold():
+    # Coordinator review (Task 6 follow-up): the test above never queries a
+    # level > u, so it never actually runs `_HybridReachEstimator.__call__`'s
+    # `tail_mask`/`genpareto.sf` branch despite its name suggesting it did.
+    # This test queries levels STRICTLY above `u` (down to 1e-9 above it) --
+    # `tail_mask = levels > self._u` is True for every one of them, so the
+    # GPD tail formula is what actually produces every asserted value here.
+    rng = np.random.default_rng(5)
+    arr = rng.normal(0.0, 1.0, 300)
+    min_bin = 50
+    est = reach_prob_estimator(arr, min_bin=min_bin)
+
+    n = arr.size
+    sorted_arr = np.sort(arr)
+    u = sorted_arr[n - min_bin]
+    k = min(min_bin, n)
+
+    at_u = est(np.array([u]))[0]
+    just_above = est(np.array([u + 1e-9]))[0]
+    # Continuity: infinitesimally above the threshold must match the
+    # boundary value (design spec §6.1's "smooth" requirement) -- this is
+    # ONLY meaningful because `just_above` is computed by the TAIL formula
+    # (`u + 1e-9 > u`) while `at_u` is computed by the BODY formula; if the
+    # two branches disagreed at the seam, this would catch it.
+    assert just_above == pytest.approx(at_u, abs=1e-6)
+    assert just_above == pytest.approx(k / n, abs=1e-6)
+
+    # Genuinely decaying (not flat) as levels move further into the tail --
+    # a body-only (no-tail) implementation would have returned the SAME
+    # constant-extrapolated value (`1/n`, `np.interp`'s boundary behavior)
+    # for every one of these, rather than a continuously decreasing curve;
+    # a raw-empirical step function would also just sit flat between
+    # `u` and the next actual order statistic above it (astronomically
+    # unlikely to land on one of these hand-picked steps by coincidence).
+    steps = u + np.array([1e-9, 0.05, 0.15, 0.3, 0.6])
+    p = est(steps)
+    assert np.all(np.diff(p) < 0.0)  # strictly decreasing
+    assert p[-1] < (k / n) - 1e-6  # genuinely moved away from the boundary value
+    assert np.all(p > 0.0)  # still non-zero throughout (design spec §6.1)
 
 
 def test_degenerate_sparse_tail_fit_raises_no_warning_under_dash_w_error():
@@ -153,6 +201,57 @@ def test_drops_nan_from_train_array_without_warning():
 def test_reach_prob_estimator_rejects_too_few_points():
     with pytest.raises(ValueError):
         reach_prob_estimator(np.array([1.0]))
+
+
+def test_reach_prob_estimator_rejects_non_positive_min_bin():
+    # Coordinator review (Task 6 follow-up): `min_bin <= 0` used to index
+    # `sorted_arr[n - min(min_bin, n)]` out of range (`min(min_bin, n) <= 0`
+    # -> `n - that >= n`, a bare/confusing IndexError) instead of a clear
+    # ValueError about what's actually wrong.
+    arr = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+    with pytest.raises(ValueError):
+        reach_prob_estimator(arr, min_bin=0)
+    with pytest.raises(ValueError):
+        reach_prob_estimator(arr, min_bin=-5)
+
+
+def test_down_side_sign_convention_negation_yields_correct_le_semantics():
+    # Coordinator review (Task 6 follow-up): the module docstring's "Sign
+    # convention" section says a caller gets `P(low_diff_prc <= level)` by
+    # building `reach_prob_estimator(-low_diff_prc_train)` and querying
+    # with a non-negative magnitude -- previously untested (the only
+    # real-data test, `test_rr_levels_feed_zone_calc`, passes the SAME
+    # up-estimator as both `reach_up` and `reach_down`, so it could not
+    # have caught a caller/implementation forgetting to negate).
+    #
+    # Mean-shifted (not centered on 0) so `up`/`down` are NOT symmetric --
+    # a bug that fed `down` the same (un-negated) array as `up` would
+    # produce visibly, provably wrong numbers here, not numbers that
+    # happen to coincidentally match by symmetry.
+    rng = np.random.default_rng(9)
+    arr = rng.normal(0.7, 1.0, 400)
+    up = reach_prob_estimator(arr, min_bin=50)
+    down = reach_prob_estimator(-arr, min_bin=50)
+
+    neg_sorted = np.sort(-arr)
+    # Body-region probes (exact order statistics of -arr, at increasing
+    # depth -- no interpolation artifact, so this is an EXACT check, not a
+    # tolerance-based one) confirming down(level) == P(arr <= -level).
+    for idx in (20, 50, 100):
+        level = float(neg_sorted[idx])
+        expected = float(np.mean(arr <= -level))
+        got = down(np.array([level]))[0]
+        assert got == pytest.approx(expected, rel=1e-9)
+
+    # A caller who forgot to negate would get `up`'s numbers for `down` --
+    # confirm the two genuinely, substantially disagree at a representative
+    # level (this WOULD FAIL if `down` had been built on `arr` instead of
+    # `-arr`, since it would then just equal `up` exactly).
+    level = np.array([0.0])
+    got_up = up(level)[0]
+    got_down = down(level)[0]
+    assert got_down == pytest.approx(float(np.mean(arr <= 0.0)), rel=1e-2)
+    assert abs(got_down - got_up) > 0.1
 
 
 # --- rr_grid -------------------------------------------------------------
@@ -219,6 +318,38 @@ def test_rr_grid_expected_return_subtracts_2fee_and_scales_reward_risk_by_candle
     risk = 2.0 * candle_size
     expected_exp_ret = reward * row["p_target"] - risk * row["p_stop"] - 2 * fee * candle_size
     assert row["expected_return_after_fees"] == pytest.approx(expected_exp_ret)
+
+
+def test_rr_grid_floors_p_stop_in_expected_return_not_just_in_rr():
+    # Coordinator review (Task 6 follow-up): `rr` already floored `p_stop`
+    # before dividing, but `expected_return_after_fees` used to use the
+    # RAW (unfloored) `p_stop` -- an externally-injected `reach_down` that
+    # (incorrectly, or adversarially) returns a literal `0.0` would zero
+    # out the entire `risk * p_stop` term, making the position look
+    # risk-free in the return formula even though `rr` itself was already
+    # guarded against the same `0.0`.
+    def zero_reach_down(levels):
+        return np.zeros(np.atleast_1d(np.asarray(levels)).shape)
+
+    reach_up = _linear_reach(1.0, 0.3)
+    x_grid = np.array([1.0, 2.0])
+    fee = 0.001
+    candle_size = 2.0
+
+    grid = rr_grid(reach_up, zero_reach_down, x_grid, fee=fee, candle_size=candle_size, direction="long")
+    row = grid[(grid["tgt_x"] == 1.0) & (grid["sl_x"] == 2.0)].iloc[0]
+
+    assert row["p_stop"] == pytest.approx(0.0)  # raw p_stop column still reports the literal 0.0
+
+    reward = 1.0 * candle_size
+    risk = 2.0 * candle_size
+    not_floored_exp_ret = reward * row["p_target"] - risk * 0.0 - 2 * fee * candle_size
+    floored_exp_ret = reward * row["p_target"] - risk * _PROB_FLOOR - 2 * fee * candle_size
+
+    # The formula must NOT match the "risk-free" (unfloored) computation...
+    assert row["expected_return_after_fees"] != pytest.approx(not_floored_exp_ret, abs=1e-9)
+    # ...and MUST match the floored one (tiny risk*floor term subtracted).
+    assert row["expected_return_after_fees"] == pytest.approx(floored_exp_ret, rel=1e-6)
 
 
 def test_rr_grid_larger_tgt_x_gives_lower_p_target():

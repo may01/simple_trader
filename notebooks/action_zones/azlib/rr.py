@@ -55,7 +55,8 @@ your exact expected-return formula")
 
     reward = tgt_x * candle_size          # price units
     risk   = sl_x  * candle_size          # price units
-    expected_return_after_fees = reward * p_target - risk * p_stop
+    p_stop_safe = max(p_stop, _PROB_FLOOR)    # never a literal 0.0, see rr_grid's docstring
+    expected_return_after_fees = reward * p_target - risk * p_stop_safe
                                   - 2 * fee * candle_size
 
 ``fee`` is a FRACTIONAL trading-fee rate (e.g. ``0.001`` = 0.1% per side);
@@ -179,6 +180,14 @@ class _HybridReachEstimator:
     """
 
     def __init__(self, train_extreme_diff: np.ndarray, min_bin: int):
+        # `min_bin` picks the crossover index `sorted_arr[n - min(min_bin,
+        # n)]` below -- `min_bin <= 0` would make that index `>= n` (or, for
+        # very negative min_bin, wildly out of range), a bare/confusing
+        # `IndexError` rather than a clear message about what's actually
+        # wrong (coordinator review, Task 6 follow-up).
+        if min_bin < 1:
+            raise ValueError(f"min_bin must be >= 1, got {min_bin}")
+
         arr = np.asarray(train_extreme_diff, dtype=float)
         arr = arr[~np.isnan(arr)]
         n = arr.size
@@ -245,7 +254,9 @@ def reach_prob_estimator(
     ``-{tf}_low_diff_prc`` for the down/stop side -- see module docstring's
     "Sign convention"). NaNs are dropped before fitting. Requires >= 2
     non-NaN values (``ValueError`` otherwise -- a single point has no
-    meaningful tail to fit).
+    meaningful tail to fit). ``min_bin`` must be ``>= 1`` (``ValueError``
+    otherwise -- ``min_bin <= 0`` would otherwise index the sorted train
+    array out of range while locating the body/tail crossover).
 
     Returns a callable ``f(levels: array-like) -> np.ndarray`` where
     ``f(level) == P(X >= level)`` (touch/first-passage probability, NOT a
@@ -303,23 +314,31 @@ def rr_grid(
 
     ::
 
-        p_target = target_fn(tgt_x)
-        p_stop   = stop_fn(sl_x)
-        rr       = p_target / p_stop
-        reward   = tgt_x * candle_size
-        risk     = sl_x  * candle_size
-        expected_return_after_fees = reward*p_target - risk*p_stop - 2*fee*candle_size
+        p_target   = target_fn(tgt_x)
+        p_stop     = stop_fn(sl_x)
+        p_stop_safe = max(p_stop, _PROB_FLOOR)
+        rr         = p_target / p_stop_safe
+        reward     = tgt_x * candle_size
+        risk       = sl_x  * candle_size
+        expected_return_after_fees = reward*p_target - risk*p_stop_safe - 2*fee*candle_size
 
     (see module docstring's "Expected-return-after-fees formula" for the
     full rationale/units discussion, and "candle_size definition" for the
     recommended ``candle_size`` computation, which is NOT done inside this
     function -- it is a plain ``float`` parameter, computed by the caller).
 
-    ``rr``'s own denominator is floored at ``_PROB_FLOOR`` before dividing
-    (belt-and-suspenders alongside ``reach_prob_estimator``'s own floor --
-    protects against an externally-supplied ``reach_down``/``reach_up``
-    callable that does NOT itself guarantee a non-zero result), so ``rr``
-    is always finite, never a ``RuntimeWarning``-raising ``x/0``.
+    ``p_stop`` is floored at ``_PROB_FLOOR`` (``p_stop_safe`` above) before
+    being used in EITHER ``rr``'s denominator OR the ``risk*p_stop`` term of
+    ``expected_return_after_fees`` (belt-and-suspenders alongside
+    ``reach_prob_estimator``'s own floor -- protects against an
+    externally-supplied ``reach_down``/``reach_up`` callable that does NOT
+    itself guarantee a non-zero result): unfloored, a literal ``p_stop ==
+    0.0`` would both raise a ``RuntimeWarning``-triggering ``x/0`` in ``rr``
+    AND make a position look artificially risk-free (``risk * 0.0 == 0.0``)
+    in the return formula. The ``p_target``/reward side is deliberately
+    NOT floored -- a literal ``p_target == 0.0`` correctly zeroes out the
+    reward term (a target that is genuinely unreachable should contribute
+    no expected reward), it just cannot appear as a division's denominator.
 
     Optional baseline columns ``p_target_normal``/``p_stop_normal`` (design
     spec §6.1's normal-CDF sanity reference, "logged ... never used to
@@ -347,12 +366,21 @@ def rr_grid(
     p_target = np.asarray(target_fn(tgt_flat), dtype=float)
     p_stop = np.asarray(stop_fn(sl_flat), dtype=float)
 
+    # Floored once, shared by BOTH `rr` and `expected_return_after_fees`
+    # (coordinator review, Task 6 follow-up): an externally-supplied
+    # `reach_down`/`reach_up` callable that returns a literal `p_stop ==
+    # 0.0` (reach_prob_estimator's OWN floor guarantees this never happens,
+    # but `rr_grid` accepts ANY callable matching the `Callable` signature,
+    # not just ones built via reach_prob_estimator) must not make a
+    # position look risk-free in the return formula either -- using the
+    # raw, unfloored `p_stop` there would let `risk * p_stop` go to exactly
+    # `0.0`, silently zeroing out the entire risk side of the trade.
     p_stop_safe = np.maximum(p_stop, _PROB_FLOOR)
     rr = p_target / p_stop_safe
 
     reward = tgt_flat * candle_size
     risk = sl_flat * candle_size
-    expected_return_after_fees = reward * p_target - risk * p_stop - 2.0 * fee * candle_size
+    expected_return_after_fees = reward * p_target - risk * p_stop_safe - 2.0 * fee * candle_size
 
     data = {
         "tgt_x": tgt_flat,
