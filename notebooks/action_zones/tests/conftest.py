@@ -266,3 +266,88 @@ def rng_matrix() -> tuple[np.ndarray, np.ndarray]:
     noise = rng.normal(scale=0.05, size=_RNG_MATRIX_N)
     y = 0.5 * X[:, 0] + 0.3 * X[:, 1] ** 2 + noise
     return X, y
+
+
+# --- synthetic_pipeline fixture (Task 5's own integration test) ------------
+#
+# task-5-brief.md's integration test, `test_y_sweep_produces_selectable_y`:
+#   sweep = sweep_y(**synthetic_pipeline, y_grid=np.round(np.arange(-2,2.01,0.1),1))
+# so this fixture is a plain dict of every `azlib.infer.sweep_y` keyword
+# EXCEPT `y_grid` (the test supplies that explicitly).
+
+
+def _bracketing_price_levels(wide_df: pd.DataFrame, tf: int) -> tuple[pd.Series, pd.Series]:
+    """Stub `price_levels_fn` for `synthetic_pipeline` -- CONSTANT
+    high/low price levels that bracket every row's actual `1_low`/`1_high`
+    (half the observed min below, 1.5x the observed max above).
+
+    Deliberately NOT `azlib.space.price_levels` (Task 2's real per-candle,
+    warm-up-NaN function) -- `sweep_y`'s `price_levels_fn` parameter exists
+    precisely so Task 5's own tests can inject a fully controllable,
+    NaN-free zone range instead of depending on Task 2's real per-candle
+    band width (a function of the synthetic RNG's own volatility, unrelated
+    to what THIS layer needs to exercise) -- see task-5-brief.md's
+    dependency-inversion note (`rr_fn`); the same idea applied one layer up
+    to `price_levels_fn`. A real notebook driver (Task 9) passes
+    `azlib.space.price_levels` itself here instead.
+
+    Because every row's entry price is guaranteed strictly inside
+    `[low, high]` by construction, sweeping `y` (-> a coeff between 0 and 1
+    for `y` in the typical `[-2, 2]` sweep range with `fused_std=0.2`, see
+    `synthetic_pipeline` below) sweeps `zone_limit` MONOTONICALLY across
+    the entire observed entry-price range -- giving both the integration
+    test and any local monotonic-in-Y unit test real, deterministic,
+    warm-up-free signal.
+    """
+    lo = float(min(wide_df["1_low"].min(), wide_df["1_high"].min())) * 0.5
+    hi = float(max(wide_df["1_low"].max(), wide_df["1_high"].max())) * 1.5
+    idx = wide_df.index
+    return pd.Series(hi, index=idx), pd.Series(lo, index=idx)
+
+
+@pytest.fixture
+def synthetic_pipeline(synthetic_wide_df) -> dict:
+    """kwargs for `azlib.infer.sweep_y` (everything but `y_grid`).
+
+    - `fused_mean`/`fused_std`: a flat mean=0.5/std=0.2 pair, standing in
+      for Layer 4's fused regression output. Task 5's own unit tests
+      exercise `fuse_inverse_variance` directly on real per-group inputs
+      elsewhere -- this fixture only needs SOME plausible per-point
+      (mean, std) to drive `sweep_y` end-to-end, not a real fitted model.
+    - `wide_df`/`tf`/`direction`: `synthetic_wide_df` (see that fixture),
+      tf=15, direction="long".
+    - `price_levels_fn`: `_bracketing_price_levels` (see its docstring) --
+      not the real `azlib.space.price_levels`.
+    - `strict_label`: a sparse, deterministic boolean scattering (every
+      37th row True) -- enough strict-labeled rows to make
+      `strict_coverage` well-defined (non-NaN) without labeling most of
+      the frame.
+    - `rr_fn`: a stub standing in for Task 6's real R/R (`azlib.rr` does
+      not exist yet, see `azlib/infer.py`'s module docstring) --
+      `2 * zone_marking.mean()`, which crosses `select_y`'s `> 1.0`
+      "profitable" threshold once a given `Y`'s zone covers more than half
+      of `wide_df`'s rows. Combined with `_bracketing_price_levels`
+      guaranteeing zone coverage sweeps from ~0% to ~100% across the
+      `y_grid`, this ensures the integration test exercises `select_y`'s
+      PROFITABLE-row branch (not only its NaN-safe default) at least once.
+    """
+    wide_df = synthetic_wide_df
+    mean = pd.Series(0.5, index=wide_df.index)
+    std = pd.Series(0.2, index=wide_df.index)
+
+    strict_label = pd.Series(False, index=wide_df.index)
+    strict_label.iloc[::37] = True
+
+    def rr_fn(zone_marking: pd.Series) -> float:
+        return 2.0 * float(zone_marking.mean())
+
+    return {
+        "fused_mean": mean,
+        "fused_std": std,
+        "wide_df": wide_df,
+        "tf": 15,
+        "direction": "long",
+        "price_levels_fn": _bracketing_price_levels,
+        "strict_label": strict_label,
+        "rr_fn": rr_fn,
+    }
