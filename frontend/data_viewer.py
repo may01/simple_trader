@@ -151,15 +151,70 @@ class DataViewer:
         # elsewhere, so skip-if-absent keeps every other dataset unchanged.
         "az_long": ["az_limit_long", "az_tgt_long", "az_sl_long"],
         "az_short": ["az_limit_short", "az_tgt_short", "az_sl_short"],
+        # candle-bounds prediction overlay (data.join_candle_bounds), for the
+        # CURRENT (forming) candle. Semantics of the two operative levels:
+        #   cb_high = LONG target  / SHORT stop-loss
+        #   cb_low  = SHORT target / LONG  stop-loss
+        # so one pair of lines serves both directions and replaces the old
+        # tgt_*/sl_* overlays (see _TARGET_OVERLAYS below). "cb_band" is the
+        # ±1 train-frozen-residual-sd envelope, off by default. "cb_adj" is the
+        # move_class-shifted variant of the pair (class +2 -> each band's upper
+        # edge, -2 -> lower edge); it is NOT operative — zones are measured off
+        # the raw bounds — and is kept off by default for inspection only.
+        # "cb_long"/"cb_short" are the entry-zone levels, placed 10% of the
+        # stop→target span away from the stop. Columns exist only for tf
+        # 15/60/240 and only for datasets carrying a df_with_candle_bounds.pkl
+        # sidecar (currently oos2m) — absent elsewhere, so skip-if-absent keeps
+        # every other dataset unchanged.
+        # See external/docs/superpowers/experiment/candle_bounds_algorithm.md.
+        "cb_bounds": ["cb_high", "cb_low"],
+        "cb_band": ["cb_high_up", "cb_high_dn", "cb_low_up", "cb_low_dn"],
+        "cb_adj": ["cb_hi_adj", "cb_lo_adj"],
+        "cb_long": ["cb_zone_long"],
+        "cb_short": ["cb_zone_short"],
+        # Predicted CLOSE of the current candle, same model family as the
+        # high/low bounds, with its own ±1 residual-sd band. Off by default:
+        # its OOS r² is ~0 (-0.001/-0.001/+0.016 at tf 15/60/240), i.e. the
+        # band is essentially "previous close ± volatility" and carries no
+        # directional information — kept for inspection, not for decisions.
+        "cb_close": ["cb_close", "cb_close_up", "cb_close_dn"],
+        # NON-CLOSED candle-bounds overlay (data.join_candle_bounds_nc): the
+        # same frozen models as cb_* above but fed the *forming* candle at
+        # every 1-minute row, so each line is the predicted extreme of the next
+        # ~tf-minute window and updates per minute (vs cb_*'s per-candle
+        # stairstep). cbnc_long/cbnc_short are the matching entry-zone levels
+        # (same span-fraction rule as cb_zone_*; nc uses 10% vs closed 5% —
+        # see cbnc.ZONE_FRAC). Columns exist only for datasets
+        # carrying a df_with_candle_bounds_nc.pkl sidecar (currently oos2m).
+        # See external/docs/superpowers/experiment/next_candle_bounds_validation.md.
+        "cbnc_bounds": ["cbnc_high", "cbnc_low"],
+        "cbnc_band": ["cbnc_high_up", "cbnc_high_dn", "cbnc_low_up", "cbnc_low_dn"],
+        # Operative targets: the nc bound hair-cut TGT_SHRINK_PCT (0.15% of
+        # price) toward the loss side — what the hybrid zones actually aim at.
+        "cbnc_tgt": ["cbnc_tgt_long", "cbnc_tgt_short"],
+        "cbnc_long": ["cbnc_zone_long"],
+        "cbnc_short": ["cbnc_zone_short"],
     }
 
     # Overlay groups unchecked on first load (still drawable via their toggle).
     # az_short defaults off too — long+short together would double the zone
     # lines on a chart already busy with tgt_long/sl_long/tgt_short/sl_short.
-    _DEFAULT_OVERLAYS_OFF = {"bb_x_10_15", "bb_x_20_3", "sar", "az_short"}
+    # cb_band off too — four extra lines around an already-drawn bound pair.
+    _DEFAULT_OVERLAYS_OFF = {
+        "bb_x_10_15", "bb_x_20_3", "sar", "cb_band", "cb_close", "cb_adj",
+        "cbnc_band",
+    }
 
     # Target/stop-loss overlays — always drawn (at the chart tf), never toggleable.
-    _TARGET_OVERLAYS = ["tgt_long", "sl_long", "tgt_short", "sl_short"]
+    # EMPTIED: the predicted candle bounds ("cb_bounds" above) now supply
+    # target and stop-loss for both directions (cb_high = long tgt / short SL,
+    # cb_low = short tgt / long SL), so the old always-on tgt_*/sl_* lines are
+    # redundant and were doubling up the price subplot. Kept as an empty list
+    # rather than deleted: _draw_price_overlays and _draw_higher_tf_targets both
+    # iterate it, and the tgtsl_* toggle gate below tests membership against it,
+    # so emptying it removes the lines AND their toggles in one place while
+    # leaving _TARGET_TF_GROUPS intact (its min() is still read for tf gating).
+    _TARGET_OVERLAYS: list[str] = []
 
     # Higher-TF target/SL overlay groups. The four target fields are computed
     # only for these TFs (applies_to [15,60,240,1440]); on a chart finer than 15
@@ -199,6 +254,33 @@ class DataViewer:
         "az_limit_long": "dodgerblue", "az_limit_short": "gold",
         "az_tgt_long": "darkgreen", "az_sl_long": "darkred",
         "az_tgt_short": "mediumseagreen", "az_sl_short": "indianred",
+        # candle-bounds prediction: high side blue, low side orange (matching
+        # the standalone plotly charts), band edges the same hue as their own
+        # centre line so a band reads as one object.
+        # Every colour here is chosen dark enough to read on the viewer's white
+        # background — the band edges are a muted shade of their own centre
+        # line's hue rather than a pale tint, which washed out entirely.
+        "cb_high": "dodgerblue", "cb_low": "darkorange",
+        "cb_hi_adj": "steelblue", "cb_lo_adj": "peru",
+        "cb_high_up": "steelblue", "cb_high_dn": "steelblue",
+        "cb_low_up": "peru", "cb_low_dn": "peru",
+        # predicted close — indigo, distinct from the blue/orange bound pair
+        "cb_close": "indigo", "cb_close_up": "darkorchid", "cb_close_dn": "darkorchid",
+        # entry-zone levels — green/magenta to read as entries, not as the
+        # blue/orange bound pair they are derived from.
+        "cb_zone_long": "darkgreen", "cb_zone_short": "mediumvioletred",
+        # non-closed bounds: hue-shifted from their closed counterparts
+        # (blue->teal for high, orange->brown for low) so the per-minute nc line
+        # and the per-candle cb stairstep read as related but distinct. Band
+        # edges again a muted shade of their own centre line.
+        "cbnc_high": "teal", "cbnc_low": "chocolate",
+        "cbnc_high_up": "darkslategray", "cbnc_high_dn": "darkslategray",
+        "cbnc_low_up": "saddlebrown", "cbnc_low_dn": "saddlebrown",
+        # nc entry-zone levels: green/magenta family like cb_zone_*, lighter so
+        # the closed zone line stays the reference.
+        "cbnc_zone_long": "seagreen", "cbnc_zone_short": "deeppink",
+        # operative (hair-cut) targets: green/red family, long darker
+        "cbnc_tgt_long": "forestgreen", "cbnc_tgt_short": "firebrick",
     }
 
     # Oscillator set for window figures (skip-if-absent). Each oscillator's
@@ -572,6 +654,7 @@ class DataViewer:
             df_slice, indicators, tf=tf, range_row=True, show_nn=show_nn
         )
         self._draw_price_overlays(fig, df_slice, tf, overlays)
+        self._draw_zone_markers(fig, window, overlays)
         self._draw_rsi_class_markers(fig, window, tf)
         if show_labels:
             self._draw_label_markers(fig, window, tf)
@@ -706,6 +789,123 @@ class DataViewer:
                 label=str(col),
                 subplot="price",
             )
+
+    # In-zone marker styling. Source-tf → vertical offset step (nearest tf
+    # tightest, so on the 1-min chart the 15m zone sits closest to the candle).
+    _AZ_INZONE_RE = re.compile(r"^(\d+)_az_inzone_(long|short)$")
+    _AZ_MARKER = {
+        # side -> (symbol, colour, price column, offset sign)
+        "long": ("triangle-up", "limegreen", "1_low", -1.0),
+        "short": ("triangle-down", "crimson", "1_high", 1.0),
+    }
+    _AZ_TF_STEP = {15: 0.0010, 60: 0.0020, 240: 0.0030}
+
+    # candle-bounds in-zone markers — same mechanism as the az ones above, its
+    # own regex/styling so both can be shown at once and told apart. Star
+    # triangles (vs az's plain triangles) and a green/magenta pair matching the
+    # cb_zone_long/cb_zone_short line colours.
+    _CB_INZONE_RE = re.compile(r"^(\d+)_cb_inzone_(long|short)$")
+    _CB_MARKER = {
+        # side -> (symbol, colour, price column, offset sign)
+        "long": ("star-triangle-up", "darkgreen", "1_low", -1.0),
+        "short": ("star-triangle-down", "mediumvioletred", "1_high", 1.0),
+    }
+
+    # Entry markers — an NN head's probability was above 0.50 and then fell by
+    # more than 0.05 in one minute (signal breakdown), AND that minute was inside
+    # the same tf's entry zone. Arrows, in their own colours, at twice the zone
+    # markers' offset so the two never overlap on the same candle. Dark teal /
+    # dark goldenrod: the chart background is white, so the obvious cyan/yellow
+    # pair was effectively invisible.
+    _CB_ENTER_RE = re.compile(r"^(\d+)_cb_enter_(long|short)$")
+    _CB_ENTER_MARKER = {
+        # side -> (symbol, colour, price column, offset sign — 2x = further out)
+        "long": ("arrow-up", "darkcyan", "1_low", -2.0),
+        "short": ("arrow-down", "darkgoldenrod", "1_high", 2.0),
+    }
+
+    # Non-closed (forming-candle) in-zone markers — the cbnc_* twin of the
+    # cb_inzone markers above: same star-triangle family but OPEN symbols, in
+    # the cbnc_zone_* line colours, at 1.5x the zone offset so closed and
+    # non-closed marks on the same candle sit side by side, both readable.
+    _CBNC_INZONE_RE = re.compile(r"^(\d+)_cbnc_inzone_(long|short)$")
+    _CBNC_MARKER = {
+        # side -> (symbol, colour, price column, offset sign)
+        "long": ("star-triangle-up-open", "seagreen", "1_low", -1.5),
+        "short": ("star-triangle-down-open", "deeppink", "1_high", 1.5),
+    }
+
+    # Intersection markers — a 1-min candle inside BOTH the closed-bound zone
+    # (cb_inzone) and the non-closed-bound zone (cbnc_inzone) of the same tf.
+    # Stars beyond the enter arrows (3x offset) so the confluence flag never
+    # collides with either source's own marks.
+    _CBX_INZONE_RE = re.compile(r"^(\d+)_cbx_inzone_(long|short)$")
+    _CBX_MARKER = {
+        # side -> (symbol, colour, price column, offset sign — 3x = outermost)
+        "long": ("star", "darkolivegreen", "1_low", -3.0),
+        "short": ("star", "purple", "1_high", 3.0),
+    }
+
+    # (regex, marker styling, side -> gating overlay group, trace-label prefix).
+    # Drives _draw_zone_markers so a new zone source is one tuple, not a new loop.
+    _ZONE_MARKER_SOURCES = (
+        (_AZ_INZONE_RE, _AZ_MARKER, {"long": "az_long", "short": "az_short"}, "zone"),
+        (_CB_INZONE_RE, _CB_MARKER, {"long": "cb_long", "short": "cb_short"}, "cbzone"),
+        (_CB_ENTER_RE, _CB_ENTER_MARKER,
+         {"long": "cb_long", "short": "cb_short"}, "enter"),
+        (_CBNC_INZONE_RE, _CBNC_MARKER,
+         {"long": "cbnc_long", "short": "cbnc_short"}, "cbzone_nc"),
+        (_CBX_INZONE_RE, _CBX_MARKER,
+         {"long": "cbnc_long", "short": "cbnc_short"}, "cbx"),
+    )
+
+    def _draw_zone_markers(
+        self,
+        fig: go.Figure,
+        window: pd.DataFrame,
+        overlays: list[str] | None,
+    ) -> None:
+        """Mark in-zone 1-min candles on the price subplot. Skip-if-absent.
+
+        Sourced from the per-1-min-row ``{tf}_az_inzone_{long,short}`` and
+        ``{tf}_cb_inzone_{long,short}`` columns (tf in 15/60/240). Longs get an
+        up-marker just below the 1-min low, shorts a down-marker just above the
+        1-min high — so on the 1-min chart every candle a zone selected is
+        flagged individually. Each source is gated by its own overlay toggles
+        (``az_long``/``az_short``, ``cb_long``/``cb_short``; ``None`` = all).
+        One trace per (source, tf, side).
+        """
+        for regex, styling, gates, prefix in self._ZONE_MARKER_SOURCES:
+            if overlays is None:
+                enabled = {"long", "short"}
+            else:
+                enabled = {s for s, g in gates.items() if g in overlays}
+            if not enabled:
+                continue
+            for col in window.columns:
+                m = regex.match(str(col))
+                if not m:
+                    continue
+                src_tf, side = int(m.group(1)), m.group(2)
+                if side not in enabled:
+                    continue
+                symbol, color, ycol, sign = styling[side]
+                if ycol not in window.columns:
+                    continue
+                mask = window[col].fillna(False).to_numpy(dtype=bool)
+                if not mask.any():
+                    continue
+                step = self._AZ_TF_STEP.get(src_tf, 0.002)
+                ys = window.loc[mask, ycol] * (1.0 + sign * step)
+                self.renderer.draw_marker(
+                    fig,
+                    list(window.index[mask]),
+                    list(ys),
+                    marker_symbol=symbol,
+                    color=color,
+                    label=f"{prefix}_{side}_{src_tf}m",
+                    subplot="price",
+                )
 
     # Action-marker styling: event → (symbol, colour). OPEN direction is
     # resolved from the action's position_type. SIGNAL_FIRED is never drawn.

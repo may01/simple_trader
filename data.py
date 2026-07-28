@@ -447,6 +447,84 @@ def join_action_zones(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
     return df.join(az_df[new_cols], how="left")
 
 
+def join_candle_bounds(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join {dataset_dir}/df_with_candle_bounds.pkl (predicted candle-bound
+    overlay columns) onto ``df`` on the shared 1-min DatetimeIndex, and return
+    the joined frame.
+
+    The candle-bounds experiment (see
+    external/docs/superpowers/experiment/candle_bounds_algorithm.md) writes a
+    separate, additive ``df_with_candle_bounds.pkl`` next to a dataset's
+    ``df_with_indicators.pkl``, holding per-(tf, side) predicted extreme
+    columns named ``{tf}_cb_{side}`` (the predicted bound), ``{tf}_cb_{side}_std``
+    (the band half-width in price), and ``{tf}_cb_{side}_up`` /
+    ``{tf}_cb_{side}_dn`` (bound ± std). Values are held constant across every
+    1-minute row of the candle they apply to, and are computed only from data
+    closed at the previous candle — look-ahead free.
+
+    Mirrors ``join_action_zones``/``join_nn_results`` exactly: the canonical
+    ``df_with_indicators.pkl`` stays single-writer (DataPreparer) and is never
+    mutated.
+
+    Absence-safe: if ``df_with_candle_bounds.pkl`` does not exist, returns ``df``
+    unchanged (no-op) — the ``cb_*`` columns simply do not appear, and the
+    viewer's overlay groups skip-if-absent.
+
+    The join never overwrites existing ``df`` columns (only columns absent from
+    ``df`` are taken from the pickle).
+
+    Args:
+        df:          The consumer's wide frame (1-min DatetimeIndex).
+        dataset_dir: Directory containing df_with_candle_bounds.pkl (and
+                     df_with_indicators.pkl).
+
+    Returns:
+        ``df`` with ``cb_*`` columns left-joined on the index, or ``df``
+        unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_candle_bounds.pkl")
+    if not os.path.exists(path):
+        return df
+
+    cb_df: pd.DataFrame = pd.read_pickle(path)
+
+    # Take only columns not already present so the join never clobbers existing
+    # df columns (the pickle is cb_*-only by construction, but guard anyway).
+    new_cols = [c for c in cb_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(cb_df[new_cols], how="left")
+
+
+def join_candle_bounds_nc(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join ``{dataset_dir}/df_with_candle_bounds_nc.pkl`` (non-closed
+    candle-bound predictions) onto ``df`` by DatetimeIndex. Absence-safe no-op.
+
+    The next-candle-bounds-on-non-closed-data experiment
+    (external/docs/superpowers/experiment/next_candle_bounds_validation.md,
+    producer: notebooks/candle_bounds_nc/run_cbnc.py) writes an additive sidecar
+    next to a dataset's ``df_with_indicators.pkl``. Per tf in 15/60/240 it
+    carries ``{tf}_cbnc_{side}[,_std,_up,_dn]`` — the same frozen models as
+    ``join_candle_bounds`` but fed the *forming* candle at every 1-minute row,
+    so the bound is the extreme of the next ~tf-minute window and updates each
+    minute instead of being held constant per candle — plus the entry-zone set
+    ``{tf}_cbnc_zone/inzone_{long,short}`` and the closed∧non-closed
+    intersection markers ``{tf}_cbx_inzone_{long,short}``.
+
+    Same contract as ``join_candle_bounds``: never overwrites existing columns,
+    returns ``df`` unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_candle_bounds_nc.pkl")
+    if not os.path.exists(path):
+        return df
+
+    nc_df: pd.DataFrame = pd.read_pickle(path)
+    new_cols = [c for c in nc_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(nc_df[new_cols], how="left")
+
+
 class SimulationData:
     """Single-load wide-DataFrame replay cursor for backtesting/simulation.
 
