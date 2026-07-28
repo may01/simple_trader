@@ -6,7 +6,7 @@ def main() -> None:
 
     import pandas as pd
 
-    from data import join_nn_results
+    from data import join_action_zones, join_nn_results
     from frontend.data_viewer import FullData
     from frontend.history_dashboard import HistoryDashboard
     from helpers import wide_df_path
@@ -16,6 +16,10 @@ def main() -> None:
     # Surface NN inference outputs (nn_res_*) in the viewer by left-joining the
     # batch artifact df_with_nn.pkl from the dataset dir. Absence-safe no-op.
     df = join_nn_results(df, os.path.dirname(path))
+    # Surface action-zones overlay columns (az_*) in the viewer by left-joining
+    # the batch artifact df_with_action_zones.pkl from the dataset dir.
+    # Absence-safe no-op.
+    df = join_action_zones(df, os.path.dirname(path))
     dashboard = HistoryDashboard(FullData(df))
     dashboard.run()
 

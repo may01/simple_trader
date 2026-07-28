@@ -143,10 +143,20 @@ class DataViewer:
         "bb_x_20_3": ["bb_upper_20_3", "bb_lower_20_3"],
         "ema": ["ema_7", "ema_14", "ema_25", "ema_50", "ema_100"],
         "sar": ["sar_002_02"],
+        # action_zones experiment overlay (notebooks/action_zones,
+        # data.join_action_zones): entry-limit/target/stop-loss lines per
+        # direction, drawn at the chart tf via "{tf}_{field}" like every
+        # other group here. Populated only for datasets with a
+        # df_with_action_zones.pkl sidecar (currently 2y_az) — absent
+        # elsewhere, so skip-if-absent keeps every other dataset unchanged.
+        "az_long": ["az_limit_long", "az_tgt_long", "az_sl_long"],
+        "az_short": ["az_limit_short", "az_tgt_short", "az_sl_short"],
     }
 
     # Overlay groups unchecked on first load (still drawable via their toggle).
-    _DEFAULT_OVERLAYS_OFF = {"bb_x_10_15", "bb_x_20_3", "sar"}
+    # az_short defaults off too — long+short together would double the zone
+    # lines on a chart already busy with tgt_long/sl_long/tgt_short/sl_short.
+    _DEFAULT_OVERLAYS_OFF = {"bb_x_10_15", "bb_x_20_3", "sar", "az_short"}
 
     # Target/stop-loss overlays — always drawn (at the chart tf), never toggleable.
     _TARGET_OVERLAYS = ["tgt_long", "sl_long", "tgt_short", "sl_short"]
@@ -182,6 +192,13 @@ class DataViewer:
         # short lighter so direction reads at a glance.
         "tgt_long": "darkgreen", "sl_long": "darkred",
         "tgt_short": "mediumseagreen", "sl_short": "indianred",
+        # action_zones overlay: entry-limit lines in blue/gold (distinct from
+        # the tgt/sl green/red family so the entry price reads as its own
+        # thing), tgt/sl reusing the same green/red-shade, long/short
+        # darker/lighter convention as the plain tgt_*/sl_* pair above.
+        "az_limit_long": "dodgerblue", "az_limit_short": "gold",
+        "az_tgt_long": "darkgreen", "az_sl_long": "darkred",
+        "az_tgt_short": "mediumseagreen", "az_sl_short": "indianred",
     }
 
     # Oscillator set for window figures (skip-if-absent). Each oscillator's

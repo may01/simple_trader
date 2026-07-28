@@ -401,6 +401,52 @@ def join_nn_results(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
     return df.join(nn_df[new_cols], how="left")
 
 
+def join_action_zones(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join {dataset_dir}/df_with_action_zones.pkl (action-zones overlay
+    columns) onto ``df`` on the shared 1-min DatetimeIndex, and return the
+    joined frame.
+
+    The action_zones experiment (notebooks/action_zones) writes a separate,
+    additive ``df_with_action_zones.pkl`` next to a dataset's
+    ``df_with_indicators.pkl`` containing per-(tf, direction) zone/entry/
+    target/stop-loss columns named ``{tf}_az_limit_{dir}``,
+    ``{tf}_az_tgt_{dir}``, ``{tf}_az_sl_{dir}``, ``{tf}_az_inzone_{dir}``
+    (see .superpowers/sdd/gen_action_zones_sidecar.py). Consumers merge it in
+    at construction, mirroring ``join_nn_results`` exactly; the canonical
+    ``df_with_indicators.pkl`` stays single-writer (DataPreparer) and is
+    never mutated.
+
+    Absence-safe: if ``df_with_action_zones.pkl`` does not exist, returns
+    ``df`` unchanged (no-op) — the ``az_*`` columns simply do not appear, and
+    the viewer's overlay groups skip-if-absent.
+
+    The join never overwrites existing ``df`` columns (only columns absent
+    from ``df`` are taken from the pickle), and it does NOT mutate
+    ``df_with_indicators.pkl`` on disk.
+
+    Args:
+        df:          The consumer's wide frame (1-min DatetimeIndex).
+        dataset_dir: Directory containing df_with_action_zones.pkl (and
+                     df_with_indicators.pkl).
+
+    Returns:
+        ``df`` with ``az_*`` columns left-joined on the index, or ``df``
+        unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_action_zones.pkl")
+    if not os.path.exists(path):
+        return df
+
+    az_df: pd.DataFrame = pd.read_pickle(path)
+
+    # Take only columns not already present so the join never clobbers existing
+    # df columns (the pickle is az_*-only by construction, but guard anyway).
+    new_cols = [c for c in az_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(az_df[new_cols], how="left")
+
+
 class SimulationData:
     """Single-load wide-DataFrame replay cursor for backtesting/simulation.
 
