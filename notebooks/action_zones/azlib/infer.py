@@ -14,8 +14,15 @@ Implements design spec §11
       low_level)`` inverse map Task 7's ``zone_limit_price`` will formalize
       -- see ``sweep_y``'s docstring), marks 1-minute rows inside that
       zone, and reports ``strict_coverage``/``realized_rr``/``n_zoned`` per
-      ``Y``. ``select_y`` picks the ``Y`` that maximizes ``strict_coverage``
-      among rows whose ``realized_rr`` is profitable.
+      ``Y``. ``select_y`` picks the ``Y`` that maximizes TOTAL realized
+      profit (``n_zoned * realized_rr``) among rows whose ``realized_rr``
+      is profitable (Fix 1 -- see ``select_y``'s own docstring: this
+      replaces an earlier "maximize ``strict_coverage`` among profitable
+      rows" objective, which — combined with a Y-invariant ``rr_fn`` — was
+      degenerate, always walking the zone out to the sweep boundary since a
+      wider zone was "free"; the total-profit objective is self-limiting
+      instead, since widening a zone raises ``n_zoned`` but lowers
+      ``realized_rr``).
 
 Dependency inversion (task-5-brief.md, resolved by task-6-brief.md):
 ``sweep_y`` takes an INJECTED ``rr_fn`` callback (``zone_marking -> float``)
@@ -378,26 +385,45 @@ def sweep_y(
 
 
 def select_y(sweep: pd.DataFrame) -> float:
-    """``Y`` maximizing ``strict_coverage`` among profitable rows.
+    """``Y`` maximizing TOTAL realized profit (``n_zoned * realized_rr``)
+    among profitable rows (Fix 1 -- see
+    ".superpowers/sdd/task-fix1-report.md"; REPLACES an earlier "maximize
+    ``strict_coverage`` among profitable rows" objective, kept only in
+    history/prior reports).
 
     "Profitable" = ``realized_rr > _PROFITABLE_EXP_RETURN_THRESHOLD``
-    (``0.0`` -- see that constant's docstring above: ``realized_rr`` is
-    Task 6's fee-aware EXPECTED-RETURN-AFTER-FEES, not a raw R/R ratio;
-    profitable means that number is strictly positive, a break-even
+    (``0.0``, unchanged -- see that constant's docstring above:
+    ``realized_rr`` is a fee-aware/realized expected-return-style number,
+    not a raw R/R ratio; profitable means strictly positive, a break-even
     ``0.0`` does not count). Among rows passing that filter, returns the
-    ``y`` of whichever has the largest ``strict_coverage`` (NaN
-    ``strict_coverage`` values, e.g. from a sweep with zero strict-labeled
-    rows, are skipped by ``pandas``' default ``idxmax`` ``skipna=True``
-    behavior, so they never win a comparison against a real number but
-    also never raise merely by being present).
+    ``y`` of whichever has the largest ``n_zoned * realized_rr`` -- the
+    TOTAL R earned (how many entries times the mean R-multiple per entry),
+    NOT the largest ``strict_coverage``.
 
-    **NaN-safe default** (documented, task-5-brief.md): if NO row is
-    profitable (including the empty-sweep and all-rows-non-profitable
-    cases), or every profitable row's ``strict_coverage`` is itself NaN,
-    returns ``_SELECT_Y_DEFAULT`` (``0.0`` -- the midpoint of the
-    ``[-2.0, 2.0]`` sweep range; ``inferred_coeff(mean, std, 0.0) ==
-    mean``, i.e. "trust the fused mean with no std-based adjustment", the
-    least-opinionated fallback).
+    **Why total profit, not max coverage** (the actual bug Fix 1 closes):
+    as of Fix 1, ``realized_rr`` is Y-DEPENDENT (``azlib.validate
+    .run_train``'s ``rr_fn`` closure computes the REAL forward-touch mean R
+    of entries actually inside a given ``Y``'s zone -- see that module's
+    docstring) -- a WIDER zone admits worse, further-from-center entries,
+    so ``realized_rr`` tends to FALL as ``n_zoned``/``strict_coverage``
+    rise. Maximizing coverage alone (the old objective) therefore always
+    walked ``Y`` out to the sweep boundary regardless of quality, since a
+    wider zone was "free" as long as it stayed technically profitable.
+    Maximizing the PRODUCT ``n_zoned * realized_rr`` is self-limiting
+    instead: it only keeps growing while the marginal entries being added
+    are still net-additive to total profit, and falls once the average
+    quality drop from widening outpaces the extra count -- the product
+    peaks at a genuinely selective interior ``Y``, not necessarily the
+    widest profitable one.
+
+    **NaN-safe default** (documented, task-5-brief.md, carried forward by
+    Fix 1): if NO row is profitable (including the empty-sweep and
+    all-rows-non-profitable cases -- e.g. every row's ``realized_rr`` is
+    NaN, since ``NaN > 0.0`` is ``False`` and excludes it exactly like a
+    negative value, no RuntimeWarning), returns ``_SELECT_Y_DEFAULT``
+    (``0.0`` -- the midpoint of the ``[-2.0, 2.0]`` sweep range;
+    ``inferred_coeff(mean, std, 0.0) == mean``, i.e. "trust the fused mean
+    with no std-based adjustment", the least-opinionated fallback).
     """
     if sweep.empty:
         return _SELECT_Y_DEFAULT
@@ -405,8 +431,12 @@ def select_y(sweep: pd.DataFrame) -> float:
     profitable = sweep["realized_rr"] > _PROFITABLE_EXP_RETURN_THRESHOLD
     candidates = sweep.loc[profitable]
 
-    if candidates.empty or candidates["strict_coverage"].isna().all():
+    if candidates.empty:
         return _SELECT_Y_DEFAULT
 
-    best_idx = candidates["strict_coverage"].idxmax()
+    total_profit = candidates["n_zoned"] * candidates["realized_rr"]
+    if total_profit.isna().all():
+        return _SELECT_Y_DEFAULT
+
+    best_idx = total_profit.idxmax()
     return float(candidates.loc[best_idx, "y"])

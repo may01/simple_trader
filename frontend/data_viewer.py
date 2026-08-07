@@ -235,6 +235,15 @@ class DataViewer:
         15: (None, 2.0), 60: ("dash", 1.6), 240: ("dot", 1.3), 1440: ("dashdot", 1.0),
     }
 
+    # Higher-TF candle-bounds overlay groups for charts finer than 15min: each
+    # group re-draws its source TF's closed (cb_high/cb_low) AND non-closed
+    # (cbnc_high/cbnc_low) bound lines onto the 1m/5m chart, styled by source
+    # TF like the tgtsl_* groups above. group name -> source tf.
+    _CB_TF_GROUPS = {"cbtf_15m": 15, "cbtf_60m": 60, "cbtf_240m": 240}
+    # Nearest TF on by default; coarser ones one click away (8 extra lines).
+    _CB_TF_DEFAULT_OFF = {"cbtf_60m", "cbtf_240m"}
+    _CB_TF_FIELDS = ["cb_high", "cb_low", "cbnc_high", "cbnc_low"]
+
     _OVERLAY_COLORS = {
         "bb_upper_20_2": "royalblue", "bb_middle_20_2": "royalblue",
         "bb_lower_20_2": "royalblue",
@@ -504,9 +513,37 @@ class DataViewer:
                 fig, times, opens, highs, lows, closes, subplot="range"
             )
 
-        # Draw volume if column exists
+        # Draw volume if column exists. With buy_volume present, split into
+        # side-by-side buy (green) and sell (red) bars — each read directly
+        # off the axis — and overlay the buy/sell volume MAs. Falls back to
+        # the plain gray total bar when the split is absent.
         vol_col = f"{tf}_volume"
-        if vol_col in df_slice.columns:
+        buy_col = f"{tf}_buy_volume"
+        if vol_col in df_slice.columns and buy_col in df_slice.columns:
+            buy = df_slice[buy_col]
+            sell = df_slice[vol_col] - buy
+            self.renderer.draw_bar(
+                fig, "volume", times, list(buy), label="buy_volume",
+                color="mediumseagreen",
+            )
+            self.renderer.draw_bar(
+                fig, "volume", times, list(sell), label="sell_volume",
+                color="indianred",
+            )
+            # Group = two standalone bars per candle, each measured from zero.
+            # The only other Bar traces (macd_hist_*) sit alone on their own
+            # subplot, where grouping is a no-op.
+            fig.update_layout(barmode="group")
+            for ma_col, ma_label, ma_color in (
+                (f"{tf}_vol_buy_ma_20", "vol_buy_ma_20", "darkgreen"),
+                (f"{tf}_vol_sell_ma_20", "vol_sell_ma_20", "darkred"),
+            ):
+                if ma_col in df_slice.columns:
+                    self.renderer.draw_line(
+                        fig, "volume", times, list(df_slice[ma_col]),
+                        label=ma_label, color=ma_color,
+                    )
+        elif vol_col in df_slice.columns:
             vol_vals = list(df_slice[vol_col])
             self.renderer.draw_bar(fig, "volume", times, vol_vals, label="volume")
 
@@ -579,11 +616,22 @@ class DataViewer:
                 for group, src_tf in self._TARGET_TF_GROUPS.items()
                 if any(f"{src_tf}_{f}" in cols for f in self._TARGET_OVERLAYS)
             ]
+        # Higher-TF cb/cbnc bound groups: same sub-15min gating as tgtsl_*.
+        if any(tf < min(self._CB_TF_GROUPS.values()) for tf in tfs):
+            groups += [
+                group
+                for group, src_tf in self._CB_TF_GROUPS.items()
+                if any(f"{src_tf}_{f}" in cols for f in self._CB_TF_FIELDS)
+            ]
         return groups
 
     def default_overlays(self) -> list[str]:
         """Overlay groups checked on first load — available minus the off sets."""
-        off = self._DEFAULT_OVERLAYS_OFF | self._TARGET_TF_DEFAULT_OFF
+        off = (
+            self._DEFAULT_OVERLAYS_OFF
+            | self._TARGET_TF_DEFAULT_OFF
+            | self._CB_TF_DEFAULT_OFF
+        )
         return [g for g in self.available_overlays() if g not in off]
 
     def build_window_figure(
@@ -837,13 +885,14 @@ class DataViewer:
 
     # Intersection markers — a 1-min candle inside BOTH the closed-bound zone
     # (cb_inzone) and the non-closed-bound zone (cbnc_inzone) of the same tf.
-    # Stars beyond the enter arrows (3x offset) so the confluence flag never
-    # collides with either source's own marks.
+    # Zero offset: the star sits EXACTLY on the candle extreme the zone test
+    # used (long: the 1-min low, short: the 1-min high) so it doubles as the
+    # zone-touch price readout.
     _CBX_INZONE_RE = re.compile(r"^(\d+)_cbx_inzone_(long|short)$")
     _CBX_MARKER = {
-        # side -> (symbol, colour, price column, offset sign — 3x = outermost)
-        "long": ("star", "darkolivegreen", "1_low", -3.0),
-        "short": ("star", "purple", "1_high", 3.0),
+        # side -> (symbol, colour, price column, offset sign — 0 = exact)
+        "long": ("star", "darkolivegreen", "1_low", 0.0),
+        "short": ("star", "purple", "1_high", 0.0),
     }
 
     # (regex, marker styling, side -> gating overlay group, trace-label prefix).
@@ -1069,6 +1118,42 @@ class DataViewer:
                 )
 
         self._draw_higher_tf_targets(fig, df_slice, tf, overlays, times)
+        self._draw_higher_tf_cb_bounds(fig, df_slice, tf, overlays, times)
+
+    def _draw_higher_tf_cb_bounds(
+        self,
+        fig: go.Figure,
+        df_slice: pd.DataFrame,
+        tf: int,
+        overlays: list[str] | None,
+        times: list,
+    ) -> None:
+        """Overlay higher-TF closed + non-closed candle-bound lines on charts
+        finer than 15min (tf 1/5).
+
+        Each enabled ``cbtf_{H}m`` group draws its source TF's cb_high/cb_low
+        (closed, per-candle stairstep) and cbnc_high/cbnc_low (non-closed,
+        per-minute) columns — already flat-per-row in the wide df — styled by
+        source TF like the tgtsl_* overlay. Skip-if-absent per column.
+        """
+        if tf >= min(self._CB_TF_GROUPS.values()):
+            return
+        for group, src_tf in sorted(
+            self._CB_TF_GROUPS.items(), key=lambda kv: -kv[1]
+        ):
+            if overlays is not None and group not in overlays:
+                continue
+            dash, width = self._TARGET_TF_STYLE[src_tf]
+            for name in self._CB_TF_FIELDS:
+                col = f"{src_tf}_{name}"
+                if col not in df_slice.columns:
+                    continue
+                self.renderer.draw_line(
+                    fig, "price", times, list(df_slice[col]),
+                    label=f"{name}·{src_tf}m",
+                    color=self._OVERLAY_COLORS.get(name, "gray"),
+                    dash=dash, width=width,
+                )
 
     def _draw_higher_tf_targets(
         self,

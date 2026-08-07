@@ -266,6 +266,13 @@ class Trainer:
         from nn.nn_orchestrator import NNOrchestrator  # lazy
 
         df = pd.read_pickle(wide_df_path())
+        # Surface candle-bounds zone columns (cb_*/cbnc_*/cbx_*) so specs with
+        # a filter_column (zone-filtered training) resolve. Absence-safe no-ops
+        # on datasets without the sidecars.
+        from data import join_candle_bounds, join_candle_bounds_nc  # lazy
+        dataset_dir = os.path.dirname(wide_df_path())
+        df = join_candle_bounds(df, dataset_dir)
+        df = join_candle_bounds_nc(df, dataset_dir)
         data_attributes = DataAttributes.load(data_attributes_path())
 
         orch = NNOrchestrator.from_trainer(self.pair, self)

@@ -33,11 +33,12 @@ class ChartRenderer:
         """
         n = len(subplots)
 
-        # Relative row weights: price 0.60, others 1.5 * 0.60/(n-1) each.
+        # Relative row weights: price 0.75 (dominant candlestick panel),
+        # others share the remaining 0.25 (1.5× weighted) among the n-1 rows.
         if n == 1:
             row_heights = [1.0]
         else:
-            price_share = 0.60
+            price_share = 0.75
             other_share = 1.5 * (1.0 - price_share) / (n - 1)
             row_heights = [
                 price_share if name == "price" else other_share

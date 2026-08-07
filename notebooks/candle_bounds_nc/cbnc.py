@@ -38,10 +38,11 @@ FEATURES = [
 ]
 ZONE_FRAC = 0.05  # entry-zone span fraction, matches the closed-zone artifact
 # Target haircut, in % of price, applied toward the loss side: the long target
-# sits 0.15% below the predicted high, the short target 0.15% above the
-# predicted low. Compensates the bound being an *extreme* estimate — a fill
-# needs the target strictly inside the reached range.
-TGT_SHRINK_PCT = 0.15
+# sits below the predicted high, the short target above the predicted low.
+# Compensates the bound being an *extreme* estimate — a fill needs the target
+# strictly inside the reached range. History: 0.15 (first haircut) → 0.35
+# (user widened by a further 0.2 on 2026-07-28).
+TGT_SHRINK_PCT = 0.35
 
 
 def closed_frame(df: pd.DataFrame, tf: int, side: str) -> pd.DataFrame:

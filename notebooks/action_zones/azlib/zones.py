@@ -62,7 +62,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 import numpy as np
 import pandas as pd
@@ -356,6 +356,16 @@ class ResultsFile:
       ``select_levels_safe``).
     - ``fee``: the fractional trading-fee rate the R/R grid search used
       (``azlib.rr.rr_grid``'s own ``fee`` parameter).
+    - ``selected_models`` (Task §10, OPTIONAL -- defaults to ``[]``): the
+      HUMAN-SELECTED ``{"indicator", "attrs", "kind"}`` spec list
+      ``azlib.validate.run_train``'s own ``selected_models`` argument was
+      called with, if any (e.g. ``[{"indicator": "rsi", "attrs":
+      ["position", "slope", "distance"], "kind": "gbr"}]``) -- persisted
+      verbatim purely to DOCUMENT which model(s) this result's zone was
+      built from; ``[]`` for the legacy "every indicator x 1D linear"
+      fan-out. Not consulted by ``run_oos`` for re-inference -- ``reg_models``
+      (the saved ``RegResult`` file paths) is the only thing OOS prediction
+      actually reloads; this field is a record, not a control input.
 
     ``save``/``load`` round-trip every field through plain JSON -- every
     field here is itself JSON-native (``int``/``str``/``dict``/``list``/
@@ -364,6 +374,11 @@ class ResultsFile:
     ``azlib.models.save_result``, which additionally persists a
     non-JSON-native fitted sklearn estimator via a sibling ``.joblib`` file
     -- there is no such non-JSON-native payload in a ``ResultsFile``).
+    ``selected_models`` defaults to ``field(default_factory=list)`` so an
+    OLDER saved ``results.json`` (written before this field existed, with no
+    ``"selected_models"`` key at all) still loads cleanly via
+    ``cls(**payload)`` -- backward-compatible round-trip, not just a
+    forward one.
     """
 
     tf: int
@@ -375,6 +390,7 @@ class ResultsFile:
     tgt_x: float
     sl_x: float
     fee: float
+    selected_models: list = field(default_factory=list)
 
     def save(self, path: str) -> None:
         """Write every field to ``path`` as plain JSON."""
