@@ -1,9 +1,11 @@
-"""Tests for move_class/zone_class separation (spec §5.7 indicators-class).
+"""Tests for move_class/zone_class separation.
 
-move_class classifies rsi_ma8_diff (momentum) against diff_mean/diff_std;
-zone_class classifies rsi_ma8 (level) against mean/std. Five tiers each.
-rsi_classification.json carries both stat pairs per TF and never contains
-NaN; classification fields fall back to the nearest available TF entry.
+move_class classifies rsi_ma8_diff (momentum) against FROZEN sym0 cuts
+(0 ± {0.3,1,2}·diff_std, 2y fit — MOVE_CLASS_CUTS, 7 classes -3..3; RSI
+params-selection experiment winner). zone_class classifies rsi_ma8 (level)
+against mean/std from rsi_classification.json (five tiers, spec §5.7).
+Zone stats fall back to the nearest available TF entry; move cuts fall back
+to the nearest fitted TF.
 """
 
 from __future__ import annotations
@@ -51,16 +53,23 @@ def _dp(tf: int, rsi_ma8, rsi_ma8_diff):
 
 
 # ---------------------------------------------------------------------------
-# move_class: rsi_ma8_diff momentum tiers (-2..2)
+# move_class: rsi_ma8_diff momentum, sym0 7 classes (-3..3, frozen cuts)
 # ---------------------------------------------------------------------------
 
 class TestMoveClass:
-    def test_five_tiers_on_diff(self, patched_stats):
-        # diff_mean=0, diff_std=2 → boundaries at -2, -1, 1, 2
-        diffs = [-3.0, -1.5, 0.0, 1.5, 3.0]
-        dp = _dp(15, [50.0] * 5, diffs)
+    def test_seven_sym0_classes_on_diff(self, patched_stats):
+        # TF15 frozen cuts ±(0.409, 1.364, 2.729)
+        diffs = [-3.0, -1.5, -1.0, 0.0, 1.0, 1.5, 3.0]
+        dp = _dp(15, [50.0] * 7, diffs)
         out = MoveClassField().compute(dp, 15)
-        assert list(out) == [-2, -1, 0, 1, 2]
+        assert list(out) == [-3, -2, -1, 0, 1, 2, 3]
+
+    def test_cuts_ignore_stale_stats_json(self, patched_stats):
+        # patched stats say diff_std=2.0; frozen cuts must win: 0.5 is inside
+        # the neutral band (±0.409·1.364σ → cut at 0.409), so 0.5 → class 1,
+        # while stale-stats 5-tier logic would have put 0.5 in class 0.
+        dp = _dp(15, [50.0], [0.5])
+        assert list(MoveClassField().compute(dp, 15)) == [1]
 
     def test_uses_diff_not_level(self, patched_stats):
         # Level far above mean but diff neutral → class 0
@@ -97,9 +106,9 @@ class TestZoneClass:
         assert list(ZoneClassField().compute(dp, 15)) == [2]
 
     def test_differs_from_move_class(self, patched_stats):
-        # Rising diff with low level: move says up (2), zone says low (0)
+        # Rising diff with low level: move says steep up (3), zone says low (0)
         dp = _dp(15, [35.0], [3.0])
-        assert list(MoveClassField().compute(dp, 15)) == [2]
+        assert list(MoveClassField().compute(dp, 15)) == [3]
         assert list(ZoneClassField().compute(dp, 15)) == [0]
 
 
@@ -110,9 +119,11 @@ class TestZoneClass:
 class TestTfFallback:
     def test_falls_back_to_nearest_lower_tf(self, patched_stats):
         dp = _dp(1440, [65.0], [3.0])
-        # 1440 missing from STATS → falls back to 15 entry
+        # zone: 1440 missing from STATS → falls back to the 15 entry.
         assert list(ZoneClassField().compute(dp, 1440)) == [4]
-        assert list(MoveClassField().compute(dp, 1440)) == [2]
+        # move: 1440 has no frozen fit → nearest lower fitted TF (240);
+        # 3.0 > 2.919 (outer cut) → class 3.
+        assert list(MoveClassField().compute(dp, 1440)) == [3]
 
 
 # ---------------------------------------------------------------------------

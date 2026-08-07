@@ -371,9 +371,11 @@ fields:
     params: {}
 
   # --- classification (applies_to: [15, 60, 240, 1440] only) ---
+  # move_class: 7-class sym0 (frozen 2y-fit cuts, no 1440 fit — see
+  # indicators/library/classification.py MOVE_CLASS_CUTS)
   - name: move_class
     group: classification
-    applies_to: [15, 60, 240, 1440]
+    applies_to: [15, 60, 240]
     depends_on: [rsi_ma8, rsi_ma8_diff]
     library: talib
     params: {}
