@@ -568,14 +568,17 @@ class DataViewer:
         return fig
 
     # Class markers on the rsi subplot: field → (marker symbol, size,
-    # class value → colour). move_class buckets rsi_ma8_diff momentum (-2..2),
-    # zone_class buckets the rsi_ma8 level (0..4) — five spec tiers each
+    # class value → colour). move_class buckets rsi_ma8_diff momentum (-3..3,
+    # sym0 7-class), zone_class buckets the rsi_ma8 level (0..4, five tiers)
     # (see indicators/library/classification.py); both are drawn at the
     # rsi_ma8 y-value, the diamond ringing the dot.
+    # move_class: 7-class sym0 rsi_ma8_diff (frozen 2y-fit cuts, see
+    # indicators/library/classification.py MOVE_CLASS_CUTS). Direction edge
+    # is INVERTED: -3 (steep fall) = long edge, +3 (steep rise) = short edge.
     _RSI_CLASS_MARKERS = {
         "move_class": ("circle", 6, {
-            -2: "red", -1: "orange", 0: "silver",
-            1: "lightgreen", 2: "green",
+            -3: "darkred", -2: "red", -1: "orange", 0: "silver",
+            1: "lightgreen", 2: "green", 3: "darkgreen",
         }),
         "zone_class": ("diamond-open", 11, {
             0: "red", 1: "orange", 2: "silver",
