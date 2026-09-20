@@ -140,6 +140,25 @@ def load_labels_config(path: str = "configs/indicators_config.yaml") -> list:
     return specs
 
 
+@dataclass
+class SharedIndicatorConfig:
+    name: str
+    timeframes: list[int]
+
+
+def load_shared_indicators_config(path: str = "configs/shared_indicators_config.yaml") -> list[SharedIndicatorConfig]:
+    """Returns the operator-configured allowlist of (name, timeframes) to publish to trade_executor.
+
+    Unlike load_indicators_config, this is not topologically sorted or
+    merged with any computation config — it's a pure allowlist naming
+    which already-computed fields get broadcast.
+    """
+    with open(path, "r") as fh:
+        data = yaml.safe_load(fh)
+    raw = data.get("indicators", [])
+    return [SharedIndicatorConfig(name=entry["name"], timeframes=list(entry["timeframes"])) for entry in raw]
+
+
 # Module-level constant — loaded at import from default path
 CANDLES: list = load_candles_config()
 

@@ -1,0 +1,7 @@
+indicators:
+  - name: ema_7
+    timeframes: [15, 60, 240]
+  - name: ema_14
+    timeframes: [15, 60, 240]
+  - name: ema_25
+    timeframes: [15, 60, 240]
