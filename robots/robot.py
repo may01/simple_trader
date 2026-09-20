@@ -25,6 +25,8 @@ from constants import (
     TRADE_SELL,
 )
 from backtesting.action import Action
+from config_loader import load_shared_indicators_config
+from mq.indicator_publisher import IndicatorPublisher
 from position.position import Position
 from robots.live_action_log import LIVE_SIM_ID, LiveActionLog
 from robots.live_order_tracker import LiveOrderTracker
@@ -52,6 +54,10 @@ class Robot:
         stock: Exchange interface for order operations.
         fee: Trading fee fraction.
         persist_path: File path for atomic JSON crash-recovery state.
+        indicator_publisher: Optional broadcaster for the allowlisted
+            indicator readings (level-broadcast-plan Task 9). None (default)
+            makes the publish step in do() a complete no-op, so pre-existing
+            callers/tests are unaffected.
     """
 
     def __init__(
@@ -62,12 +68,18 @@ class Robot:
         fee: float,
         persist_path: str,
         action_log_path: str | None = None,
+        indicator_publisher: IndicatorPublisher | None = None,
     ) -> None:
         self.strategy_manager: StrategyManager = strategy_manager
         self.live_data = live_data
         self.stock: StockInterface = stock
         self.fee: float = fee
         self.running: bool = False
+
+        # Optional indicator broadcast to trade_executor (level-broadcast-plan
+        # Task 9). None -> inert; do() skips the publish block entirely.
+        self.indicator_publisher: IndicatorPublisher | None = indicator_publisher
+        self._shared_indicators = load_shared_indicators_config()
 
         # Created internally
         self.position: Position = Position(thread_num=0, fee=fee)
@@ -125,6 +137,9 @@ class Robot:
         """
         self.live_data.build_candles()
         data_point = self.live_data.get_data_point()
+
+        self._publish_shared_indicators(data_point)
+
         position_state = self.position.get_state()
         cur_time = data_point.timestamp
 
@@ -143,6 +158,35 @@ class Robot:
 
         self._record_live_actions(data_point)
         self._tick_index += 1
+
+    def _publish_shared_indicators(self, data_point) -> None:
+        """Broadcast every allowlisted (name, tf) reading as a heartbeat.
+
+        No-op when no indicator_publisher was configured. Publishes every
+        tick unconditionally -- this is a heartbeat, not a change
+        notification; the executor ages readings out via each message's
+        own TTL. IndicatorPublisher.publish() itself never blocks and
+        never raises (Task 8), but the read that feeds it,
+        data_point.get(cfg.name, tf), can raise (e.g. KeyError when tf
+        isn't in the live ohlc mapping, or the column doesn't exist yet
+        because the indicator hasn't warmed up) -- that must never abort
+        do() before the trading logic below it runs, so each read is
+        individually guarded.
+        """
+        if self.indicator_publisher is None:
+            return
+        pair = self.stock.get_pair_name()
+        for cfg in self._shared_indicators:
+            for tf in cfg.timeframes:
+                try:
+                    value = data_point.get(cfg.name, tf)
+                except Exception:
+                    logger.exception(
+                        "indicator publish: data_point.get(%s, %s) failed; skipping",
+                        cfg.name, tf,
+                    )
+                    continue
+                self.indicator_publisher.publish(pair=pair, name=f"{tf}_{cfg.name}", value=value)
 
     def _record_live_actions(self, data_point) -> None:
         """Persist any position lifecycle changes from this tick as Action records.

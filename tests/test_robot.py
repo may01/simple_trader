@@ -439,4 +439,110 @@ class TestDoLiveDataContract:
 
         assert ld.build_candles.call_count == 2
         assert ld.get_data_point.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# indicator_publisher wiring (Task 9, level-broadcast-plan)
+# ---------------------------------------------------------------------------
+
+class FakeIndicatorPublisher:
+    """Records every publish() call; never raises, matching the real
+    IndicatorPublisher's contract (Task 8) closely enough for these tests."""
+
+    def __init__(self):
+        self.published = []
+
+    def publish(self, pair, name, value):
+        self.published.append((pair, name, value))
+
+
+def make_robot_with_publisher(indicator_publisher, shared_indicators,
+                               dp_get_side_effect, pair="BTCUSDT"):
+    """Build a Robot with a controllable shared-indicators allowlist and a
+    data_point whose .get() behavior is fully scripted by the caller."""
+    from robots.robot import Robot
+
+    dp = make_data_point()
+    dp.get.side_effect = dp_get_side_effect
+    ld = make_live_data(data_point=dp)
+    sm = make_strategy_manager(action=STRATEGY_ACTION_NOTHING)
+    stock = MagicMock()
+    stock.get_pair_name.return_value = pair
+
+    with patch("robots.robot.load_shared_indicators_config", return_value=shared_indicators):
+        robot = Robot(
+            strategy_manager=sm,
+            live_data=ld,
+            stock=stock,
+            fee=0.001,
+            persist_path="/tmp/test_robot_indicator_publisher.json",
+            indicator_publisher=indicator_publisher,
+        )
+    return robot, dp, sm
+
+
+class TestIndicatorPublisherWiring:
+
+    def test_do_publishes_configured_indicators_every_tick(self):
+        from config_loader import SharedIndicatorConfig
+
+        fake_publisher = FakeIndicatorPublisher()
+        shared = [SharedIndicatorConfig(name="ema_7", timeframes=[15, 60])]
+        values = {("ema_7", 15): 1.23, ("ema_7", 60): 4.56}
+
+        def fake_get(col, tf, shift=0):
+            return values[(col, tf)]
+
+        robot, dp, sm = make_robot_with_publisher(fake_publisher, shared, fake_get)
+        robot.do()
+
+        assert ("BTCUSDT", "15_ema_7", 1.23) in fake_publisher.published
+        assert ("BTCUSDT", "60_ema_7", 4.56) in fake_publisher.published
+
+    def test_do_publishes_on_every_tick_not_just_on_change(self):
+        from config_loader import SharedIndicatorConfig
+
+        fake_publisher = FakeIndicatorPublisher()
+        shared = [SharedIndicatorConfig(name="ema_7", timeframes=[15])]
+
+        def fake_get(col, tf, shift=0):
+            return 1.0
+
+        robot, dp, sm = make_robot_with_publisher(fake_publisher, shared, fake_get)
+        robot.do()
+        robot.do()
+
+        assert fake_publisher.published.count(("BTCUSDT", "15_ema_7", 1.0)) == 2
+
+    def test_do_without_indicator_publisher_does_not_read_or_publish(self):
+        """Default-None indicator_publisher must be a no-op (pre-existing
+        callers/tests must remain unaffected)."""
+        robot = make_robot()
+        assert robot.indicator_publisher is None
+        robot.do()  # must not raise, and must not touch data_point.get for telemetry
+
+    def test_do_survives_missing_indicator_without_aborting_tick(self):
+        """data_point.get(name, tf) can raise (e.g. KeyError for a tf that
+        isn't in the live ohlc mapping, or a column not yet warmed up) —
+        that must not prevent the trading logic below it from running."""
+        from config_loader import SharedIndicatorConfig
+
+        fake_publisher = FakeIndicatorPublisher()
+        shared = [
+            SharedIndicatorConfig(name="ema_7", timeframes=[15]),
+            SharedIndicatorConfig(name="ema_14", timeframes=[15]),
+        ]
+
+        def fake_get(col, tf, shift=0):
+            if col == "ema_7":
+                raise KeyError("tf=15 not in LiveDataPoint")
+            return 9.9
+
+        robot, dp, sm = make_robot_with_publisher(fake_publisher, shared, fake_get)
+
+        robot.do()  # must not raise
+
+        sm.check.assert_called_once()
+        assert ("BTCUSDT", "15_ema_14", 9.9) in fake_publisher.published
+        assert not any(name == "15_ema_7" for _, name, _ in fake_publisher.published)
         assert sm.check.call_args.args[0] is dp

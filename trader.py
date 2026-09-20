@@ -68,11 +68,23 @@ def main() -> None:
 
     from data import LiveData
     from helpers import shared_folder
+    from mq.indicator_publisher import IndicatorPublisher
     from robots.robot import Robot
 
     strategy_set = os.environ.get("STRATEGY_SET", "")
     live_data = LiveData()
     strategy_manager = build_strategy_manager(stock, strategy_set)
+
+    # trade_executor lives in a separate repo/deployment with its own
+    # MQ_ZMQ_INBOUND_BIND_ADDR; there is no shared compose network or fixed
+    # port between the two, so the address is entirely env-driven here too,
+    # following this file's existing os.environ.get(NAME, default) pattern
+    # (see resolve_live_usdt / STRATEGY_SET above). The default is a
+    # same-host placeholder for local/dev runs only -- real deployments must
+    # set MQ_EXECUTOR_ADDR to wherever trade_executor's inbound PULL socket
+    # is actually bound.
+    mq_executor_addr = os.environ.get("MQ_EXECUTOR_ADDR", "tcp://localhost:5555")
+    indicator_publisher = IndicatorPublisher(connect_addr=mq_executor_addr, ttl_seconds=300.0)
 
     os.makedirs(shared_folder(), exist_ok=True)
     robot = Robot(
@@ -82,6 +94,7 @@ def main() -> None:
         stock.fee,
         persist_path=shared_folder() + "live_tracker.json",
         action_log_path=shared_folder() + "live_actions.jsonl",
+        indicator_publisher=indicator_publisher,
     )
     robot.position.full_position = resolve_live_usdt()
     robot.run_instantly()
