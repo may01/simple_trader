@@ -16,12 +16,25 @@ def build_indicator_update(pair: str, name: str, value: float, now: datetime, tt
         pair: e.g. "BTCUSDT".
         name: stable indicator identifier, e.g. "15_ema_7" (matches main/indicators/'s own {tf}_{name} column naming).
         value: the indicator's current reading.
-        now: current time; expires_at is computed from this, not read from any indicator metadata.
+        now: current time; must be timezone-aware (UTC). expires_at is computed from
+            this, not read from any indicator metadata.
         ttl_seconds: how far past `now` this reading stays valid — must comfortably exceed one tick interval.
 
     Returns:
         dict ready for json.dumps and PUSH — kind is always "none" in this v1 builder.
+
+    Raises:
+        ValueError: if `now` is a naive datetime (no tzinfo). A naive datetime
+            serializes via .isoformat() with no UTC offset (e.g. "...T12:02:00" instead
+            of "...T12:02:00+00:00"), and the executor's wire.rs parses expires_at with
+            chrono::DateTime::parse_from_rfc3339, which requires an explicit offset or
+            "Z" — an offset-less string is rejected outright.
     """
+    if now.tzinfo is None:
+        raise ValueError(
+            "now must be timezone-aware (UTC); a naive datetime serializes without a "
+            "UTC offset and the executor rejects it"
+        )
     return {
         "id": str(uuid.uuid4()),
         "type": "indicator_update",

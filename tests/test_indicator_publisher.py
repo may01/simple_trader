@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from mq.indicator_publisher import build_indicator_update
 
@@ -23,10 +23,21 @@ def test_each_call_gets_a_fresh_id():
     a = build_indicator_update(pair="BTCUSDT", name="x", value=1.0, now=now, ttl_seconds=30.0)
     b = build_indicator_update(pair="BTCUSDT", name="x", value=1.0, now=now, ttl_seconds=30.0)
     assert a["id"] != b["id"]
+    # Identical arguments must differ in `id` ONLY — every other field matches.
+    assert {k: v for k, v in a.items() if k != "id"} == {k: v for k, v in b.items() if k != "id"}
 
 
 def test_expires_at_is_now_plus_ttl():
     now = datetime(2026, 9, 20, 12, 0, 0, tzinfo=timezone.utc)
     msg = build_indicator_update(pair="BTCUSDT", name="x", value=1.0, now=now, ttl_seconds=120.0)
-    expected = (now + timedelta(seconds=120.0)).isoformat()
-    assert msg["expires_at"] == expected
+    assert msg["expires_at"] == "2026-09-20T12:02:00+00:00"
+
+
+def test_naive_now_raises_value_error():
+    naive_now = datetime(2026, 9, 20, 12, 0, 0)  # no tzinfo
+    try:
+        build_indicator_update(pair="BTCUSDT", name="x", value=1.0, now=naive_now, ttl_seconds=30.0)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for a naive `now`")
