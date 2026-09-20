@@ -6,6 +6,7 @@ asks StrategyManager what to do, and dispatches to order management methods
 """
 
 import logging
+import math
 import time
 
 from constants import (
@@ -77,9 +78,15 @@ class Robot:
         self.running: bool = False
 
         # Optional indicator broadcast to trade_executor (level-broadcast-plan
-        # Task 9). None -> inert; do() skips the publish block entirely.
+        # Task 9). None -> inert; do() skips the publish block entirely, and
+        # construction itself skips the allowlist load, so a Robot built
+        # without indicator_publisher takes no dependency on
+        # configs/shared_indicators_config.yaml existing at a CWD-relative
+        # path (deviation from the brief's Step 3, per reviewer ruling).
         self.indicator_publisher: IndicatorPublisher | None = indicator_publisher
-        self._shared_indicators = load_shared_indicators_config()
+        self._shared_indicators = (
+            load_shared_indicators_config() if indicator_publisher is not None else []
+        )
 
         # Created internally
         self.position: Position = Position(thread_num=0, fee=fee)
@@ -171,7 +178,9 @@ class Robot:
         isn't in the live ohlc mapping, or the column doesn't exist yet
         because the indicator hasn't warmed up) -- that must never abort
         do() before the trading logic below it runs, so each read is
-        individually guarded.
+        individually guarded. A successfully-read but non-finite value
+        (NaN/inf, e.g. still warming up) is skipped rather than published,
+        since the executor's wire format cannot decode one anyway.
         """
         if self.indicator_publisher is None:
             return
@@ -185,6 +194,16 @@ class Robot:
                         "indicator publish: data_point.get(%s, %s) failed; skipping",
                         cfg.name, tf,
                     )
+                    continue
+                if not math.isfinite(value):
+                    # NaN/inf is the warm-up-not-ready case (data.py returns
+                    # NaN rather than raising when there isn't enough
+                    # history yet). The executor's wire format can't decode
+                    # a non-finite number at all -- send_json would emit the
+                    # bare token NaN, which isn't valid JSON, so the message
+                    # is guaranteed to be dropped undecoded on the other
+                    # side. Skip it instead of sending something that can
+                    # never be delivered.
                     continue
                 self.indicator_publisher.publish(pair=pair, name=f"{tf}_{cfg.name}", value=value)
 

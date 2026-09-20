@@ -56,6 +56,7 @@ class IndicatorPublisher:
 
     def __init__(self, connect_addr: str, ttl_seconds: float = 300.0) -> None:
         self._ttl_seconds = ttl_seconds
+        self._connect_addr = connect_addr
         self.dropped = 0
         self._ctx = zmq.Context.instance()
         self._socket = self._ctx.socket(zmq.PUSH)
@@ -72,6 +73,11 @@ class IndicatorPublisher:
         self._socket.setsockopt(zmq.RECONNECT_IVL, 100)       # first retry after 100ms
         self._socket.setsockopt(zmq.RECONNECT_IVL_MAX, 5000)  # exponential backoff, capped at 5s
         self._socket.connect(connect_addr)
+        # connect() succeeds even with nothing listening, so this is the only
+        # signal an operator gets of where telemetry is actually headed --
+        # log it once here so a wrong/unset address is at least discoverable
+        # from the startup log, not just a silent, permanent drop counter.
+        logger.info("IndicatorPublisher: connecting to trade_executor at %s", connect_addr)
 
     def publish(self, pair: str, name: str, value: float) -> None:
         """Best-effort. Never blocks, never raises: an unreachable executor
@@ -81,6 +87,16 @@ class IndicatorPublisher:
             self._socket.send_json(msg, flags=zmq.NOBLOCK)
         except zmq.Again:
             self.dropped += 1
+            # Rate-limited, not per-drop -- this fires on every tick while no
+            # executor is reachable, so logging every occurrence would be a
+            # tick-rate log in a live process. Still surfaces the blackout
+            # (first drop, then every 1000th) rather than staying silent
+            # forever behind an incrementing counter nothing ever reads.
+            if self.dropped == 1 or self.dropped % 1000 == 0:
+                logger.warning(
+                    "indicator publish: no reachable executor at %s; dropped=%d so far",
+                    self._connect_addr, self.dropped,
+                )
         except zmq.ZMQError as e:
             self.dropped += 1
             logger.warning("indicator publish failed: %s", e)

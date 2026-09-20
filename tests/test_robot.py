@@ -439,6 +439,7 @@ class TestDoLiveDataContract:
 
         assert ld.build_candles.call_count == 2
         assert ld.get_data_point.call_count == 2
+        assert sm.check.call_args.args[0] is dp
 
 
 # ---------------------------------------------------------------------------
@@ -516,10 +517,17 @@ class TestIndicatorPublisherWiring:
 
     def test_do_without_indicator_publisher_does_not_read_or_publish(self):
         """Default-None indicator_publisher must be a no-op (pre-existing
-        callers/tests must remain unaffected)."""
-        robot = make_robot()
+        callers/tests must remain unaffected). Asserts the read itself never
+        happens, not just that do() doesn't raise -- a bare MagicMock
+        data_point would silently tolerate a missing None-guard otherwise."""
+        dp = make_data_point()
+        ld = make_live_data(data_point=dp)
+        robot = make_robot(live_data=ld)
         assert robot.indicator_publisher is None
-        robot.do()  # must not raise, and must not touch data_point.get for telemetry
+
+        robot.do()
+
+        dp.get.assert_not_called()
 
     def test_do_survives_missing_indicator_without_aborting_tick(self):
         """data_point.get(name, tf) can raise (e.g. KeyError for a tf that
@@ -545,4 +553,29 @@ class TestIndicatorPublisherWiring:
         sm.check.assert_called_once()
         assert ("BTCUSDT", "15_ema_14", 9.9) in fake_publisher.published
         assert not any(name == "15_ema_7" for _, name, _ in fake_publisher.published)
-        assert sm.check.call_args.args[0] is dp
+
+    def test_do_skips_publishing_non_finite_values(self):
+        """A NaN reading (data.py's own "not enough history yet" signal, e.g.
+        LiveDataPoint.get with shift >= len(df)) must never be sent -- the
+        executor's wire format can't decode a bare `NaN` token as JSON, so
+        such a message is guaranteed to be dropped undecoded on arrival.
+        Skip it locally instead of sending something that can never land."""
+        from config_loader import SharedIndicatorConfig
+
+        fake_publisher = FakeIndicatorPublisher()
+        shared = [
+            SharedIndicatorConfig(name="ema_7", timeframes=[15]),
+            SharedIndicatorConfig(name="ema_14", timeframes=[15]),
+        ]
+
+        def fake_get(col, tf, shift=0):
+            if col == "ema_7":
+                return float("nan")
+            return 9.9
+
+        robot, dp, sm = make_robot_with_publisher(fake_publisher, shared, fake_get)
+
+        robot.do()
+
+        assert ("BTCUSDT", "15_ema_14", 9.9) in fake_publisher.published
+        assert not any(name == "15_ema_7" for _, name, _ in fake_publisher.published)

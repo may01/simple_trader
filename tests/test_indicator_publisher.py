@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
@@ -134,3 +135,52 @@ def test_publishing_resumes_after_the_executor_comes_back():
     finally:
         publisher.close()
         pull.close()
+
+
+def test_construction_logs_the_resolved_connect_addr(caplog):
+    """connect() succeeds even with nothing listening, so the resolved
+    address is otherwise invisible -- must be discoverable from the
+    startup log (e.g. to catch a missing/wrong MQ_EXECUTOR_ADDR)."""
+    with caplog.at_level(logging.INFO, logger="mq.indicator_publisher"):
+        publisher = IndicatorPublisher(connect_addr="tcp://127.0.0.1:1", ttl_seconds=30.0)
+    try:
+        assert any(
+            "tcp://127.0.0.1:1" in r.message and r.levelno == logging.INFO
+            for r in caplog.records
+        )
+    finally:
+        publisher.close()
+
+
+def test_dead_address_warns_once_on_first_drop_not_on_every_drop(caplog):
+    """The Again path must be rate-limited: a permanent blackout must not
+    turn into a tick-rate WARNING log, but the very first drop must be
+    visible immediately rather than silently incrementing a counter
+    nothing surfaces."""
+    publisher = IndicatorPublisher(connect_addr="tcp://127.0.0.1:1", ttl_seconds=30.0)
+    try:
+        with caplog.at_level(logging.WARNING, logger="mq.indicator_publisher"):
+            publisher.publish(pair="BTCUSDT", name="15_ema_7", value=1.0)  # drop #1 -> warns
+            for _ in range(998):
+                publisher.publish(pair="BTCUSDT", name="15_ema_7", value=1.0)  # drops #2..999
+        assert publisher.dropped == 999
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1, f"expected exactly 1 warning for drops 1..999, got {len(warnings)}"
+        assert "dropped=1" in warnings[0].message
+    finally:
+        publisher.close()
+
+
+def test_dead_address_warns_again_at_the_1000th_drop(caplog):
+    publisher = IndicatorPublisher(connect_addr="tcp://127.0.0.1:1", ttl_seconds=30.0)
+    try:
+        with caplog.at_level(logging.WARNING, logger="mq.indicator_publisher"):
+            for _ in range(1000):
+                publisher.publish(pair="BTCUSDT", name="15_ema_7", value=1.0)
+        assert publisher.dropped == 1000
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        # One at drop #1, one at drop #1000.
+        assert len(warnings) == 2, f"expected exactly 2 warnings for drops 1..1000, got {len(warnings)}"
+        assert "dropped=1000" in warnings[1].message
+    finally:
+        publisher.close()
