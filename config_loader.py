@@ -154,8 +154,13 @@ def load_shared_indicators_config(path: str = "configs/shared_indicators_config.
     which already-computed fields get broadcast.
     """
     with open(path, "r") as fh:
-        data = yaml.safe_load(fh)
-    raw = data.get("indicators", [])
+        # `or {}`: yaml.safe_load returns None for an empty (or
+        # all-comments) file, and `.get` on None is an AttributeError.
+        # Robot.__init__ calls this unconditionally whenever a publisher
+        # is present, so an empty allowlist file would abort trader
+        # startup rather than simply broadcasting nothing.
+        data = yaml.safe_load(fh) or {}
+    raw = data.get("indicators", []) or []
     return [SharedIndicatorConfig(name=entry["name"], timeframes=list(entry["timeframes"])) for entry in raw]
 
 

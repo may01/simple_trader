@@ -83,7 +83,22 @@ def main() -> None:
     # same-host placeholder for local/dev runs only -- real deployments must
     # set MQ_EXECUTOR_ADDR to wherever trade_executor's inbound PULL socket
     # is actually bound.
-    mq_executor_addr = os.environ.get("MQ_EXECUTOR_ADDR", "tcp://localhost:5555")
+    # Default is host.docker.internal, not localhost: the `live` service runs
+    # on compose's bridge network, where `localhost` is the container's own
+    # loopback and can never reach a process on the host. `extra_hosts:
+    # host.docker.internal:host-gateway` (docker-compose.yml) maps this name
+    # to the host. NOTE: this only works if trade_executor publishes its
+    # inbound port on an address this container can reach -- it currently
+    # binds 127.0.0.1:5555 on the host, which host-gateway traffic does NOT
+    # reach. Widening that binding is an executor-side deployment decision.
+    mq_executor_addr = os.environ.get("MQ_EXECUTOR_ADDR", "tcp://host.docker.internal:5555")
+    # Publish cadence, decoupled from the 1s tick: the readings carry a 300s
+    # TTL, so republishing every second wrote each one ~300 times over before
+    # it could expire. Same env-driven shape as MQ_EXECUTOR_ADDR above.
+    try:
+        mq_publish_interval = float(os.environ.get("MQ_INDICATOR_PUBLISH_INTERVAL_SEC", "30"))
+    except ValueError:
+        mq_publish_interval = 30.0
     indicator_publisher = IndicatorPublisher(connect_addr=mq_executor_addr, ttl_seconds=300.0)
 
     os.makedirs(shared_folder(), exist_ok=True)
@@ -95,6 +110,7 @@ def main() -> None:
         persist_path=shared_folder() + "live_tracker.json",
         action_log_path=shared_folder() + "live_actions.jsonl",
         indicator_publisher=indicator_publisher,
+        indicator_publish_interval_sec=mq_publish_interval,
     )
     robot.position.full_position = resolve_live_usdt()
     robot.run_instantly()

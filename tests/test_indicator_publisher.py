@@ -4,6 +4,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+import pytest
 import zmq
 
 from mq.indicator_publisher import IndicatorPublisher, build_indicator_update
@@ -184,3 +185,56 @@ def test_dead_address_warns_again_at_the_1000th_drop(caplog):
         assert "dropped=1000" in warnings[1].message
     finally:
         publisher.close()
+
+
+def test_zmq_error_path_is_rate_limited_like_the_again_path(caplog):
+    """I3: the ZMQError branch used to log unconditionally. A socket-level
+    fault is as persistent as an unreachable peer -- on a 1s tick it would
+    become a tick-rate WARNING stream. Same first-then-every-1000th limit."""
+    publisher = IndicatorPublisher(connect_addr="tcp://127.0.0.1:1", ttl_seconds=30.0)
+    # A closed socket raises zmq.ZMQError (ENOTSOCK) rather than zmq.Again,
+    # which is exactly the branch under test.
+    publisher._socket.close()
+    with caplog.at_level(logging.WARNING, logger="mq.indicator_publisher"):
+        for _ in range(1000):
+            publisher.publish(pair="BTCUSDT", name="15_ema_7", value=1.0)  # must never raise
+    assert publisher.dropped == 1000
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 2, f"expected warnings at drop #1 and #1000 only, got {len(warnings)}"
+    assert "dropped=1000" in warnings[1].message
+
+
+def test_module_imports_and_the_builder_works_without_pyzmq(monkeypatch):
+    """C1: `live` images may not carry pyzmq. Importing this module (which
+    robots/robot.py does at import time) must not need it -- only
+    constructing an IndicatorPublisher may."""
+    import builtins
+    import importlib
+    import sys
+
+    real_import = builtins.__import__
+
+    def import_without_zmq(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "zmq" or name.startswith("zmq."):
+            raise ImportError("No module named 'zmq'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    removed = {k: sys.modules.pop(k) for k in list(sys.modules)
+               if k == "mq.indicator_publisher" or k == "zmq" or k.startswith("zmq.")}
+    try:
+        monkeypatch.setattr(builtins, "__import__", import_without_zmq)
+        mod = importlib.import_module("mq.indicator_publisher")
+        msg = mod.build_indicator_update(
+            pair="BTCUSDT", name="15_ema_7", value=1.0,
+            now=datetime(2026, 9, 20, tzinfo=timezone.utc), ttl_seconds=30.0,
+        )
+        assert msg["name"] == "15_ema_7"
+        with pytest.raises(ImportError):
+            mod.IndicatorPublisher(connect_addr="tcp://127.0.0.1:1")
+    finally:
+        monkeypatch.undo()
+        for k in list(sys.modules):
+            if k in removed or k == "zmq" or k.startswith("zmq."):
+                sys.modules.pop(k, None)
+        sys.modules.update(removed)
+

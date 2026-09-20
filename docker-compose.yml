@@ -84,6 +84,12 @@ services:
     build: .
     command: python3 trader.py
     env_file: ${LIVE_ENV:-configs/live.env}
+    # MQ_EXECUTOR_ADDR points at trade_executor, which runs outside this
+    # compose file entirely. On the default bridge network `localhost`
+    # resolves to this container's own loopback, so the host is only
+    # reachable by name -- host-gateway is what provides that name.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8050:8050"
     volumes:

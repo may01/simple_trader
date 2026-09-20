@@ -20,3 +20,35 @@ def test_empty_indicators_list_returns_empty(tmp_path):
     config_file = tmp_path / "empty.yaml"
     config_file.write_text("indicators: []\n")
     assert load_shared_indicators_config(path=str(config_file)) == []
+
+
+def test_empty_file_returns_empty_instead_of_crashing(tmp_path):
+    """yaml.safe_load returns None for an empty file; `.get` on None is an
+    AttributeError. Robot.__init__ calls this loader unconditionally when a
+    publisher is present, so that AttributeError aborted trader startup --
+    an empty allowlist must simply mean "broadcast nothing"."""
+    config_file = tmp_path / "blank.yaml"
+    config_file.write_text("")
+    assert load_shared_indicators_config(path=str(config_file)) == []
+
+
+def test_comments_only_file_returns_empty(tmp_path):
+    """Same None-from-safe_load case, via the shape an operator actually
+    produces by commenting every entry out."""
+    config_file = tmp_path / "commented.yaml"
+    config_file.write_text("# indicators:\n#   - name: ema_7\n")
+    assert load_shared_indicators_config(path=str(config_file)) == []
+
+
+def test_file_without_an_indicators_key_returns_empty(tmp_path):
+    config_file = tmp_path / "other.yaml"
+    config_file.write_text("something_else: 1\n")
+    assert load_shared_indicators_config(path=str(config_file)) == []
+
+
+def test_null_indicators_key_returns_empty(tmp_path):
+    """`indicators:` with nothing after it parses to None, not []."""
+    config_file = tmp_path / "null.yaml"
+    config_file.write_text("indicators:\n")
+    assert load_shared_indicators_config(path=str(config_file)) == []
+
