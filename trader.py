@@ -99,7 +99,25 @@ def main() -> None:
         mq_publish_interval = float(os.environ.get("MQ_INDICATOR_PUBLISH_INTERVAL_SEC", "30"))
     except ValueError:
         mq_publish_interval = 30.0
-    indicator_publisher = IndicatorPublisher(connect_addr=mq_executor_addr, ttl_seconds=300.0)
+    # Constructing the publisher is the one step that genuinely needs pyzmq
+    # (the module itself imports fine without it), and the deployed `live`
+    # image does not carry pyzmq. Unguarded, that ImportError would land
+    # here -- past the imports, before Robot is built and before
+    # run_instantly() -- i.e. a missing telemetry dependency would stop
+    # trading, the exact failure the guard in robots/robot.py exists to
+    # prevent. Degrade to no telemetry instead: Robot treats
+    # indicator_publisher=None as a complete no-op.
+    try:
+        indicator_publisher = IndicatorPublisher(connect_addr=mq_executor_addr, ttl_seconds=300.0)
+    except ImportError:
+        indicator_publisher = None
+        logger.warning(
+            "indicator broadcast DISABLED: pyzmq is not installed in this image, so "
+            "IndicatorPublisher could not be constructed. Trading continues normally; "
+            "no indicator readings will be published to trade_executor at %s. "
+            "Install pyzmq to re-enable telemetry.",
+            mq_executor_addr,
+        )
 
     os.makedirs(shared_folder(), exist_ok=True)
     robot = Robot(
