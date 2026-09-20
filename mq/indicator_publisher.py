@@ -5,8 +5,13 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+import zmq
+
+logger = logging.getLogger(__name__)
 
 
 def build_indicator_update(pair: str, name: str, value: float, now: datetime, ttl_seconds: float) -> dict:
@@ -44,3 +49,41 @@ def build_indicator_update(pair: str, name: str, value: float, now: datetime, tt
         "kind": "none",
         "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat(),
     }
+
+
+class IndicatorPublisher:
+    """PUSH client onto trade_executor's inbound MQ socket, publishing indicator_update messages only (v1 scope)."""
+
+    def __init__(self, connect_addr: str, ttl_seconds: float = 300.0) -> None:
+        self._ttl_seconds = ttl_seconds
+        self.dropped = 0
+        self._ctx = zmq.Context.instance()
+        self._socket = self._ctx.socket(zmq.PUSH)
+        # A PUSH socket with no peer blocks forever on send by default, and
+        # connect() succeeds even when nothing is listening -- these four
+        # options are what keep a down executor from freezing the tick loop.
+        self._socket.setsockopt(zmq.SNDTIMEO, 0)   # never wait for a peer
+        self._socket.setsockopt(zmq.IMMEDIATE, 1)  # never queue for a peer that never connected
+        self._socket.setsockopt(zmq.LINGER, 0)     # never block process exit on unsent messages
+        self._socket.setsockopt(zmq.SNDHWM, 100)   # bounded backlog; drop past it
+        # libzmq reconnects on its own, forever -- these only set the cadence.
+        # Never call connect() a second time to "retry": it adds an endpoint
+        # rather than repairing the existing one.
+        self._socket.setsockopt(zmq.RECONNECT_IVL, 100)       # first retry after 100ms
+        self._socket.setsockopt(zmq.RECONNECT_IVL_MAX, 5000)  # exponential backoff, capped at 5s
+        self._socket.connect(connect_addr)
+
+    def publish(self, pair: str, name: str, value: float) -> None:
+        """Best-effort. Never blocks, never raises: an unreachable executor
+        costs one tick of freshness, and the next tick republishes anyway."""
+        msg = build_indicator_update(pair=pair, name=name, value=value, now=datetime.now(timezone.utc), ttl_seconds=self._ttl_seconds)
+        try:
+            self._socket.send_json(msg, flags=zmq.NOBLOCK)
+        except zmq.Again:
+            self.dropped += 1
+        except zmq.ZMQError as e:
+            self.dropped += 1
+            logger.warning("indicator publish failed: %s", e)
+
+    def close(self) -> None:
+        self._socket.close()
