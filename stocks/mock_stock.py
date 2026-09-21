@@ -44,6 +44,12 @@ class Stock_MockBinance(StockInterface):
         from constants import STATUS_SUCCESS
         return (STATUS_SUCCESS, amount)
 
+    def get_pair_name(self):
+        # Without this, StockInterface's default returned "" and every
+        # indicator published in paper mode reached trade_executor under
+        # pair "" -- invisible to any per-pair reader.
+        return (self.coin + self.coin_base).upper()
+
 
 class Stock_Mock(StockInterface):
     stock_name = "mock"

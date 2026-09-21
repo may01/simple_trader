@@ -1,7 +1,10 @@
 """trader.py — live trading entry point (Docker path E).
 
-Paper mode is the DEFAULT (STOCK_TYPE=mock_binance). Real trading
-requires STOCK_TYPE=binance set explicitly in the env file.
+Paper mode is the code DEFAULT (STOCK_TYPE=mock_binance: a frozen candle
+fixture, so indicators never change). STOCK_TYPE=binance_candles reads real
+Binance market data with no API keys and refuses every order/account call --
+what configs/live.env uses. Real trading requires STOCK_TYPE=binance set
+explicitly in the env file.
 
 Live strategy/size knobs (Phase 15):
 - STRATEGY_SET=ema registers the EMA test strategies via EmaStrategyFactory;
@@ -75,23 +78,13 @@ def main() -> None:
     live_data = LiveData()
     strategy_manager = build_strategy_manager(stock, strategy_set)
 
-    # trade_executor lives in a separate repo/deployment with its own
-    # MQ_ZMQ_INBOUND_BIND_ADDR; there is no shared compose network or fixed
-    # port between the two, so the address is entirely env-driven here too,
-    # following this file's existing os.environ.get(NAME, default) pattern
-    # (see resolve_live_usdt / STRATEGY_SET above). The default is a
-    # same-host placeholder for local/dev runs only -- real deployments must
-    # set MQ_EXECUTOR_ADDR to wherever trade_executor's inbound PULL socket
-    # is actually bound.
-    # Default is host.docker.internal, not localhost: the `live` service runs
-    # on compose's bridge network, where `localhost` is the container's own
-    # loopback and can never reach a process on the host. `extra_hosts:
-    # host.docker.internal:host-gateway` (docker-compose.yml) maps this name
-    # to the host. NOTE: this only works if trade_executor publishes its
-    # inbound port on an address this container can reach -- it currently
-    # binds 127.0.0.1:5555 on the host, which host-gateway traffic does NOT
-    # reach. Widening that binding is an executor-side deployment decision.
-    mq_executor_addr = os.environ.get("MQ_EXECUTOR_ADDR", "tcp://host.docker.internal:5555")
+    # trade_executor lives in a separate repo/deployment. Both compose
+    # projects attach to the external `trader_mq` docker network, so the
+    # executor is addressed by its compose service name. Not via the host:
+    # trade_executor publishes its MQ port on 127.0.0.1 only, which this
+    # container cannot reach through host-gateway -- and since the publisher
+    # never raises, that failure would be silent.
+    mq_executor_addr = os.environ.get("MQ_EXECUTOR_ADDR", "tcp://executor:5555")
     # Publish cadence, decoupled from the 1s tick: the readings carry a 300s
     # TTL, so republishing every second wrote each one ~300 times over before
     # it could expire. Same env-driven shape as MQ_EXECUTOR_ADDR above.
