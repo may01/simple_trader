@@ -68,11 +68,56 @@ def main() -> None:
 
     from data import LiveData
     from helpers import shared_folder
+    from mq.indicator_publisher import IndicatorPublisher
     from robots.robot import Robot
 
     strategy_set = os.environ.get("STRATEGY_SET", "")
     live_data = LiveData()
     strategy_manager = build_strategy_manager(stock, strategy_set)
+
+    # trade_executor lives in a separate repo/deployment with its own
+    # MQ_ZMQ_INBOUND_BIND_ADDR; there is no shared compose network or fixed
+    # port between the two, so the address is entirely env-driven here too,
+    # following this file's existing os.environ.get(NAME, default) pattern
+    # (see resolve_live_usdt / STRATEGY_SET above). The default is a
+    # same-host placeholder for local/dev runs only -- real deployments must
+    # set MQ_EXECUTOR_ADDR to wherever trade_executor's inbound PULL socket
+    # is actually bound.
+    # Default is host.docker.internal, not localhost: the `live` service runs
+    # on compose's bridge network, where `localhost` is the container's own
+    # loopback and can never reach a process on the host. `extra_hosts:
+    # host.docker.internal:host-gateway` (docker-compose.yml) maps this name
+    # to the host. NOTE: this only works if trade_executor publishes its
+    # inbound port on an address this container can reach -- it currently
+    # binds 127.0.0.1:5555 on the host, which host-gateway traffic does NOT
+    # reach. Widening that binding is an executor-side deployment decision.
+    mq_executor_addr = os.environ.get("MQ_EXECUTOR_ADDR", "tcp://host.docker.internal:5555")
+    # Publish cadence, decoupled from the 1s tick: the readings carry a 300s
+    # TTL, so republishing every second wrote each one ~300 times over before
+    # it could expire. Same env-driven shape as MQ_EXECUTOR_ADDR above.
+    try:
+        mq_publish_interval = float(os.environ.get("MQ_INDICATOR_PUBLISH_INTERVAL_SEC", "30"))
+    except ValueError:
+        mq_publish_interval = 30.0
+    # Constructing the publisher is the one step that genuinely needs pyzmq
+    # (the module itself imports fine without it), and the deployed `live`
+    # image does not carry pyzmq. Unguarded, that ImportError would land
+    # here -- past the imports, before Robot is built and before
+    # run_instantly() -- i.e. a missing telemetry dependency would stop
+    # trading, the exact failure the guard in robots/robot.py exists to
+    # prevent. Degrade to no telemetry instead: Robot treats
+    # indicator_publisher=None as a complete no-op.
+    try:
+        indicator_publisher = IndicatorPublisher(connect_addr=mq_executor_addr, ttl_seconds=300.0)
+    except ImportError:
+        indicator_publisher = None
+        logger.warning(
+            "indicator broadcast DISABLED: pyzmq is not installed in this image, so "
+            "IndicatorPublisher could not be constructed. Trading continues normally; "
+            "no indicator readings will be published to trade_executor at %s. "
+            "Install pyzmq to re-enable telemetry.",
+            mq_executor_addr,
+        )
 
     os.makedirs(shared_folder(), exist_ok=True)
     robot = Robot(
@@ -82,6 +127,8 @@ def main() -> None:
         stock.fee,
         persist_path=shared_folder() + "live_tracker.json",
         action_log_path=shared_folder() + "live_actions.jsonl",
+        indicator_publisher=indicator_publisher,
+        indicator_publish_interval_sec=mq_publish_interval,
     )
     robot.position.full_position = resolve_live_usdt()
     robot.run_instantly()
