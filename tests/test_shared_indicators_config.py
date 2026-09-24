@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from config_loader import load_shared_indicators_config
 
 
@@ -52,3 +54,19 @@ def test_null_indicators_key_returns_empty(tmp_path):
     config_file.write_text("indicators:\n")
     assert load_shared_indicators_config(path=str(config_file)) == []
 
+
+
+def test_shipped_config_publishes_sar_on_the_one_minute_timeframe():
+    """trade_executor's SAR flip signal reads `1_sar_002_02` off the wire.
+
+    The wire name is f"{tf}_{name}" (robot._publish_shared_indicators), so
+    this entry in the *shipped* config is what makes that name exist at all
+    -- an allowlist that omits it leaves the executor's check permanently
+    quiet with nothing to warn about. Path is resolved from this file, not
+    the CWD, so it holds wherever pytest is invoked from.
+    """
+    shipped = Path(__file__).resolve().parent.parent / "configs" / "shared_indicators_config.yaml"
+    result = load_shared_indicators_config(path=str(shipped))
+    sar = [c for c in result if c.name == "sar_002_02"]
+    assert len(sar) == 1, "sar_002_02 must be published exactly once"
+    assert sar[0].timeframes == [1]
