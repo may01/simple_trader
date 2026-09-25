@@ -1,0 +1,12 @@
+{
+  "event": "not_placed",
+  "pair": "LINKUSDT",
+  "position_state": {
+    "fees": [],
+    "settlement_complete": true,
+    "status": "flat"
+  },
+  "reason": "computed size exceeds account limits",
+  "schema": 2,
+  "ts": "<encoded-at>"
+}

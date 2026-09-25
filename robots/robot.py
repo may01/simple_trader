@@ -28,6 +28,7 @@ from constants import (
 from backtesting.action import Action
 from config_loader import load_shared_indicators_config
 from position.position import Position
+from stocks.disarmed_stock import is_disarmed_result
 from robots.live_action_log import LIVE_SIM_ID, LiveActionLog
 from robots.live_order_tracker import LiveOrderTracker
 from stocks.base_stock import StockInterface
@@ -35,6 +36,7 @@ from strategies.strategy_manager import StrategyManager
 
 try:
     from mq.indicator_publisher import IndicatorPublisher
+    from mq.position_consumer import PositionConsumer
 except ImportError:  # pragma: no cover - exercised via sys.modules patching
     # Telemetry must never be a startup dependency of trading. The deployed
     # `live` image does not necessarily carry pyzmq, and without this guard
@@ -53,6 +55,17 @@ _CLOSE_ACTIONS = {
     STRATEGY_ACTION_CLOSE_LONG_PART,
     STRATEGY_ACTION_CLOSE_SHORT_PART,
 }
+
+
+def _sides_agree(local_side: str, remote_side: str) -> bool:
+    """Whether main/'s position type and the executor's side are the same.
+
+    They use different vocabularies -- main/ has POSITION_TYPE_LONG /
+    POSITION_TYPE_SHORT, the wire has "long"/"short" -- so this is a
+    translation, not a comparison, and it is written once here rather
+    than inline where it would be easy to get backwards.
+    """
+    return remote_side.lower() in local_side.lower()
 
 
 class Robot:
@@ -83,6 +96,7 @@ class Robot:
         action_log_path: str | None = None,
         indicator_publisher: "IndicatorPublisher | None" = None,
         indicator_publish_interval_sec: float = 30.0,
+        position_consumer: "PositionConsumer | None" = None,
     ) -> None:
         self.strategy_manager: StrategyManager = strategy_manager
         self.live_data = live_data
@@ -113,6 +127,17 @@ class Robot:
         # broken allowlist entry produces one log line rather than one per
         # tick per entry (9 tracebacks/second for a single typo).
         self._warned_indicator_keys: set = set()
+
+        # Optional position feed from trade_executor (position-management
+        # design §6.4). None -> inert: `_apply_executor_position` returns
+        # immediately, so a deployment without a consumer behaves exactly
+        # as it did before this existed.
+        self.position_consumer = position_consumer
+        # How many times main/'s intent and the executor's truth have
+        # disagreed. A counter rather than only log lines: "is this
+        # happening constantly or did it happen once" is the first
+        # question asked of a divergence warning.
+        self._divergences: int = 0
 
         # Created internally
         self.position: Position = Position(thread_num=0, fee=fee)
@@ -189,8 +214,91 @@ class Robot:
         else:
             self.wait(data_point)
 
+        # Applied after the strategy step and before `_record_live_actions`
+        # drains the change log, so an action the executor took this tick
+        # reaches the action log this tick rather than next. The other
+        # order would delay every executor-driven action by one tick, which
+        # is a visible lag in the very thing the log exists to show.
+        self._apply_executor_position()
+
         self._record_live_actions(data_point)
         self._tick_index += 1
+
+    def _apply_executor_position(self) -> None:
+        """Drain the executor's position events onto `self.position`.
+
+        main/'s own `position.open()`/`close()` calls express *intent*;
+        this is where the executor's truth lands (position-management
+        design §6.4). A complete no-op when no consumer is configured, so
+        a deployment without one behaves exactly as before.
+        """
+        if self.position_consumer is None:
+            return
+
+        for event in self.position_consumer.poll():
+            self._check_position_divergence(event)
+
+            if event.is_flat:
+                continue
+            changed = self.position.sync_from_executor(
+                net_size=event.net_size or 0.0,
+                avg_entry_price=event.avg_entry_price,
+                stop_loss_price=event.stop_loss_price,
+                take_profit_price=event.take_profit_price,
+            )
+            if changed:
+                # Purpose 1: the executor's actions belong in the action
+                # log too, not only main/'s own intent.
+                self.position.posImpl._record_change(
+                    kind=f"EXECUTOR_{event.event.upper()}",
+                    target_price=event.take_profit_price or 0.0,
+                    executed_price=event.avg_entry_price or 0.0,
+                )
+
+    def _check_position_divergence(self, event) -> None:
+        """Report main/ and the executor disagreeing about what is held.
+
+        main/'s intent and the executor's truth are two different things
+        by design, so a gap between them is expected during a tick or
+        two. A *persistent* gap is the only signal that a decision was
+        silently refused -- wire v2 carries `not_placed` with a reason,
+        but a dropped PUSH message carries nothing.
+
+        Logged, never acted on: this process places no orders
+        (`stocks/disarmed_stock.py`), so there is nothing for it to do
+        about a divergence except make it visible.
+        """
+        local_open = self.position.is_opened()
+        remote_open = not event.is_flat
+
+        if local_open == remote_open:
+            if not remote_open:
+                return
+            local_side = self.position.position_type
+            remote_side = event.side
+            if remote_side and local_side and not _sides_agree(local_side, remote_side):
+                self._divergences += 1
+                logger.warning(
+                    "position side divergence on %s: main/ holds %s, executor reports %s "
+                    "(executor wins; main/ places no orders)",
+                    event.pair, local_side, remote_side,
+                )
+            return
+
+        self._divergences += 1
+        if remote_open:
+            logger.warning(
+                "position divergence on %s: executor holds %s %s but main/ thinks it is flat "
+                "(a decision main/ never made, or a close main/ missed)",
+                event.pair, event.side, event.net_size,
+            )
+        else:
+            logger.warning(
+                "position divergence on %s: main/ thinks a position is open but the executor "
+                "reports flat (likely a decision that was refused -- check for a not_placed "
+                "event and its reason)",
+                event.pair,
+            )
 
     def _warn_once(self, key, message, *args, exc_info: bool = False) -> None:
         """Log `message` the first time `key` is seen, then never again.
@@ -320,19 +428,44 @@ class Robot:
         Checks position.check_stop_open(price) first; returns "" if stale.
         Wraps stock.trade() in try/except — returns "" on any failure.
 
+        NOTE (position-management D2): under the default configuration this
+        process places no orders at all — `stocks.disarmed_stock.DisarmedStock`
+        refuses `trade` before any request is built, and
+        `execution::Executor::open_position`/`place_exit` in trade_executor
+        does this instead. The call site is kept, not deleted, so the path
+        can be re-armed with MAIN_ORDER_PLACEMENT=enabled. A refusal is a
+        normal outcome, which is why `_refused` exists below.
+
         Returns:
-            order_id string on success, "" on any failure.
+            order_id string on success, "" on any failure or refusal.
         """
         if not self.position.check_stop_open(price):
             return ""
         try:
             status, result = self.stock.trade(trade_type, price, amount)
             if status == STATUS_FAIL:
+                self._last_order_refused = is_disarmed_result(result)
                 return ""
+            self._last_order_refused = False
             return result.get("order_id", "")
         except Exception:
+            self._last_order_refused = False
             logger.exception("_place_valid_order: stock.trade raised")
             return ""
+
+    def _report_no_order(self, where: str) -> None:
+        """Log why no order id came back.
+
+        A *refusal* is expected on every decision under the default config,
+        so it logs at DEBUG; before this existed it would have produced an
+        ERROR per decision and drowned the log. A genuine placement failure
+        is still an error — that distinction is the whole reason
+        `DisarmedStock` marks its refusals.
+        """
+        if getattr(self, "_last_order_refused", False):
+            logger.debug("%s: order placement disabled in main/, skipping tracking", where)
+        else:
+            logger.error("%s: order placement failed, skipping tracking", where)
 
     def _open_position(
         self,
@@ -361,11 +494,16 @@ class Robot:
         if strategy_action == STRATEGY_ACTION_OPEN_LONG:
             order_id = self._place_valid_order(TRADE_BUY, price, amount)
             if order_id == "":
-                logger.error("_open_position: LONG order placement failed, skipping tracking")
+                self._report_no_order("_open_position LONG")
                 return
             self.tracker.set_buy_order(order_id)
         elif strategy_action == STRATEGY_ACTION_OPEN_SHORT:
             # Borrow coin before placing sell order
+            # Also refused under the default config (D2): trade_executor
+            # borrows for its own short. `self.position` has already been
+            # opened above, which is correct -- under the new design that
+            # call expresses main/'s *intent*, and the executor's fills are
+            # what make it true (design §6.4).
             try:
                 self.stock.borrow(self.stock.coin, amount)
             except Exception:
@@ -373,7 +511,7 @@ class Robot:
                 return
             order_id = self._place_valid_order(TRADE_SELL, price, amount)
             if order_id == "":
-                logger.error("_open_position: SHORT order placement failed, skipping tracking")
+                self._report_no_order("_open_position SHORT")
                 return
             self.tracker.set_sell_order(order_id)
 

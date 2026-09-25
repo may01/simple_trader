@@ -125,6 +125,26 @@ class Position:
             return False
         return self.posImpl.set_stop_loss(price, action_msg, force)
 
+    def sync_from_executor(
+        self,
+        net_size: float,
+        avg_entry_price: float | None,
+        stop_loss_price: float | None = None,
+        take_profit_price: float | None = None,
+    ) -> bool:
+        """Delegate an executor state sync; no-op if no position is open.
+
+        Returns False when there is nothing to sync onto -- main/'s
+        strategy has not opened a position, so there is no local intent
+        for the executor's truth to attach to. The divergence check in
+        `Robot` is what notices that and says so.
+        """
+        if self.posImpl is None:
+            return False
+        return self.posImpl.sync_from_executor(
+            net_size, avg_entry_price, stop_loss_price, take_profit_price
+        )
+
     def record_entry_fill(self, coin_amount: float, price: float) -> None:
         """Delegate entry fill recording; no-op if no position is open."""
         if self.posImpl is None:
@@ -152,6 +172,24 @@ class Position:
     # ------------------------------------------------------------------
     # Read-only queries
     # ------------------------------------------------------------------
+
+    def avg_price_open(self) -> float:
+        """Average entry price, or 0.0 when no position is open.
+
+        The number main/ recomputes risk and runs strategies against
+        (position-management design §6.4, purpose 2). After
+        `sync_from_executor` it is the price the executor actually
+        achieved; otherwise it is derived from locally observed fills.
+        """
+        if self.posImpl is None:
+            return 0.0
+        return self.posImpl.avg_price_open()
+
+    def avg_price_close(self) -> float:
+        """Average exit price, or 0.0 when no position is open."""
+        if self.posImpl is None:
+            return 0.0
+        return self.posImpl.avg_price_close()
 
     def get_action(self) -> str:
         """Return current action, or STRATEGY_ACTION_NOTHING if no position."""

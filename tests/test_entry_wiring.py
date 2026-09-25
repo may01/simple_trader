@@ -70,13 +70,36 @@ class TestTraderEntry:
         holder.do_stock_init.assert_called_once_with("mock_binance")
 
     def test_robot_constructed_and_started(self, monkeypatch, tmp_path):
+        """Robot is handed a DISARMED stock by default.
+
+        Changed by the position-management work (design D2/§6.5):
+        trade_executor is the only process that may place orders, so
+        `main()` wraps the real stock in `DisarmedStock` unless
+        MAIN_ORDER_PLACEMENT says otherwise. The wrapper delegates every
+        read, so `stock.fee` still reaches the real stock.
+        """
+        from stocks.disarmed_stock import DisarmedStock
+
         _, stock, robot_cls, robot = self._run_main(monkeypatch, tmp_path)
         robot_cls.assert_called_once()
         args = robot_cls.call_args
-        assert args.args[2] is stock
+        assert isinstance(args.args[2], DisarmedStock), (
+            "main/ must not hand Robot a stock that can place orders"
+        )
+        assert args.args[2].inner is stock
         assert args.args[3] == stock.fee
         assert args.kwargs["persist_path"].endswith("live_tracker.json")
         robot.run_instantly.assert_called_once()
+
+    def test_robot_gets_the_real_stock_only_when_explicitly_armed(self, monkeypatch, tmp_path):
+        from stocks.disarmed_stock import DisarmedStock
+
+        _, stock, robot_cls, _robot = self._run_main(
+            monkeypatch, tmp_path, extra_env={"MAIN_ORDER_PLACEMENT": "enabled"}
+        )
+        passed = robot_cls.call_args.args[2]
+        assert passed is stock
+        assert not isinstance(passed, DisarmedStock)
 
     def test_explicit_binance_respected(self, monkeypatch, tmp_path):
         holder, _, _, _ = self._run_main(

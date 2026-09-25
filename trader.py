@@ -62,16 +62,66 @@ def resolve_live_usdt() -> float:
     return live_usdt
 
 
+def select_stock(inner, mode: str | None):
+    """Return the stock `Robot` should trade through.
+
+    trade_executor owns the live position (position-management design, D2),
+    so main/ places no orders by default. The refusal happens at the
+    StockInterface boundary in `DisarmedStock`, not as conditionals at each
+    of robot.py's five order call sites — the same shape as the executor's
+    own NoTradeAccount, and for the same reason: it must not depend on
+    API-key permissions or on anything outside this process.
+
+    Args:
+        inner: The real, initialised StockInterface.
+        mode: `MAIN_ORDER_PLACEMENT`. Unset, "disabled", or anything
+            unrecognised disarms. Only the exact string "enabled" arms.
+
+    Returns:
+        Either `inner` or a `DisarmedStock` wrapping it.
+    """
+    from stocks.disarmed_stock import DisarmedStock
+
+    normalised = (mode or "disabled").strip().lower()
+    if normalised == "enabled":
+        logger.warning(
+            "MAIN_ORDER_PLACEMENT=enabled -- main/ WILL place real orders. "
+            "Running this against a trade_executor with EXECUTION_MODE=live "
+            "double-trades the same account: both processes will open and "
+            "close positions independently, and neither knows about the other."
+        )
+        return inner
+    if normalised != "disabled":
+        # A typo must not arm anything. Disarm and say why, loudly, rather
+        # than falling through to the safe branch in silence.
+        logger.warning(
+            "MAIN_ORDER_PLACEMENT=%r is not recognised (expected 'enabled' or "
+            "'disabled'); order placement stays DISABLED.",
+            mode,
+        )
+    logger.info(
+        "main/ order placement is DISABLED: no order, loan or cancellation "
+        "will reach the exchange from this process. trade_executor places "
+        "orders instead. Set MAIN_ORDER_PLACEMENT=enabled to re-arm the "
+        "legacy path (see stocks/disarmed_stock.py)."
+    )
+    return DisarmedStock(inner)
+
+
 def main() -> None:
     from stocks_holder import do_stock_init, stock_holder
 
     stock_type = os.environ.get("STOCK_TYPE", "mock_binance")
     do_stock_init(stock_type)
-    stock = stock_holder.item
+    stock = select_stock(stock_holder.item, os.environ.get("MAIN_ORDER_PLACEMENT"))
+    # `stock_holder.item` stays the raw stock: anything reaching for the
+    # holder directly (LiveData's candle reads) is a read path and must not
+    # be routed through the disarm wrapper's delegation for no reason.
 
     from data import LiveData
     from helpers import shared_folder
     from mq.indicator_publisher import IndicatorPublisher
+    from mq.position_consumer import PositionConsumer
     from robots.robot import Robot
 
     strategy_set = os.environ.get("STRATEGY_SET", "")
@@ -112,6 +162,34 @@ def main() -> None:
             mq_executor_addr,
         )
 
+    # Position feed from trade_executor (position-management design §6.4).
+    # Same degrade-don't-crash rule as the publisher above and for the same
+    # reason: this is telemetry, and a missing pyzmq must not stop trading.
+    #
+    # The executor binds two sockets -- one it PULLs main/'s messages from,
+    # one it PUSHes position state onto. `MQ_EXECUTOR_OUTBOUND_ADDR` is the
+    # second; `mq_executor_addr` above is the first, and the snapshot
+    # request goes back out on it.
+    mq_executor_outbound_addr = os.environ.get(
+        "MQ_EXECUTOR_OUTBOUND_ADDR", "tcp://executor:5556"
+    )
+    try:
+        position_consumer = PositionConsumer(connect_addr=mq_executor_outbound_addr)
+        position_consumer.connect_request_socket(mq_executor_addr)
+        # A freshly started main/ has seen no changes yet, and the outbound
+        # topic carries only changes -- without this it could wait hours to
+        # learn about a position that is open right now.
+        position_consumer.request_snapshot()
+    except ImportError:
+        position_consumer = None
+        logger.warning(
+            "position feed DISABLED: pyzmq is not installed in this image, so "
+            "PositionConsumer could not be constructed. Trading continues normally; "
+            "main/ will not see what trade_executor holds at %s, and its own "
+            "Position will reflect intent only.",
+            mq_executor_outbound_addr,
+        )
+
     os.makedirs(shared_folder(), exist_ok=True)
     robot = Robot(
         strategy_manager,
@@ -122,6 +200,7 @@ def main() -> None:
         action_log_path=shared_folder() + "live_actions.jsonl",
         indicator_publisher=indicator_publisher,
         indicator_publish_interval_sec=mq_publish_interval,
+        position_consumer=position_consumer,
     )
     robot.position.full_position = resolve_live_usdt()
     robot.run_instantly()
