@@ -1,0 +1,12 @@
+{
+  "event": "stopped_out",
+  "pair": "LINKUSDT",
+  "position_id": "11111111-2222-4333-8444-555555555555",
+  "position_state": {
+    "fees": [],
+    "settlement_complete": true,
+    "status": "flat"
+  },
+  "schema": 2,
+  "ts": "<encoded-at>"
+}

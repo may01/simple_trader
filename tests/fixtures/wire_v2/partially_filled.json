@@ -1,0 +1,26 @@
+{
+  "event": "partially_filled",
+  "pair": "LINKUSDT",
+  "position_id": "11111111-2222-4333-8444-555555555555",
+  "position_state": {
+    "avg_entry_price": "15.0150",
+    "created_at": 1758500000000,
+    "fees": [
+      [
+        "LINK",
+        "0.00008"
+      ]
+    ],
+    "intended_open_price": "15.00",
+    "market_kind": "margin",
+    "net_size": "0.8",
+    "settlement_complete": false,
+    "side": "long",
+    "status": "open",
+    "stop_loss_price": "14.85",
+    "take_profit_price": "15.60",
+    "target_size": "1.2"
+  },
+  "schema": 2,
+  "ts": "<encoded-at>"
+}

@@ -68,6 +68,15 @@ class BasePosition(ABC):
         # Survives finalize() reset; drained by the robot each tick.
         self.change_history: list = []
 
+        # What trade_executor reports it actually holds (position-
+        # management design §6.4). Separate from `executed_open`/
+        # `executed_close` on purpose: those are fills main/ observed
+        # itself on the legacy order path, and conflating the two would
+        # make `avg_price_open` depend on which path happened to be armed.
+        self.executor_avg_open: float = 0.0
+        self.executor_net_size: float = 0.0
+        self.executor_take_profit: float = 0.0
+
     def _record_change(
         self,
         kind: str,
@@ -98,6 +107,64 @@ class BasePosition(ABC):
             "revenue_abs": float(revenue_abs),
             "open_time": float(self.open_time),
         })
+
+    def sync_from_executor(
+        self,
+        net_size: float,
+        avg_entry_price: float | None,
+        stop_loss_price: float | None,
+        take_profit_price: float | None,
+    ) -> bool:
+        """Replace this position's aggregate with the executor's.
+
+        trade_executor owns the live position (position-management design
+        D1). main/ keeps a position for exactly two reasons: to record
+        actions for level visualisation, and to hold `avg_price_open` so
+        risk and strategies compute against the price actually paid. This
+        is how the second one gets its number.
+
+        **Replace, not append.** The obvious shortcut is
+        `record_entry_fill(net_size, avg_entry_price)` -- one synthetic
+        fill that *is* the aggregate. It is wrong: that appends to
+        `executed_open`/`executed_open_amount`, so every repeated sync
+        re-averages against its own previous output and drifts away from
+        the executor's number. A setter also says what this is -- a
+        projection of someone else's state -- where a fill-recorder would
+        claim main/ observed something it did not.
+
+        main/ tracks no fills from this path: `executed_open` and
+        `executed_close` are left exactly as they were.
+
+        Args:
+            net_size: Entry fills minus exit fills, from the executor.
+            avg_entry_price: Quantity-weighted entry price, or None before
+                anything filled.
+            stop_loss_price: The executor's current stop, or None to leave
+                it alone.
+            take_profit_price: The executor's current target, or None to
+                leave it alone.
+
+        Returns:
+            True if anything changed. A sync that changes nothing records
+            nothing -- the same rule the executor's own position log
+            follows.
+        """
+        changed = False
+
+        if avg_entry_price is not None and avg_entry_price != self.executor_avg_open:
+            self.executor_avg_open = avg_entry_price
+            changed = True
+        if net_size != self.executor_net_size:
+            self.executor_net_size = net_size
+            changed = True
+        if stop_loss_price is not None and stop_loss_price != self.price_stop_loss:
+            self.price_stop_loss = stop_loss_price
+            changed = True
+        if take_profit_price is not None and take_profit_price != self.executor_take_profit:
+            self.executor_take_profit = take_profit_price
+            changed = True
+
+        return changed
 
     def drain_changes(self) -> list:
         """Return accumulated changes and clear the buffer.
