@@ -5,3 +5,9 @@ indicators:
     timeframes: [15, 60, 240]
   - name: ema_25
     timeframes: [15, 60, 240]
+  # Read by trade_executor's SAR flip signal as `1_sar_002_02` (the wire
+  # name is f"{tf}_{name}"). tf 1 deliberately: SAR flips on a 1-minute
+  # candle are minutes apart, so a full open -> flip -> close -> reverse
+  # cycle is observable in one sitting rather than over hours.
+  - name: sar_002_02
+    timeframes: [1]
