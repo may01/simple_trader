@@ -1,0 +1,32 @@
+# docker-compose.experiment.yml — action_zones research service overlay.
+#
+# New file only (Global Constraints: read-only on existing code/compose).
+# Use together with the base compose file, e.g.:
+#   docker compose -f docker-compose.yml -f docker-compose.experiment.yml build experiment
+#   docker compose -f docker-compose.yml -f docker-compose.experiment.yml up experiment
+#
+# Re-declares the external simple_trader_vol_long volume block (same name,
+# external: true) so this file is standalone-composable with the base file
+# without redefining the base file's other services/volumes.
+
+services:
+  experiment:
+    image: simple_trader_experiment
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.experiment
+    command: jupyter lab --ip=0.0.0.0 --port=8899 --no-browser --allow-root --NotebookApp.token=''
+    working_dir: /code
+    ports:
+      - "8899:8899"
+    volumes:
+      - .:/code
+      # Wide df lives here (read by azlib.loader, later tasks); the service
+      # also owns notebooks/action_zones/out/ subdirs on this same volume for
+      # its own artifacts (papermill output notebooks, frozen stats, results
+      # files) — see ground-truth commands 3/4 in the task brief.
+      - simple_trader_vol_long:/trader_data_long
+
+volumes:
+  simple_trader_vol_long:
+    external: true
