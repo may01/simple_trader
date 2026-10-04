@@ -76,6 +76,44 @@ SIDES = [2, -2]
 # SCHEDULE, not a pool to pick from.
 IMPROVEMENTS = ["baseline", "prune_top40", "interact_time_left", "horizon_n2"]
 
+# Same schedule for truth_kind="plain", minus "horizon_n2": the plain
+# long/short label pair is n1-only (see tdlib.config.LABEL_COLS's own
+# docstring), so a horizon_n2 iteration has no plain labels to mark against.
+IMPROVEMENTS_PLAIN = ["baseline", "prune_top40", "interact_time_left"]
+
+# truth_kind="plain" artifacts live under this subdirectory of
+# artifacts_dir() -- NEVER the strict run's own iter_NN/... layout, which
+# tdlib.diag/tdlib.alt_truth read back as their strict baseline. The
+# noshape (shape-excluded feature set, tdlib.diag.diag_feature_cols)
+# plain variant gets its own sibling subdir.
+PLAIN_SUBDIR = "plain"
+PLAIN_NOSHAPE_SUBDIR = "plain_noshape"
+
+_TRUTH_KINDS = ("strict", "plain")
+_FEATURE_SETS = ("full", "noshape")
+
+
+def loop_base_dir(truth_kind: str, feature_set: str = "full") -> str:
+    """The artifacts base dir for a given (truth_kind, feature_set):
+    ``artifacts_dir()`` itself for strict/full (unchanged historical
+    layout), its ``plain/`` subdirectory for plain/full, ``plain_noshape/``
+    for plain/noshape. strict/noshape raises -- the strict noshape baseline
+    is ``tdlib.diag``'s own single-pass run, not an improvement-loop
+    configuration. Any unknown value raises ``ValueError``."""
+    if truth_kind not in _TRUTH_KINDS:
+        raise ValueError(f"loop_base_dir: unknown truth_kind {truth_kind!r} (expected one of {_TRUTH_KINDS})")
+    if feature_set not in _FEATURE_SETS:
+        raise ValueError(f"loop_base_dir: unknown feature_set {feature_set!r} (expected one of {_FEATURE_SETS})")
+    if truth_kind == "strict" and feature_set == "noshape":
+        raise ValueError("loop_base_dir: strict+noshape is tdlib.diag's job, not an improvement-loop configuration")
+    base = artifacts_dir()
+    if truth_kind == "plain":
+        subdir = PLAIN_NOSHAPE_SUBDIR if feature_set == "noshape" else PLAIN_SUBDIR
+        # Path-join (not bare f-string concat) so a base with OR without a
+        # trailing slash lands on the same "{base}/{subdir}/" location.
+        return f"{Path(base) / subdir}/"
+    return base
+
 # A combo needs at least this many usable (long or short) marked points to be
 # worth screening/fitting at all -- task-5-brief.md's exact floor. Public (no
 # leading underscore): tdlib.diag (T7) reuses this SAME threshold ("skip
@@ -299,7 +337,13 @@ def _skipped_combo(tf: int, side: int, counts: dict) -> ComboResult:
     )
 
 
-def run_iteration(cfg: IterConfig, slim: pd.DataFrame, importance_prev: dict | None = None) -> IterResult:
+def run_iteration(
+    cfg: IterConfig,
+    slim: pd.DataFrame,
+    importance_prev: dict | None = None,
+    truth_kind: str = "strict",
+    feature_set: str = "full",
+) -> IterResult:
     """One iteration's full pass over every (tf, side) combo.
 
     Per combo: strong-point selection + truth marking + skip check (fewer
@@ -319,9 +363,29 @@ def run_iteration(cfg: IterConfig, slim: pd.DataFrame, importance_prev: dict | N
     (see ``improvement_loop``). Absent/None is treated as "nothing to prune/
     interact by yet" (safe on iteration 1, where no previous iteration
     exists).
+
+    ``truth_kind`` selects the ground-truth marking: "strict" (the default,
+    ``truth.mark_truth`` -- profit_strict pair, honors ``cfg.horizon``) or
+    "plain" (``alt_truth.mark_truth_plain`` -- the plain race+fill pair, no
+    clean-entry gate, n1-only so ``cfg.horizon`` is ignored). Plain runs
+    persist under ``loop_base_dir("plain", feature_set)`` so the strict
+    run's historical ``iter_NN/`` artifacts are never touched.
+
+    ``feature_set`` ("full"/"noshape", plain-only -- ``loop_base_dir``
+    raises on strict+noshape) selects the raw-column candidate set:
+    ``features.default_feature_cols`` or ``diag.diag_feature_cols`` (shape/
+    geometry columns excluded; engineered features stay, exactly like
+    ``tdlib.diag``'s own runs).
     """
     importance_prev = importance_prev or {}
-    base = artifacts_dir()
+    base = loop_base_dir(truth_kind, feature_set)
+    if truth_kind == "plain":
+        # Imported here, not at module top: tdlib.alt_truth/tdlib.diag both
+        # import MIN_COMBO_POINTS/SIDES/chrono_split/combo_name from THIS
+        # module, so a top-level import would be circular.
+        from tdlib.alt_truth import feature_matrix_alt, mark_truth_plain
+        if feature_set == "noshape":
+            from tdlib.diag import diag_feature_cols
     iter_dir_name = f"iter_{cfg.iter_no:02d}"
     combos: dict = {}
 
@@ -337,7 +401,10 @@ def run_iteration(cfg: IterConfig, slim: pd.DataFrame, importance_prev: dict | N
             name = combo_name(tf, side)
 
             pts = strong_points(slim, tf, side)
-            marked = mark_truth(pts, tf, cfg.horizon)
+            if truth_kind == "plain":
+                marked = mark_truth_plain(pts, tf)
+            else:
+                marked = mark_truth(pts, tf, cfg.horizon)
             counts = truth_counts(marked)
 
             if counts["long"] + counts["short"] < MIN_COMBO_POINTS:
@@ -353,7 +420,11 @@ def run_iteration(cfg: IterConfig, slim: pd.DataFrame, importance_prev: dict | N
             fwd4 = fwd_log_return(slim, tf, 4).loc[pts.index]
             robustness = robustness_agreement(marked, fwd1, fwd4)
 
-            X, y = feature_matrix(slim, tf, side, horizon=cfg.horizon)
+            if truth_kind == "plain":
+                cols = diag_feature_cols(list(slim.columns), tf) if feature_set == "noshape" else None
+                X, y = feature_matrix_alt(slim, tf, side, "plain", feature_cols=cols)
+            else:
+                X, y = feature_matrix(slim, tf, side, horizon=cfg.horizon)
             X_tr, X_te, y_tr, y_te = chrono_split(X, y)
             X_tr, X_te = apply_transform(X_tr, X_te, cfg.transform, importance_prev.get(combo_key))
 
@@ -412,12 +483,24 @@ def run_iteration(cfg: IterConfig, slim: pd.DataFrame, importance_prev: dict | N
 # ---------------------------------------------------------------------------
 
 
-def improvement_loop(slim: pd.DataFrame, max_iters: int = 4, eps_auc: float = 0.005) -> list:
+def improvement_loop(
+    slim: pd.DataFrame,
+    max_iters: int = 4,
+    eps_auc: float = 0.005,
+    truth_kind: str = "strict",
+    feature_set: str = "full",
+) -> list:
     """Drive iterations 1..``max_iters``, one ``run_iteration`` call each.
 
     Iteration 1 is always ``IMPROVEMENTS[0]`` ("baseline"); iteration k
     (k >= 2) applies ``IMPROVEMENTS[k - 1]`` (horizon_n2's own cfg carries
     ``horizon="n2"``, every other transform keeps ``horizon="n1"``).
+
+    ``truth_kind="plain"`` swaps the ground truth to the plain race+fill
+    label pair (no clean-entry gate): the schedule becomes
+    ``IMPROVEMENTS_PLAIN`` (no horizon_n2 -- plain labels are n1-only) and
+    every artifact (iter_NN/, summary.md, best.json) lands under
+    ``loop_base_dir("plain")`` instead of the strict run's own base.
 
     Keep rule: an iteration is KEPT iff its ``mean_test_auc`` is finite AND
     exceeds the best KEPT mean_test_auc seen so far by more than
@@ -436,21 +519,22 @@ def improvement_loop(slim: pd.DataFrame, max_iters: int = 4, eps_auc: float = 0.
     Returns the list of ``IterResult`` (one per iteration actually run, in
     order).
     """
-    base = artifacts_dir()
+    base = loop_base_dir(truth_kind, feature_set)  # validates the pair up front, before any work
+    schedule = IMPROVEMENTS_PLAIN if truth_kind == "plain" else IMPROVEMENTS
     all_iters: list = []
     best_auc = float("-inf")
     importance_prev: dict = {}
     consecutive_rejections = 0
 
     for iter_no in range(1, max_iters + 1):
-        if iter_no - 1 >= len(IMPROVEMENTS):
+        if iter_no - 1 >= len(schedule):
             break  # transforms exhausted
 
-        transform = IMPROVEMENTS[iter_no - 1]
+        transform = schedule[iter_no - 1]
         horizon = "n2" if transform == "horizon_n2" else "n1"
         cfg = IterConfig(iter_no=iter_no, transform=transform, horizon=horizon)
 
-        result = run_iteration(cfg, slim, importance_prev)
+        result = run_iteration(cfg, slim, importance_prev, truth_kind=truth_kind, feature_set=feature_set)
 
         mean_auc = result.mean_test_auc
         kept = (not math.isnan(mean_auc)) and (mean_auc > best_auc + eps_auc)

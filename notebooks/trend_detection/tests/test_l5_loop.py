@@ -45,6 +45,7 @@ import pytest
 from tdlib.config import LABEL_COLS, MOVE_CUTS
 from tdlib.features import feature_matrix
 from tdlib.loop import (
+    IMPROVEMENTS_PLAIN,
     SIDES,
     ComboResult,
     IterConfig,
@@ -52,6 +53,7 @@ from tdlib.loop import (
     apply_transform,
     chrono_split,
     improvement_loop,
+    loop_base_dir,
     run_iteration,
     select_best,
     write_iter_report,
@@ -487,7 +489,7 @@ def test_improvement_loop_keep_reject_rule_importance_prev_and_horizon_schedulin
     scripted_aucs = [0.60, 0.62, 0.615, 0.61]
     calls = []
 
-    def fake_run_iteration(cfg, slim, importance_prev=None):
+    def fake_run_iteration(cfg, slim, importance_prev=None, truth_kind="strict", feature_set="full"):
         calls.append((cfg.iter_no, cfg.transform, cfg.horizon, importance_prev))
         auc = scripted_aucs[cfg.iter_no - 1]
         combo = _fake_combo_result(auc, marker=f"iter{cfg.iter_no}_feature")
@@ -529,7 +531,7 @@ def test_improvement_loop_stops_after_two_consecutive_rejections_before_exhausti
     monkeypatch.setattr("tdlib.loop.IMPROVEMENTS", ["baseline", "t2", "t3", "t4", "t5", "t6"])
     scripted_aucs = [0.60, 0.62, 0.615, 0.61, 0.90, 0.95]  # 5/6 would be great -- loop must never reach them
 
-    def fake_run_iteration(cfg, slim, importance_prev=None):
+    def fake_run_iteration(cfg, slim, importance_prev=None, truth_kind="strict", feature_set="full"):
         auc = scripted_aucs[cfg.iter_no - 1]
         return IterResult(cfg=cfg, combos={(15, 2): _fake_combo_result(auc)})
 
@@ -736,3 +738,141 @@ def test_loop_freezes_for_oos(loop_artifacts_dir):
     proba = bundle["gbc"].predict_proba(Z)
     assert proba.shape == (len(X_rebuilt), 2)
     assert np.isfinite(proba).all()
+
+
+# --- truth_kind="plain" ---------------------------------------------------------
+
+
+def _set_plain_labels(df: pd.DataFrame, tf: int, positions: list, long_val: float, short_val: float) -> None:
+    """Writes the PLAIN long/short pair directly by column name --
+    ``conftest.set_labels`` never touches this pair (see its own docstring:
+    "Only the n1 profit_strict pair is touched"). Same 5-line helper as
+    test_l8_alt_truth.py's own (copied, not imported: test_l8 imports FROM
+    this module, so importing back would be circular)."""
+    long_col = LABEL_COLS[tf]["plong_n1"]
+    short_col = LABEL_COLS[tf]["pshort_n1"]
+    df.iloc[positions, df.columns.get_loc(long_col)] = long_val
+    df.iloc[positions, df.columns.get_loc(short_col)] = short_val
+
+
+def _assign_plain_labels_skewed(df: pd.DataFrame, tf: int, positions: list) -> None:
+    """Cycle ``positions`` through [long, long, long, short] on the PLAIN
+    pair -- 150 long / 50 short / 0 both / 0 neither over 200 positions,
+    deliberately DIFFERENT from ``_assign_mixed_labels``'s 50/50/50/50
+    strict-pair pattern on the same rows, so a plain-truth run's counts
+    prove which label pair was actually read. Short every 4th position
+    keeps both classes on both sides of the chrono 70/30 cut."""
+    pattern = [(1.0, 0.0), (1.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+    for i, (long_val, short_val) in enumerate(pattern):
+        subset = positions[i::4]
+        if subset:
+            _set_plain_labels(df, tf, subset, long_val, short_val)
+
+
+def test_loop_base_dir_strict_identity_plain_subdir_unknown_raises(loop_artifacts_dir):
+    assert loop_base_dir("strict") == str(loop_artifacts_dir)
+    plain = loop_base_dir("plain")
+    assert plain == f"{loop_artifacts_dir / 'plain'}/"
+    with pytest.raises(ValueError):
+        loop_base_dir("fwd")
+
+
+def test_run_iteration_plain_reads_plain_labels_and_lands_in_plain_subdir(loop_artifacts_dir):
+    """REAL, non-monkeypatched plain-truth exercise: strict n1 labels carry
+    the 50/50/50/50 pattern at the SAME positions where the plain pair
+    carries 150/50/0/0 -- so counts of 150/50/0/0 prove run_iteration marked
+    via the plain pair, and 50/50/50/50 would prove a silent strict
+    fallback. Artifacts must land under plain/iter_01/, never iter_01/."""
+    df = _engineered_slim()
+    up_positions, dn_positions = _strong_point_positions(len(df))
+    _assign_plain_labels_skewed(df, 15, up_positions)
+    _assign_plain_labels_skewed(df, 15, dn_positions)
+
+    cfg = IterConfig(iter_no=1, transform="baseline")
+    res = run_iteration(cfg, df, truth_kind="plain")
+
+    counts_up = res.combos[(15, 2)].counts
+    assert counts_up["long"] == 150
+    assert counts_up["short"] == 50
+    assert counts_up["both"] == 0
+    assert counts_up["neither"] == 0
+
+    plain_dir = loop_artifacts_dir / "plain" / "iter_01" / "15_up"
+    assert (plain_dir / "metrics.json").exists()
+    assert (plain_dir / "bundle").exists()
+    strict_dir = loop_artifacts_dir / "iter_01"
+    assert not strict_dir.exists()
+
+    auc = res.combos[(15, 2)].metrics["gbc"]["test"]["roc_auc"]
+    assert math.isfinite(auc)
+
+
+def test_improvement_loop_plain_schedule_no_horizon_n2_and_truth_kind_passthrough(loop_artifacts_dir, monkeypatch):
+    calls = []
+
+    def fake_run_iteration(cfg, slim, importance_prev=None, truth_kind="strict", feature_set="full"):
+        calls.append((cfg.transform, cfg.horizon, truth_kind))
+        auc = 0.6 + 0.1 * cfg.iter_no  # strictly increasing -> every iteration kept
+        return IterResult(cfg=cfg, combos={(15, 2): _fake_combo_result(auc)})
+
+    monkeypatch.setattr("tdlib.loop.run_iteration", fake_run_iteration)
+
+    results = improvement_loop(pd.DataFrame(), truth_kind="plain")
+
+    # Schedule exhausted after IMPROVEMENTS_PLAIN (3 < max_iters=4), never horizon_n2.
+    assert [c[0] for c in calls] == IMPROVEMENTS_PLAIN
+    assert all(horizon == "n1" for _, horizon, _ in calls)
+    assert all(kind == "plain" for _, _, kind in calls)
+    assert len(results) == 3
+
+    # write_summary landed in the plain subdir, not the strict base.
+    assert (loop_artifacts_dir / "plain" / "summary.md").exists()
+    assert (loop_artifacts_dir / "plain" / "best.json").exists()
+    assert not (loop_artifacts_dir / "summary.md").exists()
+
+
+# --- truth_kind="plain" x feature_set="noshape" ---------------------------------
+
+
+def test_loop_base_dir_feature_set_variants(loop_artifacts_dir):
+    assert loop_base_dir("plain", "noshape") == f"{loop_artifacts_dir / 'plain_noshape'}/"
+    assert loop_base_dir("plain", "full") == f"{loop_artifacts_dir / 'plain'}/"
+    assert loop_base_dir("strict", "full") == str(loop_artifacts_dir)
+    with pytest.raises(ValueError):
+        loop_base_dir("strict", "noshape")  # diag's job, not a loop configuration
+    with pytest.raises(ValueError):
+        loop_base_dir("plain", "bogus")
+
+
+def test_run_iteration_plain_noshape_excludes_shape_cols_and_lands_in_own_subdir(loop_artifacts_dir):
+    """REAL plain+noshape exercise: selected_features.json must contain no
+    shape-excluded raw column (tdlib.diag.is_shape_excluded), while the same
+    run under feature_set="full" demonstrably keeps them -- and artifacts
+    must land under plain_noshape/, leaving plain/ and iter_01/ untouched."""
+    from tdlib.diag import is_shape_excluded
+
+    df = _engineered_slim()
+    up_positions, dn_positions = _strong_point_positions(len(df))
+    _assign_plain_labels_skewed(df, 15, up_positions)
+    _assign_plain_labels_skewed(df, 15, dn_positions)
+
+    cfg = IterConfig(iter_no=1, transform="baseline")
+    res = run_iteration(cfg, df, truth_kind="plain", feature_set="noshape")
+
+    features_path = loop_artifacts_dir / "plain_noshape" / "iter_01" / "15_up" / "selected_features.json"
+    assert features_path.exists()
+    with open(features_path) as f:
+        selected = json.load(f)
+    shape_cols = [c for c in selected if is_shape_excluded(c)]
+    assert shape_cols == []
+
+    assert not (loop_artifacts_dir / "plain").exists()
+    assert not (loop_artifacts_dir / "iter_01").exists()
+
+    # Same slim through the FULL plain path genuinely carries shape columns --
+    # proves the noshape exclusion above is doing real work, not vacuous.
+    counts = res.combos[(15, 2)].counts
+    assert counts["long"] == 150 and counts["short"] == 50  # plain pair read, same as full
+    from tdlib.alt_truth import feature_matrix_alt
+    X_full, _ = feature_matrix_alt(df, 15, 2, "plain")
+    assert any(is_shape_excluded(c) for c in X_full.columns)

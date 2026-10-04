@@ -671,3 +671,32 @@ def test_run_oos_unrebuildable_feature_raises_naming_it_end_to_end(tmp_path):
         run_oos(oos_slim, str(train_base))
 
     assert bogus_col in str(exc_info.value)
+
+
+# --- run_oos: truth_kind="plain" end-to-end --------------------------------------
+
+
+def test_run_oos_plain_truth_end_to_end(train_base_dir):
+    """Full plain-truth L5 -> L6 chain: a REAL improvement_loop run with
+    truth_kind="plain" (its artifacts land under {train_base}/plain/ -- the
+    strict layout is never touched), then run_oos with truth_kind="plain"
+    against a different-seed oos slim. The fixture's plain label pair is
+    random 0/1 (see conftest make_slim), so ~half of each side's 200 forced
+    points are usable exclusive long/short -- comfortably over the train
+    60-point and OOS 30-point floors."""
+    train_slim = _engineered_slim(seed=0)
+    improvement_loop(train_slim, max_iters=1, truth_kind="plain")
+
+    plain_base = train_base_dir / "plain"
+    assert (plain_base / "best.json").exists()
+    assert not (train_base_dir / "best.json").exists()  # strict layout untouched
+
+    oos_slim = _engineered_slim(seed=1)
+    table = run_oos(oos_slim, str(plain_base), truth_kind="plain")
+
+    assert not table.empty
+    up_rows = table[table["combo"] == "15_up"]
+    assert len(up_rows) == 2  # one row per model
+    assert not up_rows["skipped"].any()
+    for _, row in up_rows.iterrows():
+        assert math.isfinite(row["roc_auc"])

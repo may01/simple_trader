@@ -331,8 +331,14 @@ def _reproduce_transform(X: pd.DataFrame, transform: str, selected_features: lis
 
 
 def _score_combo(oos_slim: pd.DataFrame, train_base: str, combo_name: str, combo_info: dict,
-                  transform: str, horizon: str) -> list:
+                  transform: str, horizon: str, truth_kind: str = "strict") -> list:
     tf, side = _parse_combo_name(combo_name)
+
+    if truth_kind == "plain":
+        # Late import: tdlib.alt_truth imports from tdlib.loop, which shares
+        # helpers with this module's own import graph -- keep it call-time,
+        # matching tdlib.loop.run_iteration's own plain-path convention.
+        from tdlib.alt_truth import feature_matrix_alt, mark_truth_plain
 
     # Counts + skip decision FIRST, before ANY feature/transform/bundle
     # machinery is touched -- mirrors tdlib.loop.run_iteration's own order
@@ -344,7 +350,10 @@ def _score_combo(oos_slim: pd.DataFrame, train_base: str, combo_name: str, combo
     # entire frozen feature set as "could not be reproduced" -- aborting
     # every OTHER combo in this run_oos call too).
     pts = strong_points(oos_slim, tf, side)
-    marked = mark_truth(pts, tf, horizon)
+    if truth_kind == "plain":
+        marked = mark_truth_plain(pts, tf)
+    else:
+        marked = mark_truth(pts, tf, horizon)
     counts = truth_counts(marked)
     n_long, n_short = counts["long"], counts["short"]
     n_total = n_long + n_short
@@ -386,7 +395,10 @@ def _score_combo(oos_slim: pd.DataFrame, train_base: str, combo_name: str, combo
     with open(features_path) as f:
         selected_features = json.load(f)
 
-    X, y = feature_matrix(oos_slim, tf, side, horizon=horizon)
+    if truth_kind == "plain":
+        X, y = feature_matrix_alt(oos_slim, tf, side, "plain")
+    else:
+        X, y = feature_matrix(oos_slim, tf, side, horizon=horizon)
     X = _reproduce_transform(X, transform, selected_features)
 
     bundle_dir = Path(train_base) / combo_info["bundle_dir"]
@@ -421,10 +433,17 @@ def _score_combo(oos_slim: pd.DataFrame, train_base: str, combo_name: str, combo
     return rows
 
 
-def run_oos(oos_slim: pd.DataFrame, train_base: str) -> pd.DataFrame:
+def run_oos(oos_slim: pd.DataFrame, train_base: str, truth_kind: str = "strict") -> pd.DataFrame:
     """Score the frozen best 2y iteration's artifacts (``{train_base}/
     best.json`` + per-combo bundles) against ``oos_slim`` with ZERO refit.
     See the module docstring point 3 for the full per-combo contract.
+
+    ``truth_kind="plain"`` scores against the plain race+fill label pair
+    (``alt_truth.mark_truth_plain`` / ``feature_matrix_alt``) instead of the
+    profit_strict pair -- for validating a ``train_base`` that was itself
+    produced by a plain-truth ``improvement_loop`` run (its bundles were
+    fitted on plain-marked y, so scoring them on strict-marked y would be a
+    truth-definition mismatch, not validation).
     """
     best_path = Path(train_base) / "best.json"
     if not best_path.exists():
@@ -439,7 +458,7 @@ def run_oos(oos_slim: pd.DataFrame, train_base: str) -> pd.DataFrame:
 
     rows: list = []
     for combo_name, combo_info in best["combos"].items():
-        rows.extend(_score_combo(oos_slim, train_base, combo_name, combo_info, transform, horizon))
+        rows.extend(_score_combo(oos_slim, train_base, combo_name, combo_info, transform, horizon, truth_kind))
 
     return pd.DataFrame(rows, columns=_TABLE_COLUMNS)
 
