@@ -385,6 +385,20 @@ fields:
     library: talib
     params: {}
 
+  - name: zone_class_q
+    group: classification
+    applies_to: [15, 60, 240, 1440]
+    depends_on: [rsi_ma8]
+    library: talib
+    params: {}
+
+  - name: move_class_sym0
+    group: classification
+    applies_to: [15, 60, 240, 1440]
+    depends_on: [rsi_ma8, rsi_ma8_diff]
+    library: talib
+    params: {}
+
   - name: over_low
     group: classification
     applies_to: [15, 60, 240, 1440]

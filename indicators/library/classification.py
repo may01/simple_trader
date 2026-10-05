@@ -68,6 +68,52 @@ def _five_tiers(x: pd.Series, mean: float, std: float, base: int) -> np.ndarray:
     return np.where(x.isna(), base + 2, result)
 
 
+def _apply_cuts(x: pd.Series, cuts: list[float], base: int) -> np.ndarray:
+    """Bucket *x* into 5 tiers by ascending *cuts* (4 values) → base .. base+4.
+
+    ``np.digitize`` with right=False: a value on a cut lands in the upper tier.
+    NaN inputs land in the middle tier (index 2), matching ``_five_tiers``.
+    """
+    arr = np.asarray(x, dtype=float)
+    idx = np.digitize(arr, cuts)  # 0..4
+    idx = np.where(np.isnan(arr), 2, idx)
+    return idx + base
+
+
+class ZoneClassQField(IndicatorField):
+    """RSI level classification via quantile cuts: rsi_ma8 vs zone_cuts → 0..4."""
+
+    name = "zone_class_q"
+    group = "classification"
+    dependencies: list[str] = ["rsi_ma8"]
+    resource_dependencies: list[str] = ["rsi_classification.json"]
+    applies_to: list[int] = [15, 60, 240, 1440]
+    params: dict = {}
+
+    def compute(self, data_point, tf: int) -> pd.Series:
+        cuts = [float(c) for c in _get_tf_classification(tf)["zone_cuts"]]
+        df = data_point.get_df(tf)
+        rsi = df[f"{tf}_rsi_ma8"]
+        return pd.Series(_apply_cuts(rsi, cuts, base=0), index=df.index, dtype=int)
+
+
+class MoveClassSym0Field(IndicatorField):
+    """RSI momentum via symmetric-zero cuts: rsi_ma8_diff vs move_cuts → -2..2."""
+
+    name = "move_class_sym0"
+    group = "classification"
+    dependencies: list[str] = ["rsi_ma8", "rsi_ma8_diff"]
+    resource_dependencies: list[str] = ["rsi_classification.json"]
+    applies_to: list[int] = [15, 60, 240, 1440]
+    params: dict = {}
+
+    def compute(self, data_point, tf: int) -> pd.Series:
+        cuts = [float(c) for c in _get_tf_classification(tf)["move_cuts"]]
+        df = data_point.get_df(tf)
+        diff = df[f"{tf}_rsi_ma8_diff"]
+        return pd.Series(_apply_cuts(diff, cuts, base=-2), index=df.index, dtype=int)
+
+
 class MoveClassField(IndicatorField):
     """RSI momentum classification: rsi_ma8_diff vs diff_mean ± diff_std → -2..2."""
 

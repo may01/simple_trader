@@ -203,3 +203,95 @@ class TestRsiClassMarkers:
             if c.kwargs.get("subplot") == "rsi"
         ]
         assert rsi_markers == []
+
+
+# ---------------------------------------------------------------------------
+# task-05: new coexisting fields + side-aware tooltip
+# ---------------------------------------------------------------------------
+
+import frontend.data_viewer as dv_mod  # noqa: E402
+
+
+def _class_df_new(n: int = 60 * 24):
+    return _make_df(extras=[
+        ("rsi_14", np.linspace(40, 60, n)),
+        ("rsi_ma8", np.linspace(40, 60, n)),
+        ("move_class", np.resize([-1, 0, 1, 2], n)),
+        ("zone_class", np.resize([1, 2, 3, 4], n)),
+        ("move_class_sym0", np.resize([-2, -1, 0, 1, 2], n)),
+        ("zone_class_q", np.resize([0, 1, 2, 3, 4], n)),
+    ])
+
+
+FAKE_SIDE = {"15": {
+    "zone_class_q": {"4": {"long_winrate": 0.55, "short_winrate": 0.44,
+                           "long_lift": 0.05, "short_lift": -0.05,
+                           "base_long": 0.5, "n": 10}},
+    "move_class_sym0": {"-2": {"long_winrate": 0.60, "short_winrate": 0.39,
+                              "long_lift": 0.10, "short_lift": -0.10,
+                              "base_long": 0.5, "n": 10}},
+}}
+
+
+@pytest.fixture
+def stub_side_stats(monkeypatch):
+    import helpers
+    monkeypatch.setattr(helpers, "stats_folder", lambda: "x/")
+    monkeypatch.setattr(dv_mod, "_load_side_stats_file", lambda path: FAKE_SIDE)
+
+
+@pytest.fixture
+def no_side_stats(monkeypatch):
+    import helpers
+    monkeypatch.setattr(helpers, "stats_folder", lambda: "x/")
+    monkeypatch.setattr(dv_mod, "_load_side_stats_file", lambda path: {})
+
+
+def _rsi_labels(mock_renderer):
+    return {
+        c.kwargs.get("label")
+        for c in mock_renderer.draw_marker.call_args_list
+        if c.kwargs.get("subplot") == "rsi"
+    }
+
+
+class TestNewClassMarkersCoexist:
+    def test_new_field_traces_drawn_beside_legacy(self, mock_renderer, no_side_stats):
+        v = _viewer(_class_df_new(), mock_renderer)
+        v.build_window_figure("2024-01-01", 1)
+        labels = _rsi_labels(mock_renderer)
+        # legacy still present (A/B)
+        assert {"zone_class=1", "move_class=0"} <= labels
+        # new fields present
+        assert {"zone_class_q=0", "zone_class_q=4"} <= labels
+        assert {"move_class_sym0=-2", "move_class_sym0=2"} <= labels
+
+    def test_side_tooltip_attached_when_stats_present(self, mock_renderer, stub_side_stats):
+        v = _viewer(_class_df_new(), mock_renderer)
+        v.build_window_figure("2024-01-01", 1)
+        zq4 = [c for c in mock_renderer.draw_marker.call_args_list
+               if c.kwargs.get("label") == "zone_class_q=4"][0]
+        ht = zq4.kwargs.get("hovertext")
+        assert ht and "long 55%" in ht[0] and "short 44%" in ht[0]
+        assert len(ht) == len(zq4[0][1])  # one tooltip per point
+
+    def test_no_tooltip_when_side_stats_absent(self, mock_renderer, no_side_stats):
+        v = _viewer(_class_df_new(), mock_renderer)
+        v.build_window_figure("2024-01-01", 1)
+        new_calls = [c for c in mock_renderer.draw_marker.call_args_list
+                     if str(c.kwargs.get("label", "")).startswith("zone_class_q=")]
+        assert new_calls and all(c.kwargs.get("hovertext") is None for c in new_calls)
+
+    def test_legacy_markers_have_no_tooltip(self, mock_renderer, stub_side_stats):
+        v = _viewer(_class_df_new(), mock_renderer)
+        v.build_window_figure("2024-01-01", 1)
+        legacy = [c for c in mock_renderer.draw_marker.call_args_list
+                  if str(c.kwargs.get("label", "")).startswith("zone_class=")]
+        assert legacy and all(c.kwargs.get("hovertext") is None for c in legacy)
+
+    def test_new_fields_skipped_when_columns_absent(self, mock_renderer, no_side_stats):
+        v = _viewer(_class_df(), mock_renderer)  # legacy-only df
+        v.build_window_figure("2024-01-01", 1)
+        labels = _rsi_labels(mock_renderer)
+        assert not any(str(l).startswith("zone_class_q=") for l in labels)
+        assert {"zone_class=1"} <= labels  # legacy unaffected

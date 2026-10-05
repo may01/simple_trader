@@ -55,6 +55,11 @@ class DataAttributes:
         if not os.path.exists(indicator_path):
             self._compute_indicator_stats(df)
 
+        # side-stats companion depends on rsi_classification.json (cuts); compute after it
+        side_path = base + "rsi_side_stats.json"
+        if not os.path.exists(side_path) and os.path.exists(rsi_path):
+            self._compute_rsi_side_stats(df)
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -90,14 +95,94 @@ class DataAttributes:
             )
             if len(levels) < 2 or len(diffs) < 2:
                 continue
+            diff_std = float(diffs.std())
+            zone_cuts = [float(v) for v in np.percentile(levels, [10, 30, 70, 90])]
+            move_cuts = [m * diff_std for m in (-1.0, -0.3, 0.3, 1.0)]
             result[str(tf)] = {
                 "mean": float(levels.mean()),
                 "std": float(levels.std()),
                 "diff_mean": float(diffs.mean()),
-                "diff_std": float(diffs.std()),
+                "diff_std": diff_std,
+                "zone_cuts": zone_cuts,
+                "move_cuts": move_cuts,
             }
 
         out_path = base + "rsi_classification.json"
+        tmp_path = out_path + ".tmp"
+        with open(tmp_path, "w") as fh:
+            json.dump(result, fh)
+        os.rename(tmp_path, out_path)
+
+    def _compute_rsi_side_stats(self, df: pd.DataFrame) -> None:
+        """Per-TF, per-new-class long/short win-rate + lift (viewer tooltip source).
+
+        For ``zone_class_q`` (rsi_ma8 vs ``zone_cuts``, classes 0..4) and
+        ``move_class_sym0`` (rsi_ma8_diff vs ``move_cuts``, classes -2..2), tally
+        over closed-candle rows the next-bar directional win-rate:
+        ``long_winrate = P(fwd>0 | class)``, ``short_winrate = P(fwd<0 | class)``,
+        lifts vs the TF base rate. Forward return is close-to-close over one closed
+        bar of that TF (side-agnostic). Reads the cuts from the just-written
+        ``rsi_classification.json``; empty classes carry zeros (never NaN).
+
+        Saves to ``stats_folder() + 'rsi_side_stats.json'``.
+        """
+        from helpers import stats_folder
+        base = stats_folder()
+        os.makedirs(base, exist_ok=True)
+        with open(base + "rsi_classification.json") as fh:
+            rsi_stats = json.load(fh)
+
+        fields = {
+            "zone_class_q": ("_rsi_ma8", "zone_cuts", 0),
+            "move_class_sym0": ("_rsi_ma8_diff", "move_cuts", -2),
+        }
+
+        result: dict = {}
+        for tf in self._STAT_TFS:
+            if str(tf) not in rsi_stats:
+                continue
+            closed_col = f"{tf}_is_closed"
+            close_col = f"{tf}_close"
+            if closed_col not in df.columns or close_col not in df.columns:
+                continue
+            closed = df[df[closed_col] == True]  # noqa: E712
+            close = closed[close_col].to_numpy(dtype=float)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                fwd = np.log(np.concatenate([close[1:] / close[:-1], [np.nan]]))
+            entry = rsi_stats[str(tf)]
+            tf_out: dict = {}
+            for fname, (suffix, cut_key, cbase) in fields.items():
+                feat_col = f"{tf}{suffix}"
+                if feat_col not in closed.columns:
+                    continue
+                feat = closed[feat_col].to_numpy(dtype=float)
+                cuts = entry[cut_key]
+                valid = ~np.isnan(fwd) & ~np.isnan(feat)
+                y = fwd[valid]
+                idx = np.digitize(feat[valid], cuts)  # 0..4
+                base_long = float((y > 0).mean()) if len(y) else 0.0
+                base_short = float((y < 0).mean()) if len(y) else 0.0
+                cls_out: dict = {}
+                for k in range(5):
+                    sel = idx == k
+                    n = int(sel.sum())
+                    if n:
+                        lw = float((y[sel] > 0).mean())
+                        sw = float((y[sel] < 0).mean())
+                    else:
+                        lw = sw = 0.0
+                    cls_out[str(cbase + k)] = {
+                        "long_winrate": round(lw, 6),
+                        "short_winrate": round(sw, 6),
+                        "long_lift": round(lw - base_long, 6),
+                        "short_lift": round(sw - base_short, 6),
+                        "base_long": round(base_long, 6),
+                        "n": n,
+                    }
+                tf_out[fname] = cls_out
+            result[str(tf)] = tf_out
+
+        out_path = base + "rsi_side_stats.json"
         tmp_path = out_path + ".tmp"
         with open(tmp_path, "w") as fh:
             json.dump(result, fh)

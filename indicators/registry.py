@@ -83,6 +83,8 @@ _FIELD_REGISTRY: dict[str, object] = {
     # Classification (stats-driven; no numeric params)
     "move_class": lambda cfg: MoveClassField(),
     "zone_class": lambda cfg: ZoneClassField(),
+    "zone_class_q": lambda cfg: ZoneClassQField(),
+    "move_class_sym0": lambda cfg: MoveClassSym0Field(),
     "over_low": lambda cfg: OverLowField(),
     "over_high": lambda cfg: OverHighField(),
     # Targets (stats-driven; no numeric params)

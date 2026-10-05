@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import colorsys
+import functools
+import json
 import re
 from typing import Optional, Any
 
@@ -11,6 +13,16 @@ import plotly.graph_objects as go
 
 import constants
 from frontend.chart_renderer import ChartRenderer
+
+
+@functools.lru_cache(maxsize=None)
+def _load_side_stats_file(path: str) -> dict:
+    """Load rsi_side_stats.json (viewer tooltip source); {} if absent/invalid."""
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
 
 # ---------------------------------------------------------------------------
 # Indicator subplot routing
@@ -583,8 +595,40 @@ class DataViewer:
         }),
     }
 
+    # New coexisting fields (quantile zone / sym0 move): distinct glyphs so they
+    # sit beside the legacy markers on the same rsi_ma8 line for A/B comparison,
+    # and carry a side-aware tooltip (per-class long/short win-rate).
+    _RSI_CLASS_MARKERS_NEW = {
+        "move_class_sym0": ("x", 7, {
+            -2: "red", -1: "orange", 0: "silver",
+            1: "lightgreen", 2: "green",
+        }),
+        "zone_class_q": ("diamond", 9, {
+            0: "red", 1: "orange", 2: "silver",
+            3: "lightgreen", 4: "green",
+        }),
+    }
+
     # The rsi_ma line both class fields are computed from.
     _RSI_CLASS_SOURCE = "rsi_ma8"
+
+    def _side_stats(self) -> dict:
+        """rsi_side_stats.json for the served dataset ({} if absent)."""
+        from helpers import stats_folder  # local: reads env at call time
+        return _load_side_stats_file(stats_folder() + "rsi_side_stats.json")
+
+    def _side_tooltip(self, field: str, tf: int, value: int) -> Optional[str]:
+        """Per-class long/short win-rate string, or None when side-stats absent."""
+        entry = self._side_stats().get(str(tf), {}).get(field, {}).get(str(value))
+        if not entry:
+            return None
+        return (
+            f"{field}={value}<br>"
+            f"long {entry['long_winrate'] * 100:.0f}% "
+            f"(lift {entry['long_lift'] * 100:+.1f})<br>"
+            f"short {entry['short_winrate'] * 100:.0f}% "
+            f"(lift {entry['short_lift'] * 100:+.1f})"
+        )
 
     def _draw_rsi_class_markers(
         self,
@@ -592,14 +636,16 @@ class DataViewer:
         window: pd.DataFrame,
         tf: int,
     ) -> None:
-        """Draw move_class/zone_class markers on the rsi_ma8 line. Skip-if-absent.
+        """Draw legacy + new class markers on the rsi_ma8 line. Skip-if-absent.
 
         One marker trace per (field, class value), plotted per-minute on the
         raw (un-deduped) window: the class fields and rsi_ma8 recompute on
         every base-frequency row, so a marker is drawn at each minute's
         rsi_ma8 y-value rather than once per displayed candle — exposing
-        intra-candle class evolution. Skipped when the rsi subplot is hidden
-        or the source/class columns are absent.
+        intra-candle class evolution. Legacy (`move_class`/`zone_class`) and new
+        (`move_class_sym0`/`zone_class_q`) fields coexist; the new ones carry a
+        side-aware tooltip. Skipped when the rsi subplot is hidden or the
+        source/class columns are absent.
         """
         rows = getattr(fig, "_subplot_rows", {})
         if "rsi" not in rows:
@@ -608,7 +654,20 @@ class DataViewer:
         if src_col not in window.columns:
             return
         src = window[src_col]
-        for field, (symbol, size, colors) in self._RSI_CLASS_MARKERS.items():
+        self._draw_class_group(fig, window, tf, src, self._RSI_CLASS_MARKERS, False)
+        self._draw_class_group(fig, window, tf, src, self._RSI_CLASS_MARKERS_NEW, True)
+
+    def _draw_class_group(
+        self,
+        fig: go.Figure,
+        window: pd.DataFrame,
+        tf: int,
+        src: pd.Series,
+        markers: dict,
+        side_aware: bool,
+    ) -> None:
+        """Draw one class-marker group; side-aware groups attach a win-rate tooltip."""
+        for field, (symbol, size, colors) in markers.items():
             col = f"{tf}_{field}"
             if col not in window.columns:
                 continue
@@ -617,6 +676,11 @@ class DataViewer:
                 mask = cls == value
                 if not mask.any():
                     continue
+                hovertext = None
+                if side_aware:
+                    tip = self._side_tooltip(field, tf, value)
+                    if tip is not None:
+                        hovertext = [tip] * int(mask.sum())
                 self.renderer.draw_marker(
                     fig,
                     list(window.index[mask]),
@@ -626,6 +690,7 @@ class DataViewer:
                     label=f"{field}={value}",
                     subplot="rsi",
                     size=size,
+                    hovertext=hovertext,
                 )
 
     # Profit-label column prefixes → (side, marker colour). Strict variants
