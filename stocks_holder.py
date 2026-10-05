@@ -10,12 +10,16 @@ def do_stock_init(stock_name: str) -> None:
     """Initialize stock_holder.item with the named implementation.
 
     Args:
-        stock_name: "binance", "mock_binance", or "mock"
+        stock_name: "binance", "binance_candles" (keyless, read-only real data),
+            "mock_binance", or "mock"
     """
     global stock_holder
     if stock_name == "binance":
         from stocks.binance_stock import Stock_Binance
         stock_holder.item = Stock_Binance()
+    elif stock_name == "binance_candles":
+        from stocks.binance_candles_stock import Stock_BinanceCandles
+        stock_holder.item = Stock_BinanceCandles()
     elif stock_name == "mock_binance":
         from stocks.mock_stock import Stock_MockBinance
         stock_holder.item = Stock_MockBinance()

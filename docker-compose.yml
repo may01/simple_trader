@@ -84,6 +84,23 @@ services:
     build: .
     command: python3 trader.py
     env_file: ${LIVE_ENV:-configs/live.env}
+    # MQ_EXECUTOR_ADDR points at trade_executor, which runs outside this
+    # compose file entirely. It is reached over `trader_mq`, a shared
+    # external network both compose projects attach to, addressing that
+    # service by name (`tcp://executor:5555`). Going through the host
+    # instead does NOT work: trade_executor publishes its MQ port as
+    # 127.0.0.1:5555, and a port published on the host's loopback is
+    # unreachable from this container via host-gateway (172.17.0.1) --
+    # connection refused, silently, since the zmq PUSH publisher never
+    # raises. Listing `default` explicitly is required: naming any
+    # network turns off compose's implicit default membership.
+    networks:
+      - default
+      - trader_mq
+    # Kept for anything else in this service that dials the host by
+    # name; the executor is not reached this way.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8050:8050"
     volumes:
@@ -135,6 +152,13 @@ services:
     environment:
       BINANCE_API_KEY: ${BINANCE_API_KEY}
       BINANCE_API_SECRET: ${BINANCE_API_SECRET}
+
+# Shared with trade_executor's compose project, created out-of-band so
+# neither project owns or recreates it:
+#   docker network create trader_mq
+networks:
+  trader_mq:
+    external: true
 
 volumes:
   simple_trader_vol:

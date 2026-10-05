@@ -292,15 +292,11 @@ class DataViewer:
     }
 
     # Target/stop-loss overlays — always drawn (at the chart tf), never toggleable.
-    # EMPTIED: the predicted candle bounds ("cb_bounds" above) now supply
-    # target and stop-loss for both directions (cb_high = long tgt / short SL,
-    # cb_low = short tgt / long SL), so the old always-on tgt_*/sl_* lines are
-    # redundant and were doubling up the price subplot. Kept as an empty list
-    # rather than deleted: _draw_price_overlays and _draw_higher_tf_targets both
-    # iterate it, and the tgtsl_* toggle gate below tests membership against it,
-    # so emptying it removes the lines AND their toggles in one place while
-    # leaving _TARGET_TF_GROUPS intact (its min() is still read for tf gating).
-    _TARGET_OVERLAYS: list[str] = []
+    # Suppressed on datasets carrying the predicted candle bounds ("cb_bounds"
+    # above): cb_high = long tgt / short SL and cb_low = short tgt / long SL
+    # already supply both levels for both directions, so drawing tgt_*/sl_* too
+    # would double up the price subplot. See _target_overlays().
+    _TARGET_OVERLAYS = ["tgt_long", "sl_long", "tgt_short", "sl_short"]
 
     # Higher-TF target/SL overlay groups. The four target fields are computed
     # only for these TFs (applies_to [15,60,240,1440]); on a chart finer than 15
@@ -676,7 +672,7 @@ class DataViewer:
             groups += [
                 group
                 for group, src_tf in self._TARGET_TF_GROUPS.items()
-                if any(f"{src_tf}_{f}" in cols for f in self._TARGET_OVERLAYS)
+                if any(f"{src_tf}_{f}" in cols for f in self._target_overlays())
             ]
         return groups
 
@@ -684,6 +680,21 @@ class DataViewer:
         """Subplots checked on first load — available minus the off set."""
         return [sp for sp in self.available_subplots()
                 if sp not in self._DEFAULT_SUBPLOTS_OFF]
+
+    def _target_overlays(self) -> list[str]:
+        """Target/SL fields to draw: none when the wide df has candle bounds.
+
+        Datasets with a df_with_candle_bounds.pkl sidecar draw the ``cb_bounds``
+        pair instead, which removes the tgt_*/sl_* lines and their ``tgtsl_*``
+        toggles; every other dataset keeps them.
+        """
+        cols = self.full_data.df.columns
+        has_cb = any(
+            f"{tf}_{f}" in cols
+            for tf in self.available_tfs()
+            for f in self._OVERLAY_GROUPS["cb_bounds"]
+        )
+        return [] if has_cb else self._TARGET_OVERLAYS
 
     def default_overlays(self) -> list[str]:
         """Overlay groups checked on first load — available minus the off sets."""
@@ -772,12 +783,13 @@ class DataViewer:
         return fig
 
     # Class markers on the rsi subplot: field → (marker symbol, size,
-    # class value → colour). move_class buckets rsi_ma8_diff momentum — the
-    # 7-class frozen-sym0 classification (-3..3, experimental_imp_2 420ae4d;
-    # materialized in oos2m's stored {tf}_move_class); zone_class buckets the
-    # rsi_ma8 level (0..4) — five spec tiers (see
-    # indicators/library/classification.py); both are drawn at the rsi_ma8
-    # y-value, the diamond ringing the dot.
+    # class value → colour). move_class buckets rsi_ma8_diff momentum (-3..3,
+    # sym0 7-class), zone_class buckets the rsi_ma8 level (0..4, five tiers)
+    # (see indicators/library/classification.py); both are drawn at the
+    # rsi_ma8 y-value, the diamond ringing the dot.
+    # move_class: 7-class sym0 rsi_ma8_diff (frozen 2y-fit cuts, see
+    # indicators/library/classification.py MOVE_CLASS_CUTS). Direction edge
+    # is INVERTED: -3 (steep fall) = long edge, +3 (steep rise) = short edge.
     _RSI_CLASS_MARKERS = {
         "move_class": ("circle", 6, {
             -3: "darkred", -2: "red", -1: "orange", 0: "silver",
@@ -1208,7 +1220,7 @@ class DataViewer:
         else:
             groups = [g for g in overlays if g in self._OVERLAY_GROUPS]
         names = [f for g in groups for f in self._OVERLAY_GROUPS[g]]
-        names += self._TARGET_OVERLAYS
+        names += self._target_overlays()
         times = list(df_slice.index)
         for name in names:
             col = f"{tf}_{name}"
@@ -1259,7 +1271,7 @@ class DataViewer:
             if overlays is not None and group not in overlays:
                 continue
             dash, width = self._TARGET_TF_STYLE[src_tf]
-            for name in self._TARGET_OVERLAYS:
+            for name in self._target_overlays():
                 col = f"{src_tf}_{name}"
                 if col not in df_slice.columns:
                     continue
