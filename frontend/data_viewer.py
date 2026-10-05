@@ -142,6 +142,11 @@ class DataViewer:
         "bb_x_10_15": ["bb_upper_10_15", "bb_lower_10_15"],
         "bb_x_20_3": ["bb_upper_20_3", "bb_lower_20_3"],
         "ema": ["ema_7", "ema_14", "ema_25", "ema_50", "ema_100"],
+        # EMA-25 coloured by slope class (data.join_ema_slope): the same
+        # ema_25 line split into rise / fall / neutral segments by the last
+        # closed candle's z-scored slope (|z| > 0.5 on 2y stats). Producer:
+        # notebooks/zone_profitability/run_ema_slope.py.
+        "ema25_cls": ["ema_25_rise", "ema_25_fall", "ema_25_neutral"],
         "sar": ["sar_002_02"],
         # action_zones experiment overlay (notebooks/action_zones,
         # data.join_action_zones): entry-limit/target/stop-loss lines per
@@ -172,6 +177,11 @@ class DataViewer:
         "cb_adj": ["cb_hi_adj", "cb_lo_adj"],
         "cb_long": ["cb_zone_long"],
         "cb_short": ["cb_zone_short"],
+        # NN-breakdown entry markers (enter_*): marker-only group — its fields
+        # are the boolean marker columns, listed here so the toggle exists and
+        # is skip-if-absent like every other group; _draw_price_overlays skips
+        # them (see _MARKER_ONLY_FIELDS) and _draw_zone_markers draws them.
+        "cb_enter": ["cb_enter_long", "cb_enter_short"],
         # Predicted CLOSE of the current candle, same model family as the
         # high/low bounds, with its own ±1 residual-sd band. Off by default:
         # its OOS r² is ~0 (-0.001/-0.001/+0.016 at tf 15/60/240), i.e. the
@@ -194,15 +204,91 @@ class DataViewer:
         "cbnc_tgt": ["cbnc_tgt_long", "cbnc_tgt_short"],
         "cbnc_long": ["cbnc_zone_long"],
         "cbnc_short": ["cbnc_zone_short"],
+        # zone-profitability experiment overlay (data.join_zone_profitability):
+        # per-move-class shifted open/target levels — the closed cb bound pair
+        # moved by the per-(tf, move class, side) shift coefficients selected
+        # on 2y (shift unit = {tf}_atr_14_ma_5). The level a row shows is the
+        # one selected by that row's own move class, so the line re-steps when
+        # the class changes. Columns exist only for datasets carrying a
+        # df_with_zone_profitability.pkl sidecar.
+        # See external/docs/superpowers/experiment/zone_profitability.md.
+        "zp_long": ["zp_open_long", "zp_tgt_long"],
+        "zp_short": ["zp_open_short", "zp_tgt_short"],
+        # EV-line overlay (data.join_ev_line): per-candle entry level that
+        # maximizes p_fill·EV under Gaussian cb bands (stop = L−1σ, target =
+        # H−0.5σ, long; mirror short), plus the breakeven level — the outer
+        # edge of the EV-positive zone. Columns exist only for datasets
+        # carrying a df_with_ev_line.pkl sidecar (producer:
+        # notebooks/zone_profitability/run_ev.py).
+        "ev_long": ["ev_long", "ev_long_be"],
+        "ev_short": ["ev_short", "ev_short_be"],
+        # Empirical-reach rule (data.join_ev_reach): entry/stop/target in band
+        # units (a, s, t)·σ chosen per (tf, side) by 2y minute-replay pnl —
+        # the Gaussian ev_* line's independence prior replaced by measured
+        # conditional reach. Producer: notebooks/zone_profitability/run_evr.py.
+        "evr_long": ["evr_long", "evr_long_sl", "evr_long_tgt"],
+        "evr_short": ["evr_short", "evr_short_sl", "evr_short_tgt"],
+        # ATR-shifted entry zone (data.join_cb_zone_atr): cb bound shifted
+        # k x 1-min ATR toward the target instead of cb_zone_*'s 5 % of span;
+        # moves per minute with the ATR. Producer:
+        # notebooks/zone_profitability/run_cbatr.py.
+        "cbatr_long": ["cbatr_zone_long"],
+        "cbatr_short": ["cbatr_zone_short"],
+        # "Extreme done" (data.join_ext_done): the candle's running high (->
+        # short setup) / low (-> long setup) has pulled away by >= d(progress)
+        # 1-min ATRs, so it is unlikely to be touched again this candle. The
+        # line is the running extreme while the state holds; the first-trigger
+        # minute gets a marker (see _EXTDONE_* below). Producer:
+        # notebooks/zone_profitability/run_extdone.py.
+        "extdone_short": ["extdone_high_lvl"],
+        "extdone_long": ["extdone_low_lvl"],
     }
+
+    # Overlay-group fields that are boolean marker columns, not price lines.
+    _MARKER_ONLY_FIELDS = {"cb_enter_long", "cb_enter_short"}
 
     # Overlay groups unchecked on first load (still drawable via their toggle).
     # az_short defaults off too — long+short together would double the zone
     # lines on a chart already busy with tgt_long/sl_long/tgt_short/sl_short.
     # cb_band off too — four extra lines around an already-drawn bound pair.
     _DEFAULT_OVERLAYS_OFF = {
-        "bb_x_10_15", "bb_x_20_3", "sar", "cb_band", "cb_close", "cb_adj",
-        "cbnc_band",
+        "bb_x_20_2", "bb_x_10_15", "bb_x_20_3", "sar", "cb_band", "cb_close",
+        "cb_adj",
+        # cbnc_*/zp_* off (2026-10-02): the chart defaults to the closed cb
+        # lines + cbatr/extdone; the non-closed and per-class overlays (and
+        # their cbzone_nc/cbx/zpzone/zptgt markers, which they gate) are one
+        # click away.
+        "cbnc_bounds", "cbnc_band", "cbnc_tgt", "cbnc_long", "cbnc_short",
+        "zp_long", "zp_short",
+        # evr_* off: the 2y-selected rule degenerates to deep, rarely-filled
+        # entries (see experiment/ev_line.md §7) — kept drawable for inspection.
+        "evr_long", "evr_short",
+        # ev_*/cbatr_*/extdone_* off (2026-10-03): experiment overlays and their
+        # markers; the extdone veto on the cb zones still applies with the
+        # extdone groups unchecked (it reads the columns, not the toggle).
+        "ev_long", "ev_short", "cbatr_long", "cbatr_short",
+        "extdone_short", "extdone_long",
+        # cb_bounds off too: the zones (cb_long/cb_short) stay, the raw
+        # bound pair they derive from is one click away. cb_enter (the NN
+        # breakdown arrows) off as well.
+        "cb_bounds", "cb_enter",
+    }
+
+    # Veto gates: overlay field / marker column (tf-stripped) -> extdone state
+    # column (same tf) that suppresses it. A short entry zone is meaningless
+    # once the candle's LOW is in (price has turned up), a long zone once its
+    # HIGH is in — so cb_zone_short/cb_inzone_short are blanked while
+    # {tf}_extdone_low holds, and the long pair while {tf}_extdone_high holds.
+    # Skip-if-absent: without the extdone sidecar nothing is vetoed.
+    _ZONE_VETO = {
+        "cb_zone_short": "extdone_low", "cb_inzone_short": "extdone_low",
+        "cb_zone_long": "extdone_high", "cb_inzone_long": "extdone_high",
+    }
+
+    # Subplots unchecked on first load (still available via their toggle):
+    # the price-derivative diff panels.
+    _DEFAULT_SUBPLOTS_OFF = {
+        "close_diff", "high_diff", "low_diff", "rsi_diff", "rsi", "nn",
     }
 
     # Target/stop-loss overlays — always drawn (at the chart tf), never toggleable.
@@ -242,6 +328,7 @@ class DataViewer:
         "bb_upper_20_3": "purple", "bb_lower_20_3": "purple",
         "ema_7": "gold", "ema_14": "orange", "ema_25": "magenta",
         "ema_50": "teal", "ema_100": "brown",
+        "ema_25_rise": "limegreen", "ema_25_fall": "red", "ema_25_neutral": "gray",
         "sar_002_02": "black",
         # Targets profit-side greens, stop-losses loss-side reds; long darker,
         # short lighter so direction reads at a glance.
@@ -281,6 +368,18 @@ class DataViewer:
         "cbnc_zone_long": "seagreen", "cbnc_zone_short": "deeppink",
         # operative (hair-cut) targets: green/red family, long darker
         "cbnc_tgt_long": "forestgreen", "cbnc_tgt_short": "firebrick",
+        # EV line: blue/orange-red family, breakeven edge a lighter shade of
+        # its own best line so the pair reads as one zone.
+        "ev_long": "midnightblue", "ev_long_be": "mediumslateblue",
+        "ev_short": "orangered", "ev_short_be": "coral",
+        # empirical-reach rule: entry bold hue, stop/target muted shades of it
+        "evr_long": "darkolivegreen", "evr_long_sl": "olive", "evr_long_tgt": "yellowgreen",
+        "evr_short": "purple", "evr_short_sl": "mediumorchid", "evr_short_tgt": "plum",
+        # ATR-shifted zone: same green/magenta family as cb_zone_* (it is the
+        # candidate replacement), darker so the two read apart side by side.
+        "cbatr_zone_long": "green", "cbatr_zone_short": "deeppink",
+        # extreme-done level: the frozen running extreme, grey-blue / grey-red
+        "extdone_high_lvl": "slategray", "extdone_low_lvl": "rosybrown",
     }
 
     # Oscillator set for window figures (skip-if-absent). Each oscillator's
@@ -581,6 +680,11 @@ class DataViewer:
             ]
         return groups
 
+    def default_subplots(self) -> list[str]:
+        """Subplots checked on first load — available minus the off set."""
+        return [sp for sp in self.available_subplots()
+                if sp not in self._DEFAULT_SUBPLOTS_OFF]
+
     def default_overlays(self) -> list[str]:
         """Overlay groups checked on first load — available minus the off sets."""
         off = self._DEFAULT_OVERLAYS_OFF | self._TARGET_TF_DEFAULT_OFF
@@ -668,14 +772,16 @@ class DataViewer:
         return fig
 
     # Class markers on the rsi subplot: field → (marker symbol, size,
-    # class value → colour). move_class buckets rsi_ma8_diff momentum (-2..2),
-    # zone_class buckets the rsi_ma8 level (0..4) — five spec tiers each
-    # (see indicators/library/classification.py); both are drawn at the
-    # rsi_ma8 y-value, the diamond ringing the dot.
+    # class value → colour). move_class buckets rsi_ma8_diff momentum — the
+    # 7-class frozen-sym0 classification (-3..3, experimental_imp_2 420ae4d;
+    # materialized in oos2m's stored {tf}_move_class); zone_class buckets the
+    # rsi_ma8 level (0..4) — five spec tiers (see
+    # indicators/library/classification.py); both are drawn at the rsi_ma8
+    # y-value, the diamond ringing the dot.
     _RSI_CLASS_MARKERS = {
         "move_class": ("circle", 6, {
-            -2: "red", -1: "orange", 0: "silver",
-            1: "lightgreen", 2: "green",
+            -3: "darkred", -2: "red", -1: "orange", 0: "silver",
+            1: "lightgreen", 2: "green", 3: "darkgreen",
         }),
         "zone_class": ("diamond-open", 11, {
             0: "red", 1: "orange", 2: "silver",
@@ -837,13 +943,54 @@ class DataViewer:
 
     # Intersection markers — a 1-min candle inside BOTH the closed-bound zone
     # (cb_inzone) and the non-closed-bound zone (cbnc_inzone) of the same tf.
-    # Stars beyond the enter arrows (3x offset) so the confluence flag never
-    # collides with either source's own marks.
+    # Offset 0: drawn ON the 1-min low/high itself, so the confluence flag
+    # pins the exact candle extreme it refers to rather than floating beside
+    # it. Blue/magenta — neither is a candle body colour (green/red) and both
+    # stay legible on the white chart background.
     _CBX_INZONE_RE = re.compile(r"^(\d+)_cbx_inzone_(long|short)$")
     _CBX_MARKER = {
-        # side -> (symbol, colour, price column, offset sign — 3x = outermost)
-        "long": ("star", "darkolivegreen", "1_low", -3.0),
-        "short": ("star", "purple", "1_high", 3.0),
+        # side -> (symbol, colour, price column, offset sign — 0 = on the wick)
+        "long": ("star", "blue", "1_low", 0.0),
+        "short": ("star", "magenta", "1_high", 0.0),
+    }
+
+    # Zone-profitability markers (data.join_zone_profitability): a 1-min row
+    # whose range crosses the per-move-class shifted open level (zp_inzone) or
+    # target level (zp_intgt). Diamonds — no other family uses them — solid
+    # for the open zone at 2.5x offset, open for the target at 3.5x so all
+    # four can coexist with the cb/cbnc/cbx marks on one candle.
+    _ZP_INZONE_RE = re.compile(r"^(\d+)_zp_inzone_(long|short)$")
+    _ZP_MARKER = {
+        # side -> (symbol, colour, price column, offset sign)
+        "long": ("diamond", "forestgreen", "1_low", -2.5),
+        "short": ("diamond", "firebrick", "1_high", 2.5),
+    }
+    _ZP_INTGT_RE = re.compile(r"^(\d+)_zp_intgt_(long|short)$")
+    _ZP_TGT_MARKER = {
+        # side -> (symbol, colour, price column, offset sign)
+        "long": ("diamond-open", "teal", "1_low", -3.5),
+        "short": ("diamond-open", "darkorange", "1_high", 3.5),
+    }
+
+    # ATR-shifted zone in-zone markers — dotted triangles in the cbatr_zone_*
+    # line colours at 1.25x offset, between the cb (1x) and cbnc (1.5x) marks.
+    _CBATR_INZONE_RE = re.compile(r"^(\d+)_cbatr_inzone_(long|short)$")
+    _CBATR_MARKER = {
+        # side -> (symbol, colour, price column, offset sign)
+        "long": ("triangle-up-dot", "green", "1_low", -1.25),
+        "short": ("triangle-down-dot", "deeppink", "1_high", 1.25),
+    }
+
+    # Extreme-done markers: an "x" on every 1-min candle while the sticky
+    # state holds (from the first trigger to the candle close), so the whole
+    # "high is in -> short setup" / "low is in -> long setup" stretch reads
+    # on the 1-min chart. Drawn beside the 1-min high / low at 1x offset;
+    # colour carries the side only.
+    _EXTDONE_RE = re.compile(r"^(\d+)_extdone_(high|low)$")
+    _EXTDONE_MARKER = {
+        # side -> (symbol, colour, price column, offset sign)
+        "high": ("x", "black", "1_high", 1.0),
+        "low": ("x", "saddlebrown", "1_low", -1.0),
     }
 
     # (regex, marker styling, side -> gating overlay group, trace-label prefix).
@@ -852,11 +999,19 @@ class DataViewer:
         (_AZ_INZONE_RE, _AZ_MARKER, {"long": "az_long", "short": "az_short"}, "zone"),
         (_CB_INZONE_RE, _CB_MARKER, {"long": "cb_long", "short": "cb_short"}, "cbzone"),
         (_CB_ENTER_RE, _CB_ENTER_MARKER,
-         {"long": "cb_long", "short": "cb_short"}, "enter"),
+         {"long": "cb_enter", "short": "cb_enter"}, "enter"),
         (_CBNC_INZONE_RE, _CBNC_MARKER,
          {"long": "cbnc_long", "short": "cbnc_short"}, "cbzone_nc"),
         (_CBX_INZONE_RE, _CBX_MARKER,
          {"long": "cbnc_long", "short": "cbnc_short"}, "cbx"),
+        (_ZP_INZONE_RE, _ZP_MARKER,
+         {"long": "zp_long", "short": "zp_short"}, "zpzone"),
+        (_ZP_INTGT_RE, _ZP_TGT_MARKER,
+         {"long": "zp_long", "short": "zp_short"}, "zptgt"),
+        (_CBATR_INZONE_RE, _CBATR_MARKER,
+         {"long": "cbatr_long", "short": "cbatr_short"}, "cbatr"),
+        (_EXTDONE_RE, _EXTDONE_MARKER,
+         {"high": "extdone_short", "low": "extdone_long"}, "extdone"),
     )
 
     def _draw_zone_markers(
@@ -893,6 +1048,9 @@ class DataViewer:
                 if ycol not in window.columns:
                     continue
                 mask = window[col].fillna(False).to_numpy(dtype=bool)
+                veto = self._ZONE_VETO.get(str(col)[len(m.group(1)) + 1:])
+                if veto is not None and f"{src_tf}_{veto}" in window.columns:
+                    mask = mask & ~window[f"{src_tf}_{veto}"].fillna(False).to_numpy(dtype=bool)
                 if not mask.any():
                     continue
                 step = self._AZ_TF_STEP.get(src_tf, 0.002)
@@ -1054,9 +1212,14 @@ class DataViewer:
         times = list(df_slice.index)
         for name in names:
             col = f"{tf}_{name}"
-            if col not in df_slice.columns:
+            if col not in df_slice.columns or name in self._MARKER_ONLY_FIELDS:
                 continue
-            values = list(df_slice[col])
+            series = df_slice[col]
+            veto = self._ZONE_VETO.get(name)
+            if veto is not None and f"{tf}_{veto}" in df_slice.columns:
+                series = series.where(
+                    ~df_slice[f"{tf}_{veto}"].fillna(False).astype(bool))
+            values = list(series)
             color = self._OVERLAY_COLORS.get(name, "gray")
             if name.startswith("sar"):
                 self.renderer.draw_marker(

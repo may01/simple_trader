@@ -102,7 +102,7 @@ class TestAvailableOverlays:
 
     def test_default_excludes_off_groups(self):
         v = DataViewer(FullData(_make_df()))
-        assert v.default_overlays() == ["bb_x_20_2", "ema"]
+        assert v.default_overlays() == ["ema"]
 
     def test_default_is_subset_of_available(self):
         v = DataViewer(FullData(_make_df(overlays=("bb_upper_10_15", "sar_002_02"))))
@@ -168,7 +168,7 @@ class TestOverlayChecklist:
     def test_off_groups_unchecked_by_default(self):
         d = HistoryDashboard(FullData(_make_df()))
         cl = _find_component(d._app.layout, "overlays")
-        assert cl.value == ["bb_x_20_2", "ema"]
+        assert cl.value == ["ema"]
         for off in ("sar", "bb_x_10_15", "bb_x_20_3"):
             assert off not in cl.value
 
