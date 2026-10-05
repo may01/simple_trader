@@ -6,7 +6,10 @@ def main() -> None:
 
     import pandas as pd
 
-    from data import join_nn_results
+    from data import (
+        join_action_zones, join_candle_bounds, join_candle_bounds_nc,
+        join_nn_results,
+    )
     from frontend.data_viewer import FullData
     from frontend.history_dashboard import HistoryDashboard
     from helpers import wide_df_path
@@ -16,6 +19,17 @@ def main() -> None:
     # Surface NN inference outputs (nn_res_*) in the viewer by left-joining the
     # batch artifact df_with_nn.pkl from the dataset dir. Absence-safe no-op.
     df = join_nn_results(df, os.path.dirname(path))
+    # Surface action-zones overlay columns (az_*) in the viewer by left-joining
+    # the batch artifact df_with_action_zones.pkl from the dataset dir.
+    # Absence-safe no-op.
+    df = join_action_zones(df, os.path.dirname(path))
+    # Surface predicted candle-bound overlay columns (cb_*) in the viewer by
+    # left-joining the batch artifact df_with_candle_bounds.pkl from the dataset
+    # dir. Absence-safe no-op.
+    df = join_candle_bounds(df, os.path.dirname(path))
+    # Non-closed (forming-candle) bound predictions (cbnc_*/cbx_*), from the
+    # batch artifact df_with_candle_bounds_nc.pkl. Absence-safe no-op.
+    df = join_candle_bounds_nc(df, os.path.dirname(path))
     dashboard = HistoryDashboard(FullData(df))
     dashboard.run()
 
