@@ -67,6 +67,15 @@ class TestTargetSLOverlays:
         for name in ("sl_long", "tgt_short", "sl_short"):
             assert name not in labels
 
+    def test_suppressed_when_candle_bounds_present(self, mock_renderer):
+        # cb_high/cb_low already supply target and stop-loss for both sides.
+        df = _make_df(TARGET_FIELDS + ["cb_high", "cb_low"])
+        _viewer(df, mock_renderer).build_window_figure("2024-01-01", 1)
+        labels = _price_line_labels(mock_renderer)
+        assert "cb_high" in labels and "cb_low" in labels
+        for name in TARGET_FIELDS:
+            assert name not in labels
+
     def test_no_extra_subplot_created(self, mock_renderer):
         df = _make_df(TARGET_FIELDS)
         v = _viewer(df, mock_renderer)
