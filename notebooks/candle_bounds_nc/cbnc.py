@@ -23,9 +23,6 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
-from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import StandardScaler
 
 TFS = (15, 60, 240)
 SIDES = ("high", "low")
@@ -95,6 +92,11 @@ def fit_side(train_df: pd.DataFrame, tf: int, side: str) -> SideModel:
     rows = cf.dropna(subset=FEATURES + ["target"])
     X = rows[FEATURES].to_numpy()
     y = rows["target"].to_numpy()
+    # sklearn is not in the simple_trader image; imported lazily so the
+    # feature builders stay importable there (fit_side needs the zpenv venv).
+    from sklearn.linear_model import Ridge
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
     pipe = make_pipeline(StandardScaler(), Ridge(alpha=1.0))
     pipe.fit(X, y)
     band_pct = float(np.std(y - pipe.predict(X), ddof=1))
