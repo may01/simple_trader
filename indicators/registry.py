@@ -32,6 +32,7 @@ _FIELD_REGISTRY: dict[str, object] = {
     "ema_7": lambda cfg: EMAField(**{"length": 7, **cfg.params}),
     "ema_14": lambda cfg: EMAField(**{"length": 14, **cfg.params}),
     "ema_25": lambda cfg: EMAField(**{"length": 25, **cfg.params}),
+    "ema_25_diff_prc": lambda cfg: EmaDiffPrcField(**{"length": 25, **cfg.params}),
     "ema_50": lambda cfg: EMAField(**{"length": 50, **cfg.params}),
     "ema_100": lambda cfg: EMAField(**{"length": 100, **cfg.params}),
     "macd_12_26_9": lambda cfg: MACDField(**cfg.params),
@@ -82,6 +83,7 @@ _FIELD_REGISTRY: dict[str, object] = {
     "low_diff_prc_rm_6_std_below": lambda cfg: LowDiffPrcRMStdBelowField(**cfg.params),
     # Classification (stats-driven; no numeric params)
     "move_class": lambda cfg: MoveClassField(),
+    "ema_25_slope_class": lambda cfg: EmaSlopeClassField(),
     "zone_class": lambda cfg: ZoneClassField(),
     "over_low": lambda cfg: OverLowField(),
     "over_high": lambda cfg: OverHighField(),

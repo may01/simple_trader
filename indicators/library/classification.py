@@ -92,6 +92,50 @@ def _move_cuts(tf: int) -> tuple:
     return MOVE_CLASS_CUTS[candidates[0]]
 
 
+# Frozen (mean, std) of ema_25_diff_prc over the 2y CLOSED candles per TF
+# (2y_az_link_usdt, 2023-01-01 -> 2024-12-31; n = 70169 / 17541 / 4385), from
+# the ev_line experiment (external/docs/superpowers/experiment/ev_line.md,
+# results/extdone_zone_filter_results.md §5-6; producer
+# notebooks/zone_profitability/run_ema_slope.py, which asserts these values
+# against a fresh 2y recompute). Constants rather than a stats file so every
+# dataset — oos, live — is classified on the same 2y scale.
+EMA_SLOPE_STATS: dict[int, tuple[float, float]] = {
+    15: (0.0018696074433414492, 0.08854754765129406),
+    60: (0.007586181744923595, 0.17365581448454287),
+    240: (0.03083283482398462, 0.3443346525283253),
+}
+# Class boundary in std units: fall < mean - X·std, rise > mean + X·std.
+# 0.5 was the least-bad split in the experiment's x grid; not a tuned optimum.
+EMA_SLOPE_X = 0.5
+
+
+def ema_slope_class(slope: pd.Series, tf: int) -> np.ndarray:
+    """-1 fall / 0 neutral / 1 rise for an ema_25_diff_prc series of *tf*.
+
+    Boundaries and NaN (warm-up) are neutral.
+    """
+    mean, std = EMA_SLOPE_STATS[tf]
+    x = slope.to_numpy(dtype=float)
+    return np.where(x < mean - EMA_SLOPE_X * std, -1,
+                    np.where(x > mean + EMA_SLOPE_X * std, 1, 0)).astype(int)
+
+
+class EmaSlopeClassField(IndicatorField):
+    """Market-direction class from the EMA-25 slope: -1 fall, 0 neutral, 1 rise."""
+
+    name = "ema_25_slope_class"
+    group = "classification"
+    dependencies: list[str] = ["ema_25_diff_prc"]
+    resource_dependencies: list[str] = []
+    applies_to: list[int] = [15, 60, 240]
+    params: dict = {}
+
+    def compute(self, data_point, tf: int) -> pd.Series:
+        df = data_point.get_df(tf)
+        return pd.Series(
+            ema_slope_class(df[f"{tf}_ema_25_diff_prc"], tf), index=df.index, dtype=int)
+
+
 class MoveClassField(IndicatorField):
     """RSI momentum classification: rsi_ma8_diff vs frozen sym0 cuts → -3..3.
 

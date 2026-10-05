@@ -70,6 +70,13 @@ fields:
     params:
       length: 25
 
+  - name: ema_25_diff_prc
+    group: trend
+    applies_to: all
+    depends_on: [ema_25]
+    params:
+      length: 25
+
   - name: ema_50
     group: trend
     applies_to: all
@@ -378,6 +385,13 @@ fields:
     applies_to: [15, 60, 240]
     depends_on: [rsi_ma8, rsi_ma8_diff]
     library: talib
+    params: {}
+
+  # frozen 2y stats in indicators/library/classification.py (EMA_SLOPE_STATS)
+  - name: ema_25_slope_class
+    group: classification
+    applies_to: [15, 60, 240]
+    depends_on: [ema_25_diff_prc]
     params: {}
 
   - name: zone_class

@@ -144,10 +144,11 @@ class TestSubplotChecklist:
         cl = _find_component(d._app.layout, "subplots")
         assert [o["value"] for o in cl.options] == ["rsi", "cci", "adx"]
 
-    def test_all_checked_by_default(self):
+    def test_off_subplots_unchecked_by_default(self):
+        # rsi is in DataViewer._DEFAULT_SUBPLOTS_OFF: offered, not pre-checked.
         d = HistoryDashboard(FullData(_make_df()))
         cl = _find_component(d._app.layout, "subplots")
-        assert cl.value == ["rsi", "cci", "adx"]
+        assert cl.value == ["cci", "adx"]
 
     def test_selection_passed_to_every_tf(self):
         d = HistoryDashboard(FullData(_make_df()))

@@ -525,6 +525,154 @@ def join_candle_bounds_nc(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
     return df.join(nc_df[new_cols], how="left")
 
 
+def join_zone_profitability(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join ``{dataset_dir}/df_with_zone_profitability.pkl`` (per-move-class
+    shifted entry/target zones) onto ``df`` by DatetimeIndex. Absence-safe no-op.
+
+    The zone-profitability experiment
+    (external/docs/superpowers/experiment/zone_profitability.md, producer:
+    notebooks/zone_profitability/run_zp.py) writes an additive sidecar next to
+    a dataset's ``df_with_indicators.pkl``. Per tf in 15/60/240 and side in
+    long/short it carries ``{tf}_zp_open_{side}`` / ``{tf}_zp_tgt_{side}``
+    (the closed cb bound pair shifted per the row's 7-class sym0 move class,
+    shift unit {tf}_atr_14_ma_5) and ``{tf}_zp_inzone_{side}`` /
+    ``{tf}_zp_intgt_{side}`` (the row's 1-min range crosses that level).
+
+    Same contract as ``join_candle_bounds``: never overwrites existing columns,
+    returns ``df`` unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_zone_profitability.pkl")
+    if not os.path.exists(path):
+        return df
+
+    zp_df: pd.DataFrame = pd.read_pickle(path)
+    new_cols = [c for c in zp_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(zp_df[new_cols], how="left")
+
+
+def join_ev_line(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join ``{dataset_dir}/df_with_ev_line.pkl`` (EV-optimal entry levels
+    between the two candle-bound bands) onto ``df`` by DatetimeIndex.
+    Absence-safe no-op.
+
+    Producer: notebooks/zone_profitability/run_ev.py (evlib.ev_line). Per tf
+    in 15/60/240 and side in long/short it carries ``{tf}_ev_{side}`` (the
+    entry that maximizes p_fill·EV under Gaussian bands), ``{tf}_ev_{side}_be``
+    (the outermost entry with EV >= 0) and the model's ``_pwin`` / ``_evpc``
+    (EV per candle, % of price) at the best level.
+
+    Same contract as ``join_candle_bounds``: never overwrites existing columns,
+    returns ``df`` unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_ev_line.pkl")
+    if not os.path.exists(path):
+        return df
+
+    ev_df: pd.DataFrame = pd.read_pickle(path)
+    new_cols = [c for c in ev_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(ev_df[new_cols], how="left")
+
+
+def join_ev_reach(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join ``{dataset_dir}/df_with_ev_reach.pkl`` (empirical-reach entry
+    rule) onto ``df`` by DatetimeIndex. Absence-safe no-op.
+
+    Producer: notebooks/zone_profitability/run_evr.py. Per tf in 15/60/240
+    and side in long/short it carries ``{tf}_evr_{side}`` (entry = bound
+    offset a·σ chosen by 2y minute-replay pnl), ``{tf}_evr_{side}_sl`` and
+    ``{tf}_evr_{side}_tgt`` (the rule's stop and target).
+
+    Same contract as ``join_candle_bounds``: never overwrites existing columns,
+    returns ``df`` unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_ev_reach.pkl")
+    if not os.path.exists(path):
+        return df
+
+    evr_df: pd.DataFrame = pd.read_pickle(path)
+    new_cols = [c for c in evr_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(evr_df[new_cols], how="left")
+
+
+def join_cb_zone_atr(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join ``{dataset_dir}/df_with_cb_zone_atr.pkl`` (ATR-shifted entry
+    zones) onto ``df`` by DatetimeIndex. Absence-safe no-op.
+
+    Producer: notebooks/zone_profitability/run_cbatr.py. Per tf in 15/60/240
+    and side it carries ``{tf}_cbatr_zone_{side}`` — the closed cb bound
+    shifted k x ``1_atr_14_ma_5`` toward the target (vs cb_zone_*'s 5 % of
+    span), moving per minute — and ``{tf}_cbatr_inzone_{side}`` (the row's
+    1-min extreme crosses it).
+
+    Same contract as ``join_candle_bounds``: never overwrites existing columns,
+    returns ``df`` unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_cb_zone_atr.pkl")
+    if not os.path.exists(path):
+        return df
+
+    za_df: pd.DataFrame = pd.read_pickle(path)
+    new_cols = [c for c in za_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(za_df[new_cols], how="left")
+
+
+def join_ext_done(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join ``{dataset_dir}/df_with_ext_done.pkl`` ("extreme done" state)
+    onto ``df`` by DatetimeIndex. Absence-safe no-op.
+
+    Producer: notebooks/zone_profitability/run_extdone.py. Per tf in
+    15/60/240 and side in high/low, per 1-min row: ``{tf}_extdone_{side}``
+    (the candle's running extreme has pulled away by >= d(progress) 1-min
+    ATRs — sticky for the rest of the candle), ``{tf}_extdone_{side}_first``
+    (the minute it first turned true) and ``{tf}_extdone_{side}_lvl`` (the
+    running extreme while done, NaN otherwise).
+
+    Same contract as ``join_candle_bounds``: never overwrites existing columns,
+    returns ``df`` unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_ext_done.pkl")
+    if not os.path.exists(path):
+        return df
+
+    ed_df: pd.DataFrame = pd.read_pickle(path)
+    new_cols = [c for c in ed_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(ed_df[new_cols], how="left")
+
+
+def join_ema_slope(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join ``{dataset_dir}/df_with_ema_slope.pkl`` (EMA-25 slope classes)
+    onto ``df`` by DatetimeIndex. Absence-safe no-op.
+
+    Producer: notebooks/zone_profitability/run_ema_slope.py. Per tf in
+    15/60/240: ``{tf}_ema25_slope_z`` (last closed candle's ema_25 slope,
+    z-scored on 2y), ``{tf}_ema25_cls`` (-1 fall / 0 neutral / 1 rise) and
+    ``{tf}_ema_25_{rise,fall,neutral}`` — ema_25 where that class holds, NaN
+    elsewhere, so the viewer draws one ema_25 line in three colours.
+
+    Same contract as ``join_candle_bounds``: never overwrites existing columns,
+    returns ``df`` unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_ema_slope.pkl")
+    if not os.path.exists(path):
+        return df
+
+    es_df: pd.DataFrame = pd.read_pickle(path)
+    new_cols = [c for c in es_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(es_df[new_cols], how="left")
+
+
 class SimulationData:
     """Single-load wide-DataFrame replay cursor for backtesting/simulation.
 

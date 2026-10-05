@@ -155,7 +155,7 @@ class HistoryDashboard:
                             options=[
                                 {"label": sp, "value": sp} for sp in subplot_names
                             ],
-                            value=list(subplot_names),
+                            value=self.viewer.default_subplots(),
                             inline=True,
                         ),
                         dcc.Checklist(
