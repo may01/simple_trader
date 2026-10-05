@@ -70,19 +70,123 @@ class TestTraderEntry:
         holder.do_stock_init.assert_called_once_with("mock_binance")
 
     def test_robot_constructed_and_started(self, monkeypatch, tmp_path):
+        """Robot is handed a DISARMED stock by default.
+
+        Changed by the position-management work (design D2/§6.5):
+        trade_executor is the only process that may place orders, so
+        `main()` wraps the real stock in `DisarmedStock` unless
+        MAIN_ORDER_PLACEMENT says otherwise. The wrapper delegates every
+        read, so `stock.fee` still reaches the real stock.
+        """
+        from stocks.disarmed_stock import DisarmedStock
+
         _, stock, robot_cls, robot = self._run_main(monkeypatch, tmp_path)
         robot_cls.assert_called_once()
         args = robot_cls.call_args
-        assert args.args[2] is stock
+        assert isinstance(args.args[2], DisarmedStock), (
+            "main/ must not hand Robot a stock that can place orders"
+        )
+        assert args.args[2].inner is stock
         assert args.args[3] == stock.fee
         assert args.kwargs["persist_path"].endswith("live_tracker.json")
         robot.run_instantly.assert_called_once()
+
+    def test_robot_gets_the_real_stock_only_when_explicitly_armed(self, monkeypatch, tmp_path):
+        from stocks.disarmed_stock import DisarmedStock
+
+        _, stock, robot_cls, _robot = self._run_main(
+            monkeypatch, tmp_path, extra_env={"MAIN_ORDER_PLACEMENT": "enabled"}
+        )
+        passed = robot_cls.call_args.args[2]
+        assert passed is stock
+        assert not isinstance(passed, DisarmedStock)
 
     def test_explicit_binance_respected(self, monkeypatch, tmp_path):
         holder, _, _, _ = self._run_main(
             monkeypatch, tmp_path, extra_env={"STOCK_TYPE": "binance"}
         )
         holder.do_stock_init.assert_called_once_with("binance")
+
+
+class TestTraderEntryDegradesWithoutPyzmq:
+    """C1: telemetry must never be a startup dependency of trading.
+
+    robots/robot.py guards the *import* and mq/indicator_publisher.py no
+    longer imports zmq at module level -- but main() still had to
+    *construct* an IndicatorPublisher, and construction is the one step
+    that genuinely needs pyzmq. On the deployed `live` image (which has no
+    pyzmq) that ImportError landed after the imports and before
+    run_instantly(), so a missing telemetry dependency still stopped
+    trading. main() must degrade to indicator_publisher=None instead.
+    """
+
+    def test_main_degrades_to_no_publisher_and_still_starts_the_robot(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        import builtins
+        import logging
+
+        _set_env(monkeypatch)
+
+        mock_stock = MagicMock()
+        mock_stock.fee = 0.001
+        mock_holder_mod = MagicMock()
+        mock_holder_mod.stock_holder.item = mock_stock
+
+        mock_robot_instance = MagicMock()
+        mock_robot_cls = MagicMock(return_value=mock_robot_instance)
+
+        real_import = builtins.__import__
+
+        def import_without_zmq(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "zmq" or name.startswith("zmq."):
+                raise ImportError("No module named 'zmq'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        mods = {
+            "stocks_holder": mock_holder_mod,
+            "data": MagicMock(),
+            "robots.robot": MagicMock(Robot=mock_robot_cls),
+            "strategies.strategy_manager": MagicMock(),
+        }
+        # A cached `zmq` would short-circuit importlib below and make the
+        # anti-vacuity guard pass for the wrong reason.
+        zmq_saved = {
+            k: sys.modules.pop(k)
+            for k in list(sys.modules)
+            if k == "zmq" or k.startswith("zmq.")
+        }
+        try:
+            with _inject(mods), patch("helpers.shared_folder", return_value=str(tmp_path) + "/"):
+                import trader
+                importlib.reload(trader)
+                with patch.object(builtins, "__import__", side_effect=import_without_zmq):
+                    # Anti-vacuity: pyzmq must genuinely be unavailable in
+                    # here, or this test proves nothing.
+                    with pytest.raises(ImportError):
+                        importlib.import_module("zmq")
+                    with caplog.at_level(logging.WARNING, logger="trader"):
+                        trader.main()  # must not raise
+        finally:
+            for key in list(sys.modules):
+                if key == "zmq" or key.startswith("zmq."):
+                    sys.modules.pop(key, None)
+            sys.modules.update(zmq_saved)
+
+        mock_robot_cls.assert_called_once()
+        assert mock_robot_cls.call_args.kwargs["indicator_publisher"] is None, (
+            "a publisher that cannot be constructed must degrade to None, not propagate"
+        )
+        # The money path still ran.
+        mock_robot_instance.run_instantly.assert_called_once()
+        # ...and the blackout is visible rather than silent.
+        warnings = [
+            r for r in caplog.records
+            if r.name == "trader" and r.levelno == logging.WARNING
+        ]
+        assert any("pyzmq" in r.getMessage() for r in warnings), (
+            f"expected a WARNING naming pyzmq; got {[r.getMessage() for r in warnings]}"
+        )
 
 
 class TestViewEntries:

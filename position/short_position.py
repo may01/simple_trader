@@ -145,6 +145,14 @@ class ShortPosition(BasePosition):
         Returns:
             Average entry price, or 0.0 if no fills.
         """
+        # trade_executor owns the live position (design D1/§6.4): when it
+        # has reported an average entry price, that is the price actually
+        # paid and it wins over anything reconstructed from local fills.
+        # Falls back to the fill-derived average so backtests and the
+        # armed legacy order path -- neither of which has an executor --
+        # behave exactly as before.
+        if self.executor_avg_open:
+            return self.executor_avg_open
         if not self.executed_open:
             return 0.0
         total_usd = sum(self.executed_open_amount)

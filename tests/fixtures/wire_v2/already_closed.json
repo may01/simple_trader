@@ -1,0 +1,11 @@
+{
+  "event": "already_closed",
+  "pair": "LINKUSDT",
+  "position_state": {
+    "fees": [],
+    "settlement_complete": true,
+    "status": "flat"
+  },
+  "schema": 2,
+  "ts": "<encoded-at>"
+}

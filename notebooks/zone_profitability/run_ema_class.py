@@ -46,6 +46,10 @@ MIN_CELL = 30
 
 
 EMA_MODE = os.environ.get("EMA_MODE", "closed")   # closed | forming
+# NOTE: the experiment tables were produced with the slope divided by the
+# CURRENT ema (below). The in-code indicator ema_25_diff_prc divides by the
+# previous one (repo diff_prc convention); class agreement between the two on
+# 2y closed candles is 99.95 / 99.94 / 99.79 % (tf 15 / 60 / 240).
 
 
 def ema_dif_pct(df: pd.DataFrame, tf: int) -> np.ndarray:

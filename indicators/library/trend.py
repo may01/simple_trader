@@ -28,6 +28,33 @@ class EMAField(IndicatorField):
         return pd.Series(result, index=df.index)
 
 
+class EmaDiffPrcField(IndicatorField):
+    """Candle-to-candle change of an EMA in % (name ema_{length}_diff_prc).
+
+    Same formula as the price_derivatives ``*_diff_prc`` fields:
+    (ema[k] - ema[k-1]) / ema[k-1] * 100. In % so the value is comparable
+    across price levels (ema_25_slope_class thresholds are frozen on it). On a
+    forming candle the EMA is the forming value, so the change is final only
+    at the candle's closing row. Not to be confused with the nn_features
+    ``ema_{length}_slope`` (5-bar OLS slope in price units).
+    """
+
+    group = "trend"
+    resource_dependencies: list[str] = []
+    applies_to: list[int] = []
+
+    def __init__(self, length: int = 25, name: str | None = None) -> None:
+        self.length = length
+        self.params = {"length": length}
+        self.name = name if name is not None else f"ema_{length}_diff_prc"
+        self.dependencies: list[str] = [f"ema_{length}"]
+
+    def compute(self, data_point, tf: int) -> pd.Series:
+        df = data_point.get_df(tf)
+        ema = df[f"{tf}_ema_{self.length}"]
+        return (ema - ema.shift(1)) / ema.shift(1) * 100.0
+
+
 class _MACDBase(IndicatorField):
     """Shared MACD machinery; subclasses pick the output and default periods."""
 

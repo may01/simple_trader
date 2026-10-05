@@ -1,9 +1,13 @@
 """Driver: EMA-25 slope distribution + rise / fall / neutral classes, and the
 chart sidecar that draws ema_25 coloured by class.
 
-Slope (closed candles, see run_ema_class.ema_dif_pct mode "closed"):
-    d[k] = (ema_25[k] - ema_25[k-1]) / ema_25[k] * 100      per closed tf candle
+Slope = the in-code indicator ``ema_25_diff_prc`` on closed candles:
+    d[k] = (ema_25[k] - ema_25[k-1]) / ema_25[k-1] * 100    per closed tf candle
     z[k] = (d[k] - mean_2y) / std_2y                         mean/std over 2y closed candles
+mean/std and the class rule are the frozen constants of
+indicators.library.classification (EMA_SLOPE_STATS, EMA_SLOPE_X,
+ema_slope_class — the ``ema_25_slope_class`` field); this driver recomputes
+them from 2y and asserts they match (provenance gate) before writing.
 Class of every 1-min row = class of the LAST CLOSED candle's slope (shift(1)
 + ffill, no forming input):   fall z < -X,  neutral |z| <= X,  rise z > X.
 
@@ -27,14 +31,19 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))
+
 from evlib import TFS  # noqa: E402
+from indicators.library.classification import (  # noqa: E402
+    EMA_SLOPE_STATS, EMA_SLOPE_X, ema_slope_class,
+)
 
 VOL = "/trader_data_long/train"
 DATASET_DIR = os.environ.get("EV_DATASET_DIR", f"{VOL}/oos2m_link_usdt")
 TRAIN_IND = f"{VOL}/2y_az_link_usdt/df_with_indicators.pkl"
 OUT = os.environ.get("EV_OUT", os.path.join(HERE, "out"))
 os.makedirs(OUT, exist_ok=True)
-X = float(os.environ.get("EMA_X", 0.5))
+X = EMA_SLOPE_X
 PCTS = (1, 5, 10, 25, 50, 75, 90, 95, 99)
 CLS = {-1: "fall", 0: "neutral", 1: "rise"}
 
@@ -43,7 +52,7 @@ def closed_slope(df: pd.DataFrame, tf: int) -> pd.Series:
     """d[k] in % of price, indexed by each closed candle's closing row."""
     closed = df[f"{tf}_is_closed"] == True  # noqa: E712
     c = df.loc[closed, f"{tf}_ema_25"]
-    return ((c - c.shift(1)) / c * 100.0).dropna()
+    return ((c - c.shift(1)) / c.shift(1) * 100.0).dropna()
 
 
 def run_lengths(cls: np.ndarray) -> dict:
@@ -64,10 +73,12 @@ def main() -> None:
     cols, report = {}, {"x": X, "tf": {}}
     for tf in TFS:
         d_tr, d_oo = closed_slope(tr, tf), closed_slope(oos, tf)
-        mu, sd = float(d_tr.mean()), float(d_tr.std())
+        mu, sd = EMA_SLOPE_STATS[tf]
+        fresh = (float(d_tr.mean()), float(d_tr.std()))
+        assert np.allclose(fresh, (mu, sd), rtol=1e-9, atol=0), (
+            f"tf {tf}: frozen EMA_SLOPE_STATS {(mu, sd)} != 2y recompute {fresh}")
         z_tr, z_oo = (d_tr - mu) / sd, (d_oo - mu) / sd
-        c_tr = np.where(z_tr < -X, -1, np.where(z_tr > X, 1, 0))
-        c_oo = np.where(z_oo < -X, -1, np.where(z_oo > X, 1, 0))
+        c_tr, c_oo = ema_slope_class(d_tr, tf), ema_slope_class(d_oo, tf)
         m4 = float(((d_tr - mu) ** 4).mean() / sd ** 4)
         report["tf"][tf] = {
             "n_2y": int(len(d_tr)), "n_oos": int(len(d_oo)),

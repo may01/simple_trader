@@ -134,7 +134,41 @@ class LiveOrderTracker:
         self.loan_id = data.get("loan_id", "")
         self.loan_amount = data.get("loan_amount", 0.0)
         self.position.from_dict(data)
+        self._warn_if_stale()
         return True
+
+    def _warn_if_stale(self) -> None:
+        """Report leftover live state, loudly, without acting on it.
+
+        Since MAIN_ORDER_PLACEMENT defaults to disabled (position-management
+        design D2/§6.5), this file can only have been written by an earlier
+        *armed* run. It may claim orders that are still resting on the
+        exchange and a margin loan that is still outstanding.
+
+        This process does not cancel or repay them: under the new design
+        trade_executor owns the account, and a disarmed main/ acting on
+        stale state would be exactly the second order path D2 removes. But
+        silently ignoring a file that says "you owe a margin loan" is the
+        failure mode this whole section exists to avoid, so it is reported
+        for an operator to settle by hand. The file is not deleted.
+        """
+        claims = []
+        if self.buy_id:
+            claims.append(f"buy order {self.buy_id}")
+        if self.sell_id:
+            claims.append(f"sell order {self.sell_id}")
+        if self.loan_id or self.loan_amount:
+            claims.append(f"margin loan {self.loan_id or '?'} of {self.loan_amount}")
+        if not claims:
+            return
+        logger.warning(
+            "live_order_tracker state at %s still claims %s. It was written by an "
+            "earlier run with order placement armed. This process will NOT act on "
+            "it -- trade_executor owns the account now. Settle these by hand and "
+            "remove the file.",
+            self.persist_path,
+            "; ".join(claims),
+        )
 
     def clear(self) -> None:
         """Reset all tracked IDs and delete the persist file if it exists."""

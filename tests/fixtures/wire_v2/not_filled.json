@@ -1,0 +1,13 @@
+{
+  "event": "not_filled",
+  "pair": "LINKUSDT",
+  "position_id": "11111111-2222-4333-8444-555555555555",
+  "position_state": {
+    "fees": [],
+    "settlement_complete": true,
+    "status": "flat"
+  },
+  "reason": "entry order cancelled with nothing filled",
+  "schema": 2,
+  "ts": "<encoded-at>"
+}
