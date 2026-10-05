@@ -22,6 +22,14 @@ if str(MAIN_DIR) not in sys.path:
     sys.path.insert(0, str(MAIN_DIR))
 
 
+@pytest.fixture(autouse=True)
+def _no_cb_models(monkeypatch):
+    """The mock wide frames here carry no candle-bounds inputs: run prepare()
+    as for a pair without a CB model file (CB stage skipped). The CB wiring
+    itself is covered by test_data_preparer_cb.py."""
+    monkeypatch.setattr("indicators.candle_bounds.stage.load_models", lambda pair: None)
+
+
 # ---------------------------------------------------------------------------
 # Minimal helpers to build a fake raw DataFrame
 # ---------------------------------------------------------------------------

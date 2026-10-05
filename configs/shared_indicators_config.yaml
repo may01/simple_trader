@@ -11,3 +11,43 @@ indicators:
   # cycle is observable in one sitting rather than over hours.
   - name: sar_002_02
     timeframes: [1]
+
+  # Candle-bound columns (phase 18). Wire name is f"{tf}_{name}"; bools travel
+  # as 1.0/0.0. on_change: a flip is published immediately, not at the next
+  # heartbeat. cbnc_* are NaN for the first minute after start (not published).
+  - name: cb_high
+    timeframes: [15, 60, 240]
+  - name: cb_low
+    timeframes: [15, 60, 240]
+  - name: cb_zone_long
+    timeframes: [15, 60, 240]
+  - name: cb_zone_short
+    timeframes: [15, 60, 240]
+  - name: cbnc_high
+    timeframes: [15, 60, 240]
+  - name: cbnc_low
+    timeframes: [15, 60, 240]
+  - name: cb_inzone_long
+    timeframes: [15, 60, 240]
+    on_change: true
+  - name: cb_inzone_short
+    timeframes: [15, 60, 240]
+    on_change: true
+  - name: extdone_high
+    timeframes: [15, 60, 240]
+    on_change: true
+  - name: extdone_low
+    timeframes: [15, 60, 240]
+    on_change: true
+  - name: cb_f_extdone_long
+    timeframes: [15, 60, 240]
+    on_change: true
+  - name: cb_f_extdone_short
+    timeframes: [15, 60, 240]
+    on_change: true
+  - name: cb_f_trend_long
+    timeframes: [15, 60, 240]
+    on_change: true
+  - name: cb_f_trend_short
+    timeframes: [15, 60, 240]
+    on_change: true
