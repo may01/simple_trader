@@ -7,7 +7,7 @@ def main() -> None:
     import pandas as pd
 
     from data import (
-        join_cb_zone_atr, join_ema_slope, join_ext_done,
+        join_cb_overshoot, join_cb_zone_atr, join_ema_slope, join_ext_done,
         join_action_zones, join_candle_bounds, join_candle_bounds_nc,
         join_ev_line, join_ev_reach, join_nn_results, join_zone_profitability,
     )
@@ -46,6 +46,9 @@ def main() -> None:
     # "Extreme done" state + first-trigger markers (extdone_*), from
     # df_with_ext_done.pkl. Absence-safe no-op.
     df = join_ext_done(df, os.path.dirname(path))
+    # cb marker overshoot filter (cbover_*), from df_with_cb_overshoot.pkl.
+    # Absence-safe no-op.
+    df = join_cb_overshoot(df, os.path.dirname(path))
     # EMA-25 slope classes (ema_25_rise/fall/neutral), from
     # df_with_ema_slope.pkl. Absence-safe no-op.
     df = join_ema_slope(df, os.path.dirname(path))

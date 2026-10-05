@@ -624,6 +624,30 @@ def join_cb_zone_atr(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
     return df.join(za_df[new_cols], how="left")
 
 
+def join_cb_overshoot(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
+    """Left-join ``{dataset_dir}/df_with_cb_overshoot.pkl`` (cb marker overshoot
+    filter) onto ``df`` by DatetimeIndex. Absence-safe no-op.
+
+    Producer: notebooks/zone_profitability/run_cb_overshoot.py. Per tf in
+    15/60/240 and side in long/short, per 1-min row:
+    ``{tf}_cb_overshoot_{side}`` (how far the 1-min low/high is past the cb
+    bound, in band sd) and ``{tf}_cbover_{side}`` (overshoot above the 2y p75
+    of marker overshoot — the viewer drops cb_inzone markers there).
+
+    Same contract as ``join_candle_bounds``: never overwrites existing columns,
+    returns ``df`` unchanged when the artifact is absent.
+    """
+    path = os.path.join(dataset_dir, "df_with_cb_overshoot.pkl")
+    if not os.path.exists(path):
+        return df
+
+    ov_df: pd.DataFrame = pd.read_pickle(path)
+    new_cols = [c for c in ov_df.columns if c not in df.columns]
+    if not new_cols:
+        return df
+    return df.join(ov_df[new_cols], how="left")
+
+
 def join_ext_done(df: pd.DataFrame, dataset_dir: str) -> pd.DataFrame:
     """Left-join ``{dataset_dir}/df_with_ext_done.pkl`` ("extreme done" state)
     onto ``df`` by DatetimeIndex. Absence-safe no-op.

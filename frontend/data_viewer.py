@@ -285,6 +285,12 @@ class DataViewer:
         "cb_zone_long": "extdone_high", "cb_inzone_long": "extdone_high",
     }
 
+    # Marker-only veto (the zone line stays): a cb_inzone marker is dropped
+    # when the 1-min extreme overshoots the cb bound by more than the 2y p75
+    # of marker overshoot ({tf}_cbover_{side}, run_cb_overshoot.py) — deep
+    # breaks precede a larger further move. Skip-if-absent.
+    _MARKER_VETO = {"cb_inzone_long": "cbover_long", "cb_inzone_short": "cbover_short"}
+
     # Subplots unchecked on first load (still available via their toggle):
     # the price-derivative diff panels.
     _DEFAULT_SUBPLOTS_OFF = {
@@ -1061,6 +1067,9 @@ class DataViewer:
                     continue
                 mask = window[col].fillna(False).to_numpy(dtype=bool)
                 veto = self._ZONE_VETO.get(str(col)[len(m.group(1)) + 1:])
+                if veto is not None and f"{src_tf}_{veto}" in window.columns:
+                    mask = mask & ~window[f"{src_tf}_{veto}"].fillna(False).to_numpy(dtype=bool)
+                veto = self._MARKER_VETO.get(str(col)[len(m.group(1)) + 1:])
                 if veto is not None and f"{src_tf}_{veto}" in window.columns:
                     mask = mask & ~window[f"{src_tf}_{veto}"].fillna(False).to_numpy(dtype=bool)
                 if not mask.any():
