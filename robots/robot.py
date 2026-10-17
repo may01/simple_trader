@@ -127,6 +127,8 @@ class Robot:
         # broken allowlist entry produces one log line rather than one per
         # tick per entry (9 tracebacks/second for a single typo).
         self._warned_indicator_keys: set = set()
+        # Last PUBLISHED value per on_change (name, tf).
+        self._last_published_on_change: dict = {}
 
         # Optional position feed from trade_executor (position-management
         # design §6.4). None -> inert: `_apply_executor_position` returns
@@ -337,49 +339,93 @@ class Robot:
         non-finite value (NaN/inf, e.g. still warming up) is skipped rather
         than published, since the executor's wire format cannot decode one
         anyway. Both of those are logged once per (name, tf).
+
+        on_change entries additionally publish, between heartbeats, only the
+        readings whose value changed since their last publish.
         """
         if self.indicator_publisher is None:
             return
         now = time.monotonic()
+        # on_change entries (candle-bound markers/filters) are read every
+        # tick: a value that differs from the last PUBLISHED one is
+        # published on its own right away, so a one-minute marker is not
+        # missed by the heartbeat. Only the changed readings go out, and
+        # the heartbeat clock is left alone -- a flapping flag must not
+        # republish the whole allowlist every tick (append-only readings
+        # table, see __init__). NaN/unreadable is never a change.
+        readings: dict = {}
+        changed: list = []
+        for cfg in self._shared_indicators:
+            if not cfg.on_change:
+                continue
+            for tf in cfg.timeframes:
+                value = self._read_shared_indicator(data_point, cfg.name, tf)
+                readings[(cfg.name, tf)] = value
+                if value is None:
+                    continue
+                last = self._last_published_on_change.get((cfg.name, tf))
+                if last is not None and value != last:
+                    changed.append((cfg.name, tf, value))
         if (
             self._last_indicator_publish_at is not None
             and now - self._last_indicator_publish_at < self._indicator_publish_interval_sec
         ):
+            if changed:
+                pair = self.stock.get_pair_name()
+            for name, tf, value in changed:
+                self.indicator_publisher.publish(pair=pair, name=f"{tf}_{name}", value=value)
+                self._last_published_on_change[(name, tf)] = value
             return
         self._last_indicator_publish_at = now
         pair = self.stock.get_pair_name()
         for cfg in self._shared_indicators:
             for tf in cfg.timeframes:
-                try:
-                    value = data_point.get(cfg.name, tf)
-                except Exception:
-                    self._warn_once(
-                        ("read_failed", cfg.name, tf),
-                        "indicator publish: data_point.get(%s, %s) failed; "
-                        "skipping this reading from now on (logged once per name/tf)",
-                        cfg.name, tf,
-                        exc_info=True,
-                    )
-                    continue
-                if not math.isfinite(value):
-                    # NaN/inf is the warm-up-not-ready case (data.py returns
-                    # NaN rather than raising when there isn't enough
-                    # history yet). The executor's wire format can't decode
-                    # a non-finite number at all -- send_json would emit the
-                    # bare token NaN, which isn't valid JSON, so the message
-                    # is guaranteed to be dropped undecoded on the other
-                    # side. Skip it instead of sending something that can
-                    # never be delivered -- but say so once: an indicator
-                    # that never warms up would otherwise be invisible
-                    # forever, indistinguishable from one nobody configured.
-                    self._warn_once(
-                        ("non_finite", cfg.name, tf),
-                        "indicator publish: %s on tf=%s is non-finite (%s); not publishing "
-                        "until it warms up (logged once per name/tf)",
-                        cfg.name, tf, value,
-                    )
+                if (cfg.name, tf) in readings:
+                    value = readings[(cfg.name, tf)]
+                else:
+                    value = self._read_shared_indicator(data_point, cfg.name, tf)
+                if value is None:
                     continue
                 self.indicator_publisher.publish(pair=pair, name=f"{tf}_{cfg.name}", value=value)
+                if cfg.on_change:
+                    self._last_published_on_change[(cfg.name, tf)] = value
+
+    def _read_shared_indicator(self, data_point, name: str, tf: int):
+        """Guarded read of one allowlisted reading as a float, or None when
+        it is unreadable or non-finite (each logged once per name/tf)."""
+        try:
+            value = float(data_point.get(name, tf))
+        except KeyError:
+            # Column absent (e.g. the CB stage is disabled or failed): a
+            # configuration state, not a bug -- one plain warning.
+            self._warn_once(
+                ("read_failed", name, tf),
+                "indicator publish: %s on tf=%s is not available (KeyError); "
+                "skipping this reading (logged once per name/tf)",
+                name, tf,
+            )
+            return None
+        except Exception:
+            self._warn_once(
+                ("read_failed", name, tf),
+                "indicator publish: data_point.get(%s, %s) failed; "
+                "skipping this reading from now on (logged once per name/tf)",
+                name, tf,
+                exc_info=True,
+            )
+            return None
+        if not math.isfinite(value):
+            # NaN/inf is the warm-up-not-ready case. The executor's wire
+            # format can't decode a non-finite number (bare NaN is not
+            # valid JSON), so skip it -- but say so once.
+            self._warn_once(
+                ("non_finite", name, tf),
+                "indicator publish: %s on tf=%s is non-finite (%s); not publishing "
+                "until it warms up (logged once per name/tf)",
+                name, tf, value,
+            )
+            return None
+        return value
 
     def _record_live_actions(self, data_point) -> None:
         """Persist any position lifecycle changes from this tick as Action records.

@@ -31,6 +31,14 @@ DAY = 86_400_000
 MIN = 60_000
 
 
+@pytest.fixture(autouse=True)
+def _no_cb_models(monkeypatch):
+    """The stub frames here carry no candle-bounds inputs: prep runs as for a
+    pair without a CB model file (CB stage skipped). CB chunked == single-pass
+    is covered by test_data_preparer_cb.py (G7)."""
+    monkeypatch.setattr("indicators.candle_bounds.stage.load_models", lambda pair: None)
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers: config, boundaries, row count
 # ---------------------------------------------------------------------------

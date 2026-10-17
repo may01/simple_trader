@@ -17,61 +17,43 @@ Two invariants pin the re-implementation to the stored artifact:
 At a candle's closing minute the forming features equal the closed features, so
 the non-closed prediction converges row-exactly to the closed prediction for the
 next candle — asserted by the driver as a third gate.
+
+Production implementation: ``indicators/candle_bounds/`` (kernel + params, numpy
+models exported by ``scripts/cb_export_models.py``). The constants, the feature
+builders (``closed_frame`` without ``target``, ``forming_features``) and
+``_to_rows`` come from there; this module keeps the sklearn fitting
+(``fit_side``/``SideModel``) and the experiment-side inference wrappers.
 """
 
+import os
+import sys
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
-TFS = (15, 60, 240)
-SIDES = ("high", "low")
-FEATURES = [
-    "R_position", "R_slope", "R_distance",
-    "M_position", "M_slope", "M_distance",
-    "A_position", "A_slope",
-    "V_std12", "V_absmean12", "V_range", "V_body",
-    "P_z1", "P_z2", "P_rm",
-]
-ZONE_FRAC = 0.05  # entry-zone span fraction, matches the closed-zone artifact
-# Target haircut, in % of price, applied toward the loss side: the long target
-# sits 0.15% below the predicted high, the short target 0.15% above the
-# predicted low. Compensates the bound being an *extreme* estimate — a fill
-# needs the target strictly inside the reached range.
-TGT_SHRINK_PCT = 0.15
+_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from indicators.candle_bounds import kernel  # noqa: E402
+# Re-exported frozen constants. TGT_SHRINK_PCT: target haircut, in % of price,
+# applied toward the loss side (long target sits 0.15% below the predicted
+# high, short target 0.15% above the predicted low); ZONE_FRAC: entry-zone span
+# fraction, matches the closed-zone artifact.
+from indicators.candle_bounds.params import (  # noqa: E402,F401
+    FEATURES, SIDES, TFS, TGT_SHRINK_PCT, ZONE_FRAC,
+)
 
 
 def closed_frame(df: pd.DataFrame, tf: int, side: str) -> pd.DataFrame:
     """Per-closed-candle frame indexed by closing timestamp.
 
-    Row k holds candle k's *input* features (candle k viewed as the latest
-    candle) plus ``d`` (its own extension) and ``target`` = d[k+1].
+    ``kernel.closed_frame`` (candle k's input features, ``d``, ``ext``) plus
+    ``target`` = d[k+1], which the fitting needs.
     """
-    closed = df[f"{tf}_is_closed"] == True  # noqa: E712
-    c = df.loc[closed]
-    ext = c[f"{tf}_{side}"]
-    d = ext.pct_change() * 100.0
-    rm = d.rolling(6).mean()
-
-    out = pd.DataFrame(index=c.index)
-    out["R_position"] = c[f"{tf}_rsi_ma8"]
-    out["R_slope"] = c[f"{tf}_rsi_ma8"].diff()
-    out["R_distance"] = c[f"{tf}_rsi_14"] - c[f"{tf}_rsi_ma8"]
-    out["M_position"] = c[f"{tf}_macd_12_26_9"]
-    out["M_slope"] = c[f"{tf}_macd_12_26_9"].diff()
-    out["M_distance"] = c[f"{tf}_macd_hist_12_26_9"]
-    out["A_position"] = (c[f"{tf}_close"] - c[f"{tf}_ema_25"]) / c[f"{tf}_close"] * 100.0
-    out["A_slope"] = c[f"{tf}_ema_25"].diff()
-    out["V_std12"] = d.rolling(12).std()
-    out["V_absmean12"] = d.abs().rolling(12).mean()
-    out["V_range"] = (c[f"{tf}_high"] - c[f"{tf}_low"]) / c[f"{tf}_low"] * 100.0
-    out["V_body"] = (c[f"{tf}_close"] - c[f"{tf}_open"]) / c[f"{tf}_open"] * 100.0
-    out["P_z1"] = d - rm.shift(1)
-    out["P_z2"] = (d - rm.shift(1)).shift(1)
-    out["P_rm"] = rm
-    out["d"] = d
-    out["ext"] = ext
-    out["target"] = d.shift(-1)
+    out = kernel.closed_frame(df, tf, side)
+    out["target"] = out["d"].shift(-1)
     return out
 
 
@@ -103,10 +85,7 @@ def fit_side(train_df: pd.DataFrame, tf: int, side: str) -> SideModel:
     return SideModel(tf=tf, side=side, pipe=pipe, band_pct=band_pct, n_train=len(rows))
 
 
-def _to_rows(closed_series: pd.Series, index: pd.Index) -> pd.Series:
-    """Broadcast a per-closed-candle series onto the 1-minute index so that row t
-    carries the last candle closed *strictly before* t (azlib space.py convention)."""
-    return closed_series.reindex(index).shift(1).ffill()
+_to_rows = kernel.to_rows  # row t carries the last candle closed strictly before t
 
 
 def infer_closed(df: pd.DataFrame, model: SideModel) -> pd.DataFrame:
@@ -130,52 +109,7 @@ def infer_closed(df: pd.DataFrame, model: SideModel) -> pd.DataFrame:
     return out
 
 
-def forming_features(df: pd.DataFrame, tf: int, side: str) -> pd.DataFrame:
-    """Per-1-minute-row features with the forming candle as the input candle.
-
-    Rolling blocks decompose into (closed history before the forming candle) +
-    (the forming candle's own running value), so everything vectorizes with
-    shift(1)-ffill broadcasts of the closed sequence.
-    """
-    closed = df[f"{tf}_is_closed"] == True  # noqa: E712
-    c = df.loc[closed]
-    ext = c[f"{tf}_{side}"]
-    d = ext.pct_change() * 100.0
-    rm = d.rolling(6).mean()
-
-    idx = df.index
-    E1 = _to_rows(ext, idx)                              # ext[k-1]
-    d_f = (df[f"{tf}_{side}"] - E1) / E1 * 100.0         # forming candle's own d
-
-    S11 = _to_rows(d.rolling(11).sum(), idx)
-    Q11 = _to_rows((d ** 2).rolling(11).sum(), idx)
-    A11 = _to_rows(d.abs().rolling(11).sum(), idx)
-    S5 = _to_rows(d.rolling(5).sum(), idx)
-    rm_prev = _to_rows(rm, idx)                          # rm[k-1]
-    z1_prev = _to_rows(d - rm.shift(1), idx)             # P_z1 of candle k-1
-    rsi_prev = _to_rows(c[f"{tf}_rsi_ma8"], idx)
-    macd_prev = _to_rows(c[f"{tf}_macd_12_26_9"], idx)
-    ema_prev = _to_rows(c[f"{tf}_ema_25"], idx)
-
-    out = pd.DataFrame(index=idx)
-    out["R_position"] = df[f"{tf}_rsi_ma8"]
-    out["R_slope"] = df[f"{tf}_rsi_ma8"] - rsi_prev
-    out["R_distance"] = df[f"{tf}_rsi_14"] - df[f"{tf}_rsi_ma8"]
-    out["M_position"] = df[f"{tf}_macd_12_26_9"]
-    out["M_slope"] = df[f"{tf}_macd_12_26_9"] - macd_prev
-    out["M_distance"] = df[f"{tf}_macd_hist_12_26_9"]
-    out["A_position"] = (df[f"{tf}_close"] - df[f"{tf}_ema_25"]) / df[f"{tf}_close"] * 100.0
-    out["A_slope"] = df[f"{tf}_ema_25"] - ema_prev
-    S12, n = S11 + d_f, 12
-    out["V_std12"] = np.sqrt((Q11 + d_f ** 2 - S12 ** 2 / n) / (n - 1))
-    out["V_absmean12"] = (A11 + d_f.abs()) / n
-    out["V_range"] = (df[f"{tf}_high"] - df[f"{tf}_low"]) / df[f"{tf}_low"] * 100.0
-    out["V_body"] = (df[f"{tf}_close"] - df[f"{tf}_open"]) / df[f"{tf}_open"] * 100.0
-    out["P_z1"] = d_f - rm_prev
-    out["P_z2"] = z1_prev
-    out["P_rm"] = (S5 + d_f) / 6.0
-    out["ext_f"] = df[f"{tf}_{side}"]
-    return out
+forming_features = kernel.forming_features  # forming candle as the input candle
 
 
 def infer_forming(df: pd.DataFrame, model: SideModel) -> pd.DataFrame:

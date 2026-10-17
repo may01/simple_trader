@@ -302,6 +302,8 @@ class DataPreparer:
           4. Compute base attributes (writes rsi_classification.json + diff_stats.pkl)
           5. Compute class indicators (classification + targets; only TFs [15,60,240,1440])
           6. Trim warmup rows (drop everything before data_start_ms)
+          6b. Candle-bound (CB) columns on the trimmed frame (skipped when the
+              pair has no CB model file)
           7. Compute lookahead profit labels (labels: config section)
           8. Build DataAttributes container (NN normalisation now lives in the
              dataset manifest; see D13)
@@ -346,6 +348,10 @@ class DataPreparer:
         # so the leading history has served its purpose as lookback input.
         if start_ts is not None:
             wide_df = wide_df.loc[wide_df.index >= start_ts]
+
+        # Step 6b — candle-bound columns on the trimmed frame (same frame the
+        # chunked merge sees, so both paths produce identical CB values)
+        wide_df = self._compute_cb_stage(wide_df)
 
         # Step 7 — lookahead profit labels on the trimmed frame (labels need
         # future rows inside the simulation window, never warmup history)
@@ -588,6 +594,7 @@ class DataPreparer:
         """
         frames = [pd.read_pickle(p) for p in final_part_paths]
         full = pd.concat(frames)
+        full = self._compute_cb_stage(full)
 
         # Steps mirror prepare() 7–10 on the concatenated frame.
         self._compute_profit_labels(full)
@@ -695,6 +702,28 @@ class DataPreparer:
         from indicators import DataAttributes  # lazy import
         data_attributes = DataAttributes()
         data_attributes.compute(df)
+
+    def _compute_cb_stage(self, wide_df: pd.DataFrame) -> pd.DataFrame:
+        """Append the candle-bound (CB) columns to *wide_df* in one concat.
+
+        Runs on the whole (trimmed / merged) frame — one vectorized call, not
+        part of the per-row indicator pass. Existing CB-named columns are
+        dropped first (rerun safety). No model file for the pair → *wide_df*
+        returned without CB columns. A missing CB input column raises
+        ValueError (propagates; the prep fails).
+        """
+        from indicators.candle_bounds.stage import (  # lazy import
+            compute_cb_columns,
+            expected_columns,
+        )
+
+        stale = [c for c in expected_columns() if c in wide_df.columns]
+        if stale:
+            wide_df = wide_df.drop(columns=stale)
+        cb = compute_cb_columns(wide_df)
+        if cb is None:
+            return wide_df
+        return pd.concat([wide_df, cb], axis=1)
 
     def _compute_class_indicators(
         self, df: pd.DataFrame, start_ts: pd.Timestamp | None = None

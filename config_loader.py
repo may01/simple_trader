@@ -144,6 +144,8 @@ def load_labels_config(path: str = "configs/indicators_config.yaml") -> list:
 class SharedIndicatorConfig:
     name: str
     timeframes: list[int]
+    # True: a change of the published value bypasses the publish interval.
+    on_change: bool = False
 
 
 def load_shared_indicators_config(path: str = "configs/shared_indicators_config.yaml") -> list[SharedIndicatorConfig]:
@@ -161,7 +163,14 @@ def load_shared_indicators_config(path: str = "configs/shared_indicators_config.
         # startup rather than simply broadcasting nothing.
         data = yaml.safe_load(fh) or {}
     raw = data.get("indicators", []) or []
-    return [SharedIndicatorConfig(name=entry["name"], timeframes=list(entry["timeframes"])) for entry in raw]
+    return [
+        SharedIndicatorConfig(
+            name=entry["name"],
+            timeframes=list(entry["timeframes"]),
+            on_change=bool(entry.get("on_change", False)),
+        )
+        for entry in raw
+    ]
 
 
 # Module-level constant — loaded at import from default path

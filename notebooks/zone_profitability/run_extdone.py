@@ -1,6 +1,10 @@
 """Driver: "extreme done" state per tf candle — the running high/low has
 very likely been set for the rest of the candle.
 
+Production implementation: indicators/candle_bounds/ (kernel.extdone) — per-minute
+(not sticky) state with the 2y ladder (params.EXTDONE_LADDER); this file keeps the
+oos2m-picked ladder and sticky logic as the experiment was run.
+
 Measured on oos2m (see external experiment/ev_line.md s9): no fixed level
 (cb, cb +/- sigma, cbnc) predicts exhaustion; what does is how far the close has
 pulled away from the running extreme (in 1-min ATR) together with candle
@@ -30,12 +34,13 @@ import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.abspath(os.path.join(HERE, "..", "..")))
 
 from evlib import TFS, candle_id  # noqa: E402
+from indicators.candle_bounds import kernel  # noqa: E402
 
 DATASET_DIR = os.environ.get("EV_DATASET_DIR", "/trader_data_long/train/oos2m_link_usdt")
 OUT = os.environ.get("EV_OUT", os.path.join(HERE, "out"))
-os.makedirs(OUT, exist_ok=True)
 ATR_COL = "1_atr_14_ma_5"
 # (progress_from, d in 1-min ATR): per progress bucket the smallest d whose
 # EVENT-based P(hold | first trigger in bucket) >= 0.90 on oos2m (scratch
@@ -51,13 +56,12 @@ BUCKETS = ((0, .25), (.25, .5), (.5, .75), (.75, 1.0))
 
 
 def d_of_progress(prog: np.ndarray, ladder: list) -> np.ndarray:
-    d = np.full(len(prog), np.inf)
-    for p0, dv in ladder:
-        d[prog >= p0] = dv
-    return d
+    """Pull-away threshold per row; thin wrapper over ``kernel.ladder_threshold``."""
+    return kernel.ladder_threshold(prog, tuple(tuple(step) for step in ladder))
 
 
 def main() -> None:
+    os.makedirs(OUT, exist_ok=True)
     df = pd.read_pickle(os.path.join(DATASET_DIR, "df_with_indicators.pkl"))
     hi, lo, cl = (df[c].to_numpy() for c in ("1_high", "1_low", "1_close"))
     atr = df[ATR_COL].to_numpy()

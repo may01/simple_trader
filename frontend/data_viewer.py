@@ -6,6 +6,7 @@ import colorsys
 import re
 from typing import Optional, Any
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -177,6 +178,12 @@ class DataViewer:
         "cb_adj": ["cb_hi_adj", "cb_lo_adj"],
         "cb_long": ["cb_zone_long"],
         "cb_short": ["cb_zone_short"],
+        # CB marker-filter toggles (see _CB_MARKER_FILTERS): checklist entries
+        # backed by the main-flow flag columns, listed only when the columns
+        # exist. Marker-only (see _MARKER_ONLY_FIELDS): they never draw a trace.
+        "cb_f_extdone": ["cb_f_extdone_long", "cb_f_extdone_short"],
+        "cb_f_trend": ["cb_f_trend_long", "cb_f_trend_short"],
+        "cb_f_mcx": ["cb_f_mcx_long", "cb_f_mcx_short"],
         # NN-breakdown entry markers (enter_*): marker-only group — its fields
         # are the boolean marker columns, listed here so the toggle exists and
         # is skip-if-absent like every other group; _draw_price_overlays skips
@@ -245,7 +252,12 @@ class DataViewer:
     }
 
     # Overlay-group fields that are boolean marker columns, not price lines.
-    _MARKER_ONLY_FIELDS = {"cb_enter_long", "cb_enter_short"}
+    _MARKER_ONLY_FIELDS = {
+        "cb_enter_long", "cb_enter_short",
+        "cb_f_extdone_long", "cb_f_extdone_short",
+        "cb_f_trend_long", "cb_f_trend_short",
+        "cb_f_mcx_long", "cb_f_mcx_short",
+    }
 
     # Overlay groups unchecked on first load (still drawable via their toggle).
     # az_short defaults off too — long+short together would double the zone
@@ -264,26 +276,47 @@ class DataViewer:
         # entries (see experiment/ev_line.md §7) — kept drawable for inspection.
         "evr_long", "evr_short",
         # ev_*/cbatr_*/extdone_* off (2026-10-03): experiment overlays and their
-        # markers; the extdone veto on the cb zones still applies with the
-        # extdone groups unchecked (it reads the columns, not the toggle).
+        # markers. The extdone veto on the cb zones is the separate
+        # cb_f_extdone marker filter (on by default, see _CB_MARKER_FILTERS),
+        # not these overlay groups.
         "ev_long", "ev_short", "cbatr_long", "cbatr_short",
         "extdone_short", "extdone_long",
         # cb_bounds off too: the zones (cb_long/cb_short) stay, the raw
         # bound pair they derive from is one click away. cb_enter (the NN
         # breakdown arrows) off as well.
         "cb_bounds", "cb_enter",
+        # marker filters: extdone is on by default, trend/mcx are opt-in.
+        "cb_f_trend", "cb_f_mcx",
     }
 
-    # Veto gates: overlay field / marker column (tf-stripped) -> extdone state
-    # column (same tf) that suppresses it. A short entry zone is meaningless
-    # once the candle's LOW is in (price has turned up), a long zone once its
-    # HIGH is in — so cb_zone_short/cb_inzone_short are blanked while
-    # {tf}_extdone_low holds, and the long pair while {tf}_extdone_high holds.
-    # Skip-if-absent: without the extdone sidecar nothing is vetoed.
-    _ZONE_VETO = {
-        "cb_zone_short": "extdone_low", "cb_inzone_short": "extdone_low",
-        "cb_zone_long": "extdone_high", "cb_inzone_long": "extdone_high",
+    # CB marker filters: toggle name -> flag column stem; the column is
+    # f"{tf}_{stem}_{side}" (main-flow bool columns). A checked toggle keeps
+    # cb_inzone_{side} markers only where the flag is True (several = AND);
+    # cb_f_extdone also blanks the cb_zone_{side} line where it is False.
+    # Skip-if-absent: a missing flag column means that toggle has no effect.
+    _CB_MARKER_FILTERS = {
+        "cb_f_extdone": "cb_f_extdone",
+        "cb_f_trend": "cb_f_trend",
+        "cb_f_mcx": "cb_f_mcx",
     }
+    # Filters applied when overlays is None (no explicit selection).
+    _CB_MARKER_FILTERS_DEFAULT = ("cb_f_extdone",)
+
+    def _cb_marker_toggles(self, overlays: list[str] | None) -> list[str]:
+        """Checked marker-filter toggle names (``None`` = defaults)."""
+        if overlays is None:
+            return list(self._CB_MARKER_FILTERS_DEFAULT)
+        return [t for t in self._CB_MARKER_FILTERS if t in overlays]
+
+    def _cb_marker_mask(self, window: pd.DataFrame, tf: int, side: str,
+                        overlays: list[str] | None) -> np.ndarray:
+        """Bool mask (len(window)): AND of the checked filters whose column exists."""
+        mask = np.ones(len(window), dtype=bool)
+        for toggle in self._cb_marker_toggles(overlays):
+            col = f"{tf}_{self._CB_MARKER_FILTERS[toggle]}_{side}"
+            if col in window.columns:
+                mask &= window[col].fillna(False).to_numpy(dtype=bool)
+        return mask
 
     # Marker-only veto (the zone line stays): a cb_inzone marker is dropped
     # when the 1-min extreme overshoots the cb bound by more than the 2y p75
@@ -999,11 +1032,13 @@ class DataViewer:
         "short": ("triangle-down-dot", "deeppink", "1_high", 1.25),
     }
 
-    # Extreme-done markers: an "x" on every 1-min candle while the sticky
-    # state holds (from the first trigger to the candle close), so the whole
-    # "high is in -> short setup" / "low is in -> long setup" stretch reads
-    # on the 1-min chart. Drawn beside the 1-min high / low at 1x offset;
-    # colour carries the side only.
+    # Extreme-done markers: an "x" on every 1-min candle whose per-minute
+    # extdone state is set (evaluated each minute, not sticky to the candle
+    # close), so the "high is in -> short setup" / "low is in -> long setup"
+    # minutes read on the 1-min chart. Drawn beside the 1-min high / low at
+    # 1x offset; colour carries the side only.
+    # On oos2m the sidecar's extdone_*_first (oos ladder, sticky) sits beside
+    # the main-flow extdone_* (2y ladder, per-minute).
     _EXTDONE_RE = re.compile(r"^(\d+)_extdone_(high|low)$")
     _EXTDONE_MARKER = {
         # side -> (symbol, colour, price column, offset sign)
@@ -1066,9 +1101,8 @@ class DataViewer:
                 if ycol not in window.columns:
                     continue
                 mask = window[col].fillna(False).to_numpy(dtype=bool)
-                veto = self._ZONE_VETO.get(str(col)[len(m.group(1)) + 1:])
-                if veto is not None and f"{src_tf}_{veto}" in window.columns:
-                    mask = mask & ~window[f"{src_tf}_{veto}"].fillna(False).to_numpy(dtype=bool)
+                if regex is self._CB_INZONE_RE:
+                    mask = mask & self._cb_marker_mask(window, src_tf, side, overlays)
                 veto = self._MARKER_VETO.get(str(col)[len(m.group(1)) + 1:])
                 if veto is not None and f"{src_tf}_{veto}" in window.columns:
                     mask = mask & ~window[f"{src_tf}_{veto}"].fillna(False).to_numpy(dtype=bool)
@@ -1236,10 +1270,11 @@ class DataViewer:
             if col not in df_slice.columns or name in self._MARKER_ONLY_FIELDS:
                 continue
             series = df_slice[col]
-            veto = self._ZONE_VETO.get(name)
-            if veto is not None and f"{tf}_{veto}" in df_slice.columns:
-                series = series.where(
-                    ~df_slice[f"{tf}_{veto}"].fillna(False).astype(bool))
+            if name in ("cb_zone_long", "cb_zone_short") and (
+                    "cb_f_extdone" in self._cb_marker_toggles(overlays)):
+                flag = f"{tf}_cb_f_extdone_{name.rsplit('_', 1)[1]}"
+                if flag in df_slice.columns:
+                    series = series.where(df_slice[flag].fillna(False).astype(bool))
             values = list(series)
             color = self._OVERLAY_COLORS.get(name, "gray")
             if name.startswith("sar"):

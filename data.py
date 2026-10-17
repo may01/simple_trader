@@ -243,6 +243,8 @@ def _build_wide_df(df: pd.DataFrame) -> pd.DataFrame:
 
 from stocks_holder import stock_holder  # noqa: E402 — after class definitions to avoid circular import
 from indicators import Indicators  # noqa: E402
+from indicators.candle_bounds.stage import LiveCbStage  # noqa: E402
+from logs import log_error  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +265,15 @@ class LiveData:
         self.coin = pair.split("_")[0] if "_" in pair else pair
         self.candles = CANDLES
         self.ohlc: dict[int, pd.DataFrame] = {}
+        self._cb_errors_logged: set[type] = set()
+        self._cb_stage: LiveCbStage | None = None
+        # No pair (prep / viewer / test processes import the singleton):
+        # no stage, and no "no model for pair ''" warning.
+        if pair:
+            try:
+                self._cb_stage = LiveCbStage(pair)
+            except Exception as exc:  # a broken model file must not stop live
+                self._log_cb_error(exc)
 
     def build_candles(self, time_point: int = 0) -> None:
         """Fetch candles, rename to {tf}_* columns, compute indicators.
@@ -306,6 +317,8 @@ class LiveData:
             # Store the enriched (mutated) DataFrame
             self.ohlc[tf] = renamed_df
 
+        self._update_cb()
+
         # Left-join nn_res_* columns onto each per-tf frame (absence-safe no-op
         # when the live df_with_nn.pkl is absent). The columns are timeframe-
         # agnostic and shared across all tfs.
@@ -313,6 +326,24 @@ class LiveData:
         if dataset_dir is not None:
             for tf in self.ohlc:
                 self.ohlc[tf] = join_nn_results(self.ohlc[tf], dataset_dir)
+
+    def _update_cb(self) -> None:
+        """Candle-bound columns for the current minute; a failure leaves them
+        absent for this tick and never stops the tick."""
+        if self._cb_stage is None:
+            return
+        try:
+            self._cb_stage.update(self.ohlc)
+        except Exception as exc:
+            self._log_cb_error(exc)
+
+    def _log_cb_error(self, exc: Exception) -> None:
+        """Log (with traceback) once per exception type."""
+        if type(exc) in self._cb_errors_logged:
+            return
+        self._cb_errors_logged.add(type(exc))
+        log_error(f"candle_bounds live stage failed ({type(exc).__name__}: {exc}); "
+                  "CB columns absent this tick")
 
     @staticmethod
     def _live_dataset_dir() -> "str | None":
