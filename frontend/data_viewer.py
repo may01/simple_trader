@@ -184,6 +184,7 @@ class DataViewer:
         "cb_f_extdone": ["cb_f_extdone_long", "cb_f_extdone_short"],
         "cb_f_trend": ["cb_f_trend_long", "cb_f_trend_short"],
         "cb_f_mcx": ["cb_f_mcx_long", "cb_f_mcx_short"],
+        "cb_f_overshoot": ["cb_f_overshoot_long", "cb_f_overshoot_short"],
         # NN-breakdown entry markers (enter_*): marker-only group — its fields
         # are the boolean marker columns, listed here so the toggle exists and
         # is skip-if-absent like every other group; _draw_price_overlays skips
@@ -257,6 +258,7 @@ class DataViewer:
         "cb_f_extdone_long", "cb_f_extdone_short",
         "cb_f_trend_long", "cb_f_trend_short",
         "cb_f_mcx_long", "cb_f_mcx_short",
+        "cb_f_overshoot_long", "cb_f_overshoot_short",
     }
 
     # Overlay groups unchecked on first load (still drawable via their toggle).
@@ -285,7 +287,8 @@ class DataViewer:
         # bound pair they derive from is one click away. cb_enter (the NN
         # breakdown arrows) off as well.
         "cb_bounds", "cb_enter",
-        # marker filters: extdone is on by default, trend/mcx are opt-in.
+        # marker filters: extdone and overshoot are on by default, trend/mcx
+        # are opt-in.
         "cb_f_trend", "cb_f_mcx",
     }
 
@@ -298,9 +301,13 @@ class DataViewer:
         "cb_f_extdone": "cb_f_extdone",
         "cb_f_trend": "cb_f_trend",
         "cb_f_mcx": "cb_f_mcx",
+        # phase 19: the 1-min extreme overshot the bound by more than the
+        # frozen 2y p75 of marker overshoot (a deep break precedes a larger
+        # further move). Marker-only: the zone line is never blanked by it.
+        "cb_f_overshoot": "cb_f_overshoot",
     }
     # Filters applied when overlays is None (no explicit selection).
-    _CB_MARKER_FILTERS_DEFAULT = ("cb_f_extdone",)
+    _CB_MARKER_FILTERS_DEFAULT = ("cb_f_extdone", "cb_f_overshoot")
 
     def _cb_marker_toggles(self, overlays: list[str] | None) -> list[str]:
         """Checked marker-filter toggle names (``None`` = defaults)."""
@@ -317,12 +324,6 @@ class DataViewer:
             if col in window.columns:
                 mask &= window[col].fillna(False).to_numpy(dtype=bool)
         return mask
-
-    # Marker-only veto (the zone line stays): a cb_inzone marker is dropped
-    # when the 1-min extreme overshoots the cb bound by more than the 2y p75
-    # of marker overshoot ({tf}_cbover_{side}, run_cb_overshoot.py) — deep
-    # breaks precede a larger further move. Skip-if-absent.
-    _MARKER_VETO = {"cb_inzone_long": "cbover_long", "cb_inzone_short": "cbover_short"}
 
     # Subplots unchecked on first load (still available via their toggle):
     # the price-derivative diff panels.
@@ -1103,9 +1104,6 @@ class DataViewer:
                 mask = window[col].fillna(False).to_numpy(dtype=bool)
                 if regex is self._CB_INZONE_RE:
                     mask = mask & self._cb_marker_mask(window, src_tf, side, overlays)
-                veto = self._MARKER_VETO.get(str(col)[len(m.group(1)) + 1:])
-                if veto is not None and f"{src_tf}_{veto}" in window.columns:
-                    mask = mask & ~window[f"{src_tf}_{veto}"].fillna(False).to_numpy(dtype=bool)
                 if not mask.any():
                     continue
                 step = self._AZ_TF_STEP.get(src_tf, 0.002)

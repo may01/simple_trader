@@ -44,25 +44,52 @@ def _all_six(value: tuple[float, float]) -> dict[tuple[int, str], tuple[float, f
 
 def test_expected_columns_count_and_unique():
     cols = expected_columns()
-    assert len(cols) == 114
-    assert len(set(cols)) == 114
+    assert len(cols) == 126
+    assert len(set(cols)) == 126
     assert all(c.startswith(("15_", "60_", "240_")) for c in cols)
 
 
 def test_expected_columns_per_tf_order():
     cols = expected_columns()
-    per_tf = [c[len("15_"):] for c in cols[:38]]
+    per_tf = [c[len("15_"):] for c in cols[:42]]
     assert per_tf[:12] == [
         "cb_high", "cb_high_std", "cb_high_up", "cb_high_dn",
         "cb_low", "cb_low_std", "cb_low_up", "cb_low_dn",
         "cb_zone_long", "cb_zone_short", "cb_inzone_long", "cb_inzone_short",
     ]
-    assert per_tf[-6:] == [
+    assert per_tf[-10:] == [
         "cb_f_extdone_long", "cb_f_extdone_short", "cb_f_trend_long",
         "cb_f_trend_short", "cb_f_mcx_long", "cb_f_mcx_short",
+        "cb_overshoot_long", "cb_overshoot_short",
+        "cb_f_overshoot_long", "cb_f_overshoot_short",
     ]
-    assert [c.split("_", 1)[1] for c in cols[38:76]] == per_tf
-    assert all(c.startswith("60_") for c in cols[38:76])
+    assert [c.split("_", 1)[1] for c in cols[42:84]] == per_tf
+    assert all(c.startswith("60_") for c in cols[42:84])
+
+
+def test_overshoot_bool_float_split_and_empty_dtypes():
+    assert not stage._is_bool_column("15_cb_overshoot_long")
+    assert stage._is_bool_column("15_cb_f_overshoot_long")
+    empty = stage._empty_columns(pd.DatetimeIndex([]))
+    assert empty["240_cb_overshoot_short"].dtype == float
+    assert empty["240_cb_f_overshoot_short"].dtype == bool
+
+
+def test_compute_cb_writes_overshoot(wide, result, models):
+    from indicators.candle_bounds.params import OVERSHOOT_THR
+    for tf in TFS:
+        cb = stage.closed_cb(wide, models, tf)
+        z = kernel.overshoot(cb, wide, tf)
+        for side in ("long", "short"):
+            zc, fc = f"{tf}_cb_overshoot_{side}", f"{tf}_cb_f_overshoot_{side}"
+            pd.testing.assert_series_equal(result.columns[zc], z[zc])
+            flag = result.columns[fc]
+            assert flag.dtype == bool
+            zz = result.columns[zc]
+            assert flag[zz.isna()].all()
+            np.testing.assert_array_equal(flag[zz.notna()], ~(zz[zz.notna()] > OVERSHOOT_THR[tf][side]))
+        assert result.columns[f"{tf}_cb_overshoot_long"].notna().sum() > 1000
+        assert (~result.columns[f"{tf}_cb_f_overshoot_long"]).sum() > 0
 
 
 def test_required_columns_content():
