@@ -1,4 +1,4 @@
-"""Tests for the CB kernel: per-minute extdone state and the filter flags (G6)."""
+"""Tests for the CB kernel: per-minute extdone state, the overshoot z and the filter flags (G6; phase 19 G1/G2)."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from indicators.candle_bounds.kernel import candle_progress, extdone, filters, ladder_threshold
-from indicators.candle_bounds.params import ATR_COL, EXTDONE_LADDER
+from indicators.candle_bounds.kernel import candle_progress, extdone, filters, ladder_threshold, overshoot
+from indicators.candle_bounds.params import ATR_COL, EXTDONE_LADDER, OVERSHOOT_Q, OVERSHOOT_THR
 
 LADDER_15_HIGH = ((0.25, 5.0), (0.50, 2.5), (0.75, 1.5))
 
@@ -202,10 +202,17 @@ def _ext(index: pd.Index, tf: int, high: list, low: list) -> pd.DataFrame:
                          f"{tf}_extdone_low": np.array(low, bool)}, index=index)
 
 
+def _over(index: pd.Index, tf: int, long: list | None = None, short: list | None = None) -> pd.DataFrame:
+    n = len(index)
+    return pd.DataFrame({f"{tf}_cb_overshoot_long": np.array([np.nan] * n if long is None else long, float),
+                         f"{tf}_cb_overshoot_short": np.array([np.nan] * n if short is None else short, float)},
+                        index=index)
+
+
 def test_filter_extdone_is_negation():
     df = _class_frame(15, [0] * 4, [0] * 4)
     ext = _ext(df.index, 15, [True, False, True, False], [True, True, False, False])
-    f = filters(df, ext, 15)
+    f = filters(df, ext, _over(df.index, 15), 15)
     np.testing.assert_array_equal(f["15_cb_f_extdone_long"], ~ext["15_extdone_high"].to_numpy())
     np.testing.assert_array_equal(f["15_cb_f_extdone_short"], ~ext["15_extdone_low"].to_numpy())
 
@@ -215,13 +222,13 @@ def test_filter_extdone_warmup_passes():
     df = _at(["10:00", "10:08"], high=np.nan, low=np.nan, atr=np.nan)
     df["15_ema_25_slope_class"] = np.nan
     df["15_move_class"] = np.nan
-    f = filters(df, extdone(df, 15, EXTDONE_LADDER[15]), 15)
+    f = filters(df, extdone(df, 15, EXTDONE_LADDER[15]), _over(df.index, 15), 15)
     assert f["15_cb_f_extdone_long"].all() and f["15_cb_f_extdone_short"].all()
 
 
 def test_filter_trend_truth_table():
     df = _class_frame(15, [-1, 0, 1, np.nan], [0] * 4)
-    f = filters(df, _ext(df.index, 15, [False] * 4, [False] * 4), 15)
+    f = filters(df, _ext(df.index, 15, [False] * 4, [False] * 4), _over(df.index, 15), 15)
     assert f["15_cb_f_trend_long"].tolist() == [False, True, True, True]
     assert f["15_cb_f_trend_short"].tolist() == [True, True, False, True]
 
@@ -229,18 +236,110 @@ def test_filter_trend_truth_table():
 def test_filter_mcx_truth_table():
     mcx = [-3, 3, -2, -1, 0, 1, 2, np.nan]
     df = _class_frame(60, [0] * len(mcx), mcx)
-    f = filters(df, _ext(df.index, 60, [False] * len(mcx), [False] * len(mcx)), 60)
+    f = filters(df, _ext(df.index, 60, [False] * len(mcx), [False] * len(mcx)), _over(df.index, 60), 60)
     assert f["60_cb_f_mcx_long"].tolist() == [True, False, False, False, False, False, False, False]
     assert f["60_cb_f_mcx_short"].tolist() == [False, True, False, False, False, False, False, False]
 
 
 def test_filter_dtypes_bool():
     df = _class_frame(240, [-1, np.nan, 1], [-3, np.nan, 3])
-    f = filters(df, _ext(df.index, 240, [True, False, False], [False, False, True]), 240)
+    f = filters(df, _ext(df.index, 240, [True, False, False], [False, False, True]), _over(df.index, 240), 240)
     assert list(f.columns) == [
         "240_cb_f_extdone_long", "240_cb_f_extdone_short",
         "240_cb_f_trend_long", "240_cb_f_trend_short",
         "240_cb_f_mcx_long", "240_cb_f_mcx_short",
+        "240_cb_f_overshoot_long", "240_cb_f_overshoot_short",
     ]
     assert all(f[c].dtype == bool for c in f.columns)
     assert f.index.equals(df.index)
+
+
+# --------------------------------------------------------------------------- overshoot (phase 19)
+
+def _cb_frame(tf: int, *, cb_low=100.0, low_std=2.0, cb_high=200.0, high_std=4.0,
+              one_low=99.0, one_high=201.0, n: int | None = None):
+    """(cb, df) pair: closed bounds + the 1-min extremes, broadcast to ``n`` rows."""
+    arrays = {k: np.atleast_1d(np.asarray(v, float)) for k, v in
+              dict(cb_low=cb_low, low_std=low_std, cb_high=cb_high, high_std=high_std,
+                   one_low=one_low, one_high=one_high).items()}
+    n = n or max(len(a) for a in arrays.values())
+    arrays = {k: np.broadcast_to(a, (n,)).copy() for k, a in arrays.items()}
+    idx = pd.date_range("2025-01-01 10:00", periods=n, freq="1min", tz="UTC")
+    cb = pd.DataFrame({f"{tf}_cb_low": arrays["cb_low"], f"{tf}_cb_low_std": arrays["low_std"],
+                       f"{tf}_cb_high": arrays["cb_high"], f"{tf}_cb_high_std": arrays["high_std"]}, index=idx)
+    df = pd.DataFrame({"1_low": arrays["one_low"], "1_high": arrays["one_high"]}, index=idx)
+    return cb, df
+
+
+def test_overshoot_z_long_exact():
+    cb, df = _cb_frame(15, one_low=[99.0, 100.0, 101.0])
+    z = overshoot(cb, df, 15)
+    np.testing.assert_allclose(z["15_cb_overshoot_long"], [0.5, 0.0, -0.5], atol=1e-12)
+
+
+def test_overshoot_z_short_exact():
+    cb, df = _cb_frame(15, one_high=[201.0, 200.0, 199.0])
+    z = overshoot(cb, df, 15)
+    np.testing.assert_allclose(z["15_cb_overshoot_short"], [0.25, 0.0, -0.25], atol=1e-12)
+
+
+@pytest.mark.parametrize("kw", [
+    dict(low_std=np.nan, high_std=np.nan), dict(low_std=0.0, high_std=0.0),
+    dict(low_std=-1.0, high_std=-1.0), dict(cb_low=np.nan, cb_high=np.nan),
+    dict(one_low=np.nan, one_high=np.nan),
+])
+def test_overshoot_bad_input_is_nan_never_inf(kw):
+    cb, df = _cb_frame(60, **kw)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        z = overshoot(cb, df, 60)
+    assert z["60_cb_overshoot_long"].isna().all() and z["60_cb_overshoot_short"].isna().all()
+    assert not np.isinf(z.to_numpy()).any()
+
+
+def test_overshoot_columns_and_dtype():
+    cb, df = _cb_frame(240, n=3)
+    z = overshoot(cb, df, 240)
+    assert list(z.columns) == ["240_cb_overshoot_long", "240_cb_overshoot_short"]
+    assert all(z[c].dtype == np.float64 for c in z.columns)
+    assert z.index.equals(df.index)
+
+
+@pytest.mark.parametrize("tf", [15, 60, 240])
+@pytest.mark.parametrize("side", ["long", "short"])
+def test_filter_overshoot_false_iff_above_threshold(tf, side):
+    thr = OVERSHOOT_THR[tf][side]
+    zs = [thr - 1e-6, thr, thr + 1e-6, np.nan]
+    df = _class_frame(tf, [0] * 4, [0] * 4)
+    over = _over(df.index, tf, **{side: zs})
+    f = filters(df, _ext(df.index, tf, [False] * 4, [False] * 4), over, tf)
+    assert f[f"{tf}_cb_f_overshoot_{side}"].tolist() == [True, True, False, True]
+    other = "short" if side == "long" else "long"
+    assert f[f"{tf}_cb_f_overshoot_{other}"].all()          # NaN z on the other side passes
+
+
+def test_filter_overshoot_reads_params_at_call_time(monkeypatch):
+    df = _class_frame(15, [0], [0])
+    over = _over(df.index, 15, long=[0.2])
+    monkeypatch.setitem(OVERSHOOT_THR[15], "long", 0.1)
+    f = filters(df, _ext(df.index, 15, [False], [False]), over, 15)
+    assert f["15_cb_f_overshoot_long"].tolist() == [False]
+
+
+def test_filter_overshoot_leaves_old_flags_unchanged():
+    df = _class_frame(15, [-1, 0, 1, np.nan], [-3, 3, 0, np.nan])
+    ext = _ext(df.index, 15, [True, False, True, False], [False, True, False, True])
+    f_nan = filters(df, ext, _over(df.index, 15), 15)
+    f_hit = filters(df, ext, _over(df.index, 15, long=[9.0] * 4, short=[9.0] * 4), 15)
+    old = [c for c in f_nan.columns if "overshoot" not in c]
+    pd.testing.assert_frame_equal(f_nan[old], f_hit[old])
+    assert f_nan["15_cb_f_trend_long"].tolist() == [False, True, True, True]
+
+
+def test_overshoot_thresholds_frozen():
+    assert OVERSHOOT_Q == 0.75
+    assert OVERSHOOT_THR == {
+        15: {"long": 0.3477, "short": 0.3808},
+        60: {"long": 0.3756, "short": 0.3796},
+        240: {"long": 0.4693, "short": 0.5178},
+    }

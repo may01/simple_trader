@@ -141,6 +141,31 @@ def test_marker_extdone_filters_match_prep(wide, prep, live_stage, sample_minute
                 assert ohlc[tf][col].iloc[-1] == float(bool(prep[col].loc[t])), (t, col)
 
 
+def test_overshoot_matches_prep(wide, prep, live_stage, sample_minutes):
+    """Phase 19: z and pass flag per tf/side equal compute_cb's row (NaN where prep is NaN)."""
+    for t in sample_minutes:
+        ohlc = ohlc_from_wide(wide, t)
+        live_stage.update(ohlc)
+        for tf in TFS:
+            for side in ("long", "short"):
+                zc, fc = f"{tf}_cb_overshoot_{side}", f"{tf}_cb_f_overshoot_{side}"
+                exp_z, got_z = prep[zc].loc[t], ohlc[tf][zc].iloc[-1]
+                if np.isnan(exp_z):
+                    assert np.isnan(got_z), (t, zc)
+                else:
+                    np.testing.assert_allclose(got_z, exp_z, rtol=1e-9, err_msg=f"{t} {zc}")
+                assert ohlc[tf][fc].iloc[-1] == float(bool(prep[fc].loc[t])), (t, fc)
+
+
+def test_overshoot_unusable_tf_is_nan(wide, live_stage):
+    ohlc = ohlc_from_wide(wide, wide.index[5000])
+    ohlc[60] = ohlc[60].iloc[:-1]        # stale -> unusable
+    live_stage.update(ohlc)
+    for n in ("cb_overshoot_long", "cb_overshoot_short", "cb_f_overshoot_long", "cb_f_overshoot_short"):
+        assert np.isnan(ohlc[60][f"60_{n}"].iloc[-1]), n
+    assert ohlc[15]["15_cb_f_overshoot_long"].iloc[-1] in (0.0, 1.0)
+
+
 # --------------------------------------------------------------------------- forming bound hold
 
 def test_cbnc_first_minute_nan(wide, live_stage):

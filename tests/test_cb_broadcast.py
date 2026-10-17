@@ -15,7 +15,8 @@ SHIPPED = Path(__file__).resolve().parent.parent / "configs" / "shared_indicator
 TFS = [15, 60, 240]
 PLAIN = ["cb_high", "cb_low", "cb_zone_long", "cb_zone_short", "cbnc_high", "cbnc_low"]
 ONCHG = ["cb_inzone_long", "cb_inzone_short", "extdone_high", "extdone_low",
-         "cb_f_extdone_long", "cb_f_extdone_short", "cb_f_trend_long", "cb_f_trend_short"]
+         "cb_f_extdone_long", "cb_f_extdone_short", "cb_f_trend_long", "cb_f_trend_short",
+         "cb_f_overshoot_long", "cb_f_overshoot_short"]
 
 
 def test_loader_reads_on_change(tmp_path):
@@ -35,8 +36,16 @@ def test_loader_default_file_contains_cb_entries():
         assert by_name[n].timeframes == TFS and by_name[n].on_change is False
     for n in ONCHG:
         assert by_name[n].timeframes == TFS and by_name[n].on_change is True
-    for n in ("cb_f_mcx_long", "cbx_inzone_long", "cbnc_inzone_long"):
+    for n in ("cb_f_mcx_long", "cbx_inzone_long", "cbnc_inzone_long",
+              "cb_overshoot_long", "cb_overshoot_short"):
         assert n not in by_name
+
+
+def test_allowlist_cb_name_count():
+    cb = [c for c in load_shared_indicators_config(path=str(SHIPPED))
+          if c.name.startswith(("cb_", "cbnc_", "extdone_"))]
+    assert len(cb) == 16 == len(PLAIN) + len(ONCHG)
+    assert sum(len(c.timeframes) for c in cb) == 48
 
 
 def _setup(values, names=("cb_high", "cb_inzone_long"), interval=30.0):
@@ -198,6 +207,17 @@ def test_other_read_error_keeps_traceback(caplog):
         tick(31.0)
     recs = [r for r in caplog.records if r.name == "robots.robot"]
     assert len(recs) == 1 and recs[0].exc_info is not None
+
+
+def test_overshoot_flag_flip_publishes_inside_interval():
+    v = {"cb_high": 1.0, "cb_f_overshoot_long": 1.0}
+    robot, pub, tick, ft, _, dp = _setup(v, names=("cb_high", "cb_f_overshoot_long"))
+    _first(robot, dp, ft)
+    assert [(n, x) for _, n, x in pub.published if n == "15_cb_f_overshoot_long"] == [("15_cb_f_overshoot_long", 1.0)]
+    n = len(pub.published)
+    v["cb_f_overshoot_long"] = 0.0
+    tick(1.0)                                   # inside the 30 s interval
+    assert pub.published[n:] == [(pub.published[0][0], "15_cb_f_overshoot_long", 0.0)]
 
 
 def test_bools_published_as_floats():

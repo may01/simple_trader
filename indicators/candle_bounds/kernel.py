@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 
 from indicators.candle_bounds.models import BoundModel
-from indicators.candle_bounds.params import ATR_COL, FEATURES, TGT_SHRINK_PCT, ZONE_FRAC
+from indicators.candle_bounds.params import ATR_COL, FEATURES, OVERSHOOT_THR, TGT_SHRINK_PCT, ZONE_FRAC
 
 
 def to_rows(closed_series: pd.Series, index: pd.Index) -> pd.Series:
@@ -309,12 +309,33 @@ def extdone(df: pd.DataFrame, tf: int, ladder: dict[str, tuple[tuple[float, floa
     return pd.DataFrame(cols, index=df.index)
 
 
-def filters(df: pd.DataFrame, ext: pd.DataFrame, tf: int) -> pd.DataFrame:
+def overshoot(cb: pd.DataFrame, df: pd.DataFrame, tf: int) -> pd.DataFrame:
+    """How far the minute's extreme is past the closed bound, in band sd.
+
+    ``{tf}_cb_overshoot_long = (cb_low - 1_low) / cb_low_std``,
+    ``{tf}_cb_overshoot_short = (1_high - cb_high) / cb_high_std``. Defined on
+    every row (negative when price is away from the bound). NaN bound, std or
+    extreme, and std <= 0, give NaN -- never +-inf (the sidecar did)."""
+    cols: dict[str, object] = {}
+    for side, bound_side, ext_col in (("long", "low", "1_low"), ("short", "high", "1_high")):
+        b = cb[f"{tf}_cb_{bound_side}"].to_numpy(dtype=float)
+        w = cb[f"{tf}_cb_{bound_side}_std"].to_numpy(dtype=float)
+        x = df[ext_col].to_numpy(dtype=float)
+        num = (b - x) if side == "long" else (x - b)
+        ok = np.isfinite(num) & np.isfinite(w) & (w > 0)
+        z = np.full(len(df), np.nan)
+        z[ok] = num[ok] / w[ok]
+        cols[f"{tf}_cb_overshoot_{side}"] = z
+    return pd.DataFrame(cols, index=df.index)
+
+
+def filters(df: pd.DataFrame, ext: pd.DataFrame, over: pd.DataFrame, tf: int) -> pd.DataFrame:
     """Pass flags of the row's state (not applied to any marker).
 
     extdone: long = not ``extdone_high``, short = not ``extdone_low``.
     trend: long = ``ema_25_slope_class != -1``, short = ``!= +1`` (NaN -> both True).
-    mcx: long = ``move_class == -3``, short = ``== +3`` (NaN -> both False)."""
+    mcx: long = ``move_class == -3``, short = ``== +3`` (NaN -> both False).
+    overshoot: not ``cb_overshoot_{side} > OVERSHOOT_THR[tf][side]`` (NaN -> True)."""
     trend = pd.to_numeric(df[f"{tf}_ema_25_slope_class"], errors="coerce").to_numpy(dtype=float)
     mcx = pd.to_numeric(df[f"{tf}_move_class"], errors="coerce").to_numpy(dtype=float)
     hi = ext[f"{tf}_extdone_high"].reindex(df.index).fillna(False).to_numpy(dtype=bool)
@@ -327,4 +348,8 @@ def filters(df: pd.DataFrame, ext: pd.DataFrame, tf: int) -> pd.DataFrame:
     cols[f"{tf}_cb_f_trend_short"] = trend != 1
     cols[f"{tf}_cb_f_mcx_long"] = mcx == -3        # NaN == -3 -> False
     cols[f"{tf}_cb_f_mcx_short"] = mcx == 3
+    for side in ("long", "short"):
+        z = over[f"{tf}_cb_overshoot_{side}"].reindex(df.index).to_numpy(dtype=float)
+        with np.errstate(invalid="ignore"):
+            cols[f"{tf}_cb_f_overshoot_{side}"] = ~(z > OVERSHOOT_THR[tf][side])   # NaN > thr -> False -> pass
     return pd.DataFrame(cols, index=df.index)

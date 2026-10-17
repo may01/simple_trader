@@ -23,3 +23,14 @@ EXTDONE_LADDER: dict[int, dict[str, tuple[tuple[float, float], ...]]] = {
     60:  {"high": ((0.25, 10.0), (0.50, 8.0), (0.75, 4.0)), "low": ((0.25, 10.0), (0.50, 6.0), (0.75, 4.0))},
     240: {"high": ((0.75, 8.0),), "low": ((0.75, 8.0),)},
 }
+# p75 of the marker overshoot (band sd) over the 2y filtered markers, frozen
+# from the oos2m sidecar df_with_cb_overshoot.pkl (run_cb_overshoot.py,
+# OVER_Q=0.75; spec 2026-10-17-cb-overshoot-main-flow-design.md D1). The
+# sidecar's training-side veto used the oos2m-picked extdone ladder;
+# scripts/cb_export_overshoot.py prints a refit with the main-flow veto.
+OVERSHOOT_Q: float = 0.75
+OVERSHOOT_THR: dict[int, dict[str, float]] = {
+    15:  {"long": 0.3477, "short": 0.3808},
+    60:  {"long": 0.3756, "short": 0.3796},
+    240: {"long": 0.4693, "short": 0.5178},
+}

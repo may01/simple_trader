@@ -56,6 +56,8 @@ def _tf_names(tf: int) -> list[str]:
     names += [f"extdone_{s}" for s in SIDES] + [f"extdone_{s}_lvl" for s in SIDES]
     for kind in ("cb_f_extdone", "cb_f_trend", "cb_f_mcx"):
         names += [f"{kind}_{d}" for d in DIRECTIONS]
+    # phase 19: marker overshoot (band sd, float) and its pass flag (bool)
+    names += [f"cb_overshoot_{d}" for d in DIRECTIONS] + [f"cb_f_overshoot_{d}" for d in DIRECTIONS]
     return [f"{tf}_{n}" for n in names]
 
 
@@ -113,8 +115,9 @@ def tf_columns(df: pd.DataFrame, models: ModelSet, tf: int, cb: pd.DataFrame, *,
     zones = kernel.forming_zones(cbnc, cb, df, tf)
 
     ext = kernel.extdone(df, tf, EXTDONE_LADDER[tf])
-    flt = kernel.filters(df, ext, tf)
-    out = pd.concat([cb, cbnc, zones, ext, flt], axis=1)[_tf_names(tf)]
+    over = kernel.overshoot(cb, df, tf)
+    flt = kernel.filters(df, ext, over, tf)
+    out = pd.concat([cb, cbnc, zones, ext, over, flt], axis=1)[_tf_names(tf)]
     return out, nc_pred_last
 
 

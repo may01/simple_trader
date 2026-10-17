@@ -51,3 +51,10 @@ indicators:
   - name: cb_f_trend_short
     timeframes: [15, 60, 240]
     on_change: true
+  # phase 19: marker overshoot pass flags (the float cb_overshoot_* stays stored-only)
+  - name: cb_f_overshoot_long
+    timeframes: [15, 60, 240]
+    on_change: true
+  - name: cb_f_overshoot_short
+    timeframes: [15, 60, 240]
+    on_change: true

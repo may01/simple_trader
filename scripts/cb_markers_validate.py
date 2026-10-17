@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Gate report: main-flow CB columns of a materialized/prepared dataset against
-the stored experiment sidecars next to it (phase 18, gates G2-G5).
+the stored experiment sidecars next to it (phase 18, gates G2-G5; phase 19, G4-o).
 
 Reads ``df_with_indicators.pkl`` (with the CB columns) and the never-modified
 sidecars ``df_with_candle_bounds.pkl``, ``df_with_candle_bounds_nc.pkl``,
@@ -36,10 +36,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from helpers import wide_df_path  # noqa: E402
 from indicators.candle_bounds import kernel  # noqa: E402
 from indicators.candle_bounds.params import (  # noqa: E402
-    DIRECTIONS, EXTDONE_LADDER, SIDES, TFS, TGT_SHRINK_PCT,
+    DIRECTIONS, EXTDONE_LADDER, OVERSHOOT_THR, SIDES, TFS, TGT_SHRINK_PCT,
 )
 
 REL_TOL = 1e-9
+# width of the bracket the oos2m sidecar's rows put around each frozen overshoot threshold (spec D1)
+OVERSHOOT_BRACKET = 5e-4
 PHOLD_TOL = 0.01
 # oos2m-picked ladder of the stored sidecar (notebooks/zone_profitability/run_extdone.py)
 LADDER_OOS = {15: ((0.25, 4.0), (0.50, 2.5), (0.75, 1.0)),
@@ -308,11 +310,57 @@ def gate_g5b(rep: Report, df: pd.DataFrame) -> dict:
     return out
 
 
+def gate_g4o(rep: Report, df: pd.DataFrame, ov: pd.DataFrame | None) -> None:
+    """Phase 19: overshoot z and pass flag vs the stored ``df_with_cb_overshoot.pkl``.
+
+    On rows where both z are finite: |ours - sidecar| < 1e-9 and
+    ``cb_f_overshoot == ~cbover`` with 0 mismatches (gating). Rows where the
+    sidecar is +-inf (zero/NaN band): ours NaN and the flag True -- counted and
+    printed, not gating. Absent sidecar -> one SKIP line."""
+    if ov is None:
+        print("G4-o SKIP: df_with_cb_overshoot.pkl absent", flush=True)
+        return
+    for tf in TFS:
+        for d in DIRECTIONS:
+            zc, fc, sc = f"{tf}_cb_overshoot_{d}", f"{tf}_cb_f_overshoot_{d}", f"{tf}_cbover_{d}"
+            if zc not in df.columns or fc not in df.columns:
+                rep.check("G4-o", f"{zc}/{fc} present", False, "column absent (run cb_markers_materialize.py)")
+                continue
+            ours = df[zc].to_numpy(dtype=float)
+            theirs = ov[zc].reindex(df.index).to_numpy(dtype=float)
+            flag = df[fc].fillna(False).to_numpy(dtype=bool)
+            over = ov[sc].reindex(df.index).fillna(False).to_numpy(dtype=bool)
+            # final row excluded like every other gate (the stored sidecars' last
+            # row holds a bound ours does not reproduce — phase 18 edge rule)
+            fin = np.isfinite(ours) & np.isfinite(theirs) & _not_last(len(ours))
+            mx = float(np.abs(ours[fin] - theirs[fin]).max()) if fin.any() else float("nan")
+            rep.check("G4-o", f"{zc} max_abs vs sidecar z", bool(fin.any()) and mx < 1e-9,
+                      f"{mx:.2e} (n={int(fin.sum())})")
+            thr = OVERSHOOT_THR[tf][d]
+            mism = np.flatnonzero(fin & (flag != ~over))
+            # the frozen threshold is the sidecar's to within the bracket its own
+            # rows allow; a z inside that bracket may legitimately fall on the
+            # other side — reported, not gating
+            in_bracket = np.abs(ours[mism] - thr) <= OVERSHOOT_BRACKET
+            rep.check("G4-o", f"{fc} == ~{sc} on finite rows (|z-thr| > {OVERSHOOT_BRACKET:g})",
+                      int((~in_bracket).sum()) == 0,
+                      f"{_rows(mism[~in_bracket], df.index)}; in-bracket flips {int(in_bracket.sum())} "
+                      f"z={[round(float(v), 5) for v in ours[mism[in_bracket]][:4]]} thr={thr} "
+                      f"(dropped ours/sidecar={int((~flag[fin]).sum())}/{int(over[fin].sum())})")
+            inf = np.isinf(theirs)
+            print(f"G4-o INFO {zc}: sidecar +-inf rows {int(inf.sum())}; ours NaN there "
+                  f"{bool(np.isnan(ours[inf]).all()) if inf.any() else 'n/a'}; flag True there "
+                  f"{bool(flag[inf].all()) if inf.any() else 'n/a'}; sidecar-finite/ours-NaN "
+                  f"{int((np.isfinite(theirs) & np.isnan(ours)).sum())}; ours-finite/sidecar-NaN "
+                  f"{int((np.isfinite(ours) & np.isnan(theirs)).sum())}", flush=True)
+
+
 def marker_table(df: pd.DataFrame) -> None:
     print("\nMarker counts (minutes, oos2m):", flush=True)
-    print("| tf | dir | cb_inzone | ∧ cb_f_extdone | ∧ cb_f_trend | ∧ cb_f_mcx | cbx_inzone "
+    has_over = f"{TFS[0]}_cb_f_overshoot_long" in df.columns
+    print("| tf | dir | cb_inzone | ∧ cb_f_extdone | ∧ cb_f_trend | ∧ cb_f_mcx | ∧ cb_f_overshoot | cbx_inzone "
           "| extdone share |", flush=True)
-    print("|---|---|---|---|---|---|---|---|", flush=True)
+    print("|---|---|---|---|---|---|---|---|---|", flush=True)
     for tf in TFS:
         for d in DIRECTIONS:
             side = "high" if d == "long" else "low"     # long filtered by extdone_high
@@ -325,8 +373,9 @@ def marker_table(df: pd.DataFrame) -> None:
 
             cbx = int(df[f"{tf}_cbx_inzone_{d}"].to_numpy(dtype=bool).sum())
             share = 100 * df[f"{tf}_extdone_{side}"].to_numpy(dtype=bool).mean()
+            over = _and("cb_f_overshoot") if has_over else "n/a"
             print(f"| {tf} | {d} | {n0} | {_and('cb_f_extdone')} | {_and('cb_f_trend')} | "
-                  f"{_and('cb_f_mcx')} | {cbx} | extdone_{side} {share:.1f} % |", flush=True)
+                  f"{_and('cb_f_mcx')} | {over} | {cbx} | extdone_{side} {share:.1f} % |", flush=True)
 
 
 def main() -> int:
@@ -337,9 +386,11 @@ def main() -> int:
     cb = pd.read_pickle(os.path.join(ddir, "df_with_candle_bounds.pkl"))
     nc = pd.read_pickle(os.path.join(ddir, "df_with_candle_bounds_nc.pkl"))
     ext = pd.read_pickle(os.path.join(ddir, "df_with_ext_done.pkl"))
+    ov_path = os.path.join(ddir, "df_with_cb_overshoot.pkl")
+    ov = pd.read_pickle(ov_path) if os.path.exists(ov_path) else None
     rep = Report()
     for name, side in (("df_with_candle_bounds", cb), ("df_with_candle_bounds_nc", nc),
-                       ("df_with_ext_done", ext)):
+                       ("df_with_ext_done", ext)) + ((("df_with_cb_overshoot", ov),) if ov is not None else ()):
         rep.check("IDX", f"{name} index == dataset index", side.index.equals(df.index),
                   f"{len(side)} rows")
     gaps = int((df.index.to_series().diff().dropna() != pd.Timedelta(minutes=1)).sum())
@@ -350,6 +401,7 @@ def main() -> int:
     gate_g5a(rep, df, ext)
     gate_g5c(rep, df)
     gate_g5b(rep, df)
+    gate_g4o(rep, df, ov)
     marker_table(df)
 
     if rep.failed:

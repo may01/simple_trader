@@ -13,6 +13,7 @@ EXTDONE = np.array([1, 1, 0, 1, 1, 1, 1, 0, 1, 0], dtype=bool)
 TREND = np.array([1, 0, 1, 1, 0, 1, 1, 1, 1, 1], dtype=bool)
 MCX = np.array([0, 1, 1, 1, 1, 1, 1, 1, 0, 1], dtype=bool)
 TREND_SHORT = ~TREND
+OVERSHOOT = np.array([1, 1, 1, 0, 1, 1, 1, 1, 0, 1], dtype=bool)
 CB_ALL = ["cb_long", "cb_short"]
 
 
@@ -24,6 +25,7 @@ def _make_df(with_mcx: bool = True) -> pd.DataFrame:
         "15_cb_inzone_long": INZONE, "15_cb_inzone_short": INZONE,
         "15_cb_f_extdone_long": EXTDONE, "15_cb_f_extdone_short": EXTDONE,
         "15_cb_f_trend_long": TREND, "15_cb_f_trend_short": TREND_SHORT,
+        "15_cb_f_overshoot_long": OVERSHOOT, "15_cb_f_overshoot_short": OVERSHOOT,
         "15_cb_zone_long": np.full(N, 100.0),
     }
     if with_mcx:
@@ -45,9 +47,9 @@ def _idx(df, mask):
     return list(df.index[mask])
 
 
-def test_default_applies_extdone_only():
+def test_default_applies_extdone_and_overshoot():
     df = _make_df()
-    assert _times(df, "cbzone_long_15m", None) == _idx(df, INZONE & EXTDONE)
+    assert _times(df, "cbzone_long_15m", None) == _idx(df, INZONE & EXTDONE & OVERSHOOT)
 
 
 def test_extdone_unchecked_draws_all_inzone():
@@ -59,6 +61,8 @@ def test_trend_and_mcx_and_together():
     df = _make_df()
     ov = CB_ALL + ["cb_f_extdone", "cb_f_trend", "cb_f_mcx"]
     assert _times(df, "cbzone_long_15m", ov) == _idx(df, INZONE & EXTDONE & TREND & MCX)
+    ov += ["cb_f_overshoot"]
+    assert _times(df, "cbzone_long_15m", ov) == _idx(df, INZONE & EXTDONE & TREND & MCX & OVERSHOOT)
 
 
 def test_filter_column_absent_is_noop():
@@ -106,7 +110,7 @@ def test_toggles_add_no_trace():
     df = _make_df()
     v = DataViewer(FullData(df), tf=1)
     v.renderer = MagicMock()
-    ov = ["cb_f_extdone", "cb_f_trend", "cb_f_mcx"]
+    ov = ["cb_f_extdone", "cb_f_trend", "cb_f_mcx", "cb_f_overshoot"]
     v._draw_zone_markers(MagicMock(), df, ov)
     v._draw_price_overlays(MagicMock(), df, 15, ov)
     assert not v.renderer.draw_marker.called
@@ -116,22 +120,14 @@ def test_toggles_add_no_trace():
 def test_defaults_off_set():
     assert {"cb_f_trend", "cb_f_mcx"} <= DataViewer._DEFAULT_OVERLAYS_OFF
     assert "cb_f_extdone" not in DataViewer._DEFAULT_OVERLAYS_OFF
+    assert "cb_f_overshoot" not in DataViewer._DEFAULT_OVERLAYS_OFF
 
 
 def test_toggles_listed_when_flag_columns_exist():
     df = _make_df()
     v = DataViewer(FullData(df), tf=1)
     av = v.available_overlays()
-    assert {"cb_f_extdone", "cb_f_trend", "cb_f_mcx"} <= set(av)
+    assert {"cb_f_extdone", "cb_f_trend", "cb_f_mcx", "cb_f_overshoot"} <= set(av)
     d = v.default_overlays()
-    assert "cb_f_extdone" in d and "cb_f_trend" not in d
+    assert "cb_f_extdone" in d and "cb_f_overshoot" in d and "cb_f_trend" not in d
 
-
-def test_overshoot_veto_still_applies():
-    df = _make_df()
-    over = np.zeros(N, dtype=bool)
-    over[3] = True
-    df["15_cbover_long"] = over
-    ov = CB_ALL + ["cb_f_extdone", "cb_f_trend", "cb_f_mcx"]
-    assert _times(df, "cbzone_long_15m", ov) == _idx(df, INZONE & EXTDONE & TREND & MCX & ~over)
-    assert _times(df, "cbzone_long_15m", CB_ALL) == _idx(df, INZONE & ~over)
