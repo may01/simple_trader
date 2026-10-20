@@ -322,22 +322,28 @@ def test_sweep_y_accepts_aligned_series_and_bare_arrays(sweep_inputs):
 # --- select_y ----------------------------------------------------------------
 
 
-def test_select_y_picks_profitable_max_coverage_row():
-    # realized_rr here is Task 6's expected-return-AFTER-FEES (profitable
-    # when > 0.0 -- see azlib.rr / task-6-brief.md's fee-aware carry-forward
-    # from Task 5), NOT the raw R/R ratio these values used to represent.
+def test_select_y_maximizes_total_profit_not_widest_coverage():
+    # Fix 1 (.superpowers/sdd/task-fix1-report.md): select_y's objective is
+    # now n_zoned * realized_rr (TOTAL realized profit), not max
+    # strict_coverage among profitable rows -- this is the exact scenario
+    # that objective exists to fix: the WIDEST profitable Y (y=2.0) has the
+    # highest coverage (0.95) but a LOW realized_rr (0.05, since a wider
+    # zone admits worse entries) -- total profit 200*0.05=10.0. A MIDDLE Y
+    # (y=1.0) has lower coverage (0.7) but a much better realized_rr (0.3)
+    # -- total profit 50*0.3=15.0, the actual maximum. The OLD "max
+    # coverage among profitable" objective would have picked the widest Y
+    # (0.95); this asserts the MIDDLE one wins instead.
     sweep = pd.DataFrame(
         {
             "y": [-1.0, 0.0, 1.0, 2.0],
-            "strict_coverage": [0.9, 0.2, 0.5, 0.8],
-            "realized_rr": [-0.01, 0.02, 0.015, 0.01],  # y=-1.0 not profitable (<=0)
-            "n_zoned": [10, 20, 30, 40],
+            "strict_coverage": [0.05, 0.4, 0.7, 0.95],
+            "realized_rr": [-0.05, 0.5, 0.3, 0.05],  # y=-1.0 not profitable (<=0)
+            "n_zoned": [5, 20, 50, 200],
         }
     )
-    # profitable rows: y in {0.0, 1.0, 2.0} -- max coverage among those is
-    # y=2.0 (coverage 0.8), even though y=-1.0 has higher coverage overall
-    # (0.9) it is excluded for not being profitable.
-    assert select_y(sweep) == pytest.approx(2.0)
+    # totals (profitable rows only): y=0.0 -> 20*0.5=10.0; y=1.0 -> 50*0.3=15.0
+    # (max); y=2.0 -> 200*0.05=10.0 (widest, but tied with y=0.0, NOT the max).
+    assert select_y(sweep) == pytest.approx(1.0)
 
 
 def test_select_y_returns_documented_default_when_none_profitable():
@@ -374,12 +380,39 @@ def test_select_y_empty_sweep_returns_default():
     assert select_y(sweep) == pytest.approx(0.0)
 
 
-def test_select_y_all_profitable_coverage_nan_returns_default():
+def test_select_y_ignores_nan_strict_coverage_now_that_objective_is_total_profit():
+    # Fix 1: select_y no longer looks at strict_coverage AT ALL (the
+    # objective is n_zoned * realized_rr) -- a sweep where EVERY row's
+    # strict_coverage is NaN (e.g. zero strict-labeled rows in the whole
+    # frame) must still pick a real winner by total profit, not fall back
+    # to the documented default. This replaces the OLD
+    # test_select_y_all_profitable_coverage_nan_returns_default, which
+    # asserted the opposite (a NaN-coverage-driven default) under the
+    # now-removed max-coverage objective -- contradictory under Fix 1, so
+    # it is replaced rather than left alongside this one.
     sweep = pd.DataFrame(
         {
             "y": [0.0, 1.0],
             "strict_coverage": [np.nan, np.nan],
             "realized_rr": [1.5, 2.0],
+            "n_zoned": [10, 20],
+        }
+    )
+    # totals: y=0.0 -> 10*1.5=15.0; y=1.0 -> 20*2.0=40.0 (max) -> y=1.0 wins.
+    assert select_y(sweep) == pytest.approx(1.0)
+
+
+def test_select_y_all_realized_rr_nan_returns_default():
+    # The NaN-safe-default case DOES still exist under Fix 1's objective --
+    # just gated on realized_rr (the quantity the profitability filter and
+    # the total-profit product both actually use), not strict_coverage. All
+    # rows NaN on realized_rr -> none pass `> 0.0` -> no candidates ->
+    # documented default, same as the empty-sweep/none-profitable cases.
+    sweep = pd.DataFrame(
+        {
+            "y": [0.0, 1.0],
+            "strict_coverage": [0.5, 0.9],
+            "realized_rr": [np.nan, np.nan],
             "n_zoned": [10, 20],
         }
     )

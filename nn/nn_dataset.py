@@ -360,6 +360,9 @@ def _dataset_hash(
         "validation_split": spec.validation_split,
         "val_strategy": spec.val_strategy,
     }
+    # Only when set — pre-filter_column datasets keep their cache addresses.
+    if getattr(spec, "filter_column", None):
+        payload["filter_column"] = spec.filter_column
     serialised = json.dumps(payload, sort_keys=True)
     return hashlib.sha256(serialised.encode()).hexdigest()
 
@@ -543,12 +546,18 @@ class NNDataset:
     ) -> "NNDataset":
         n_rows = len(df)
 
-        # --- Per-TF feature blocks (rows, history_points, n_features) ---
-        tf_blocks: dict[str, np.ndarray] = {}
+        # --- Pass A: NaN scan per TF block, one block alive at a time ---
+        # A float64 lookback block for a 100-indicator 6-TF spec over a 2y
+        # 1-min frame is ~3.4GB; materialising all six at once (~20GB) OOMs a
+        # 15GB host. Blocks are cheap gather ops, so scan-then-discard and
+        # rebuild the survivors in pass B instead of holding everything.
+        feat_nan = np.zeros(n_rows, dtype=bool)
         for tf in spec.timeframes:
-            tf_blocks[str(tf)] = _build_tf_block(
+            block = _build_tf_block(
                 df, tf, feature_cols_by_tf[str(tf)], spec.history_points
             )
+            feat_nan |= np.isnan(block).any(axis=(1, 2))
+            del block
 
         # --- Target blocks (rows, total_target_width) ---
         target_blocks: list[np.ndarray] = []
@@ -564,23 +573,45 @@ class NNDataset:
         )
 
         # --- Drop rows with any NaN feature or NaN target ---
-        feat_nan = np.zeros(n_rows, dtype=bool)
-        for block in tf_blocks.values():
-            feat_nan |= np.isnan(block).any(axis=(1, 2))
         tgt_nan = (
             np.isnan(y_full).any(axis=1)
             if y_full.shape[1] > 0
             else np.zeros(n_rows, dtype=bool)
         )
         keep = ~(feat_nan | tgt_nan)
+
+        # --- Optional row filter: restrict to rows where the boolean wide-df
+        # column is True (zone-membership training). Missing column is a hard
+        # error — a silently unfiltered "filtered" dataset would train on the
+        # wrong population and still cache under the filtered hash.
+        if getattr(spec, "filter_column", None):
+            fcol = spec.filter_column
+            if fcol not in df.columns:
+                raise ValueError(
+                    f"filter_column {fcol!r} not in wide df — join the sidecar "
+                    "carrying it before NNDataset.build()"
+                )
+            fmask = df[fcol].fillna(False).astype(bool).to_numpy()
+            logger.info(
+                "NN filter_column %s: %d of %d rows flagged (%.2f%%)",
+                fcol, int(fmask.sum()), n_rows, 100.0 * fmask.mean(),
+            )
+            keep &= fmask
         dropped = int((~keep).sum())
 
         if keep.sum() == 0:
             raise ValueError("no usable rows after dropping NaN feature/target rows")
 
         kept_index = df.index[keep]
-        for tf_key in tf_blocks:
-            tf_blocks[tf_key] = tf_blocks[tf_key][keep]
+        # --- Pass B: rebuild each TF block, slice to kept rows immediately ---
+        # (full float64 block alive only transiently, one at a time)
+        tf_blocks: dict[str, np.ndarray] = {}
+        for tf in spec.timeframes:
+            block = _build_tf_block(
+                df, tf, feature_cols_by_tf[str(tf)], spec.history_points
+            )
+            tf_blocks[str(tf)] = block[keep].copy()
+            del block
         y_kept = y_full[keep]
         n_kept = int(keep.sum())
 

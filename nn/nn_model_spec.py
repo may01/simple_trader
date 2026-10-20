@@ -191,6 +191,12 @@ class NNModelSpec:
     timeframes: list[int] = field(default_factory=list)
     indicators: list[str] = field(default_factory=list)
     history_points: int = 32
+    # Optional boolean wide-df column restricting the dataset to rows where it
+    # is True (e.g. "15_cbnc_inzone_long" — train only on entry-zone minutes).
+    # None = all rows (default). Applied on top of the NaN row-drop, so train /
+    # val / holdout all come from the filtered population. Excluded from
+    # spec_hash when None so every pre-existing spec keeps its hash.
+    filter_column: str | None = None
 
     # --- Architecture ---
     layers: list[LayerSpec] = field(default_factory=list)
@@ -368,6 +374,12 @@ def _canonical(spec: NNModelSpec) -> dict:
     # Remove runtime-only fields before hashing
     full.pop("device", None)
     full.pop("seed", None)
+
+    # Back-compat: filter_column entered the spec after many hashes were
+    # minted; when unset it must not perturb them (spec-hash drift is a known
+    # footgun — checkpoints are addressed by this hash).
+    if full.get("filter_column") is None:
+        full.pop("filter_column", None)
 
     return _sort_dicts(full)
 
